@@ -1,3 +1,42 @@
+
+    !-------------------------------------------------------------------------------------------------------------
+    !
+    !> \file    MakePhaseExclusionList.f90
+    !> \brief   Builds or update the list of thermodynamic phases to exclude from or include to the calculation.
+    !> \author  M. Poschmann
+    !> \date    May 31, 2022
+    ! TODO: sa
+    !
+    ! Revisions:
+    ! ==========
+    !
+    !   Date            Programmer          Description of change
+    !   ----            ----------          ---------------------
+    !   01/06/2022      M. Poschmann        Don't automatically exclude dummies from the calculation
+    !
+    !
+    ! Purpose:
+    ! ========
+    !
+    !> \details This subroutine manages which thermodynamic phases should be excluded from calculations. If the user
+    !! specifies an “excluded except” list — meaning only certain phases are to remain active, the routine scans all
+    !! defined solution and pure condensed phases, and automatically adds every other phase to the exclusion list. This
+    !! ensures the system only considers the allowed phases while all others are ignored. If no “excluded except” list
+    !! is provided, the subroutine leaves the existing exclusion list unchanged, allowing users to manually specify 
+    !! which individual phases to exclude.
+    !
+    !
+    ! Pertinent variables:
+    ! ====================
+    !
+    ! nPhasesExcluded          Integer representing the number of phases to be excluded from the calculation.
+    ! nPhasesExcludedExcept    Integer representing the number of phases to be included (exceptions to exclusion).
+    ! cPhasesExcluded          Character array containing the names of phases to be excluded from
+    ! cPhasesExcludedExcept    Character array containing the names of phases to be included (exceptions to exclusion)
+    !
+    !-------------------------------------------------------------------------------------------------------------
+
+
 subroutine MakePhaseExclusionList
 
     USE ModuleThermoIO
