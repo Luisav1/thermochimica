@@ -2,15 +2,14 @@
 temperature unit  = K
 pressure unit     = atm
 mass unit         = moles
-data file         = data/CO.dat
+data file         = data/bergeron_Th-U-Pu-O_.dat
 
 ! Specify output and debug modes:
 print mode        = 2
+write json        = .FALSE.
 
 ! Set up calculation list
 nEl         = 2
-iEl         = 6 8
-nCalc       = 3
-900  1 1 1
-950  2 1 2
-1000 3 2 1
+iEl         = 92 8
+nCalc       = 1
+2.900000000000000000e+03 1.000000000000000000e+00 0.000000000000000000e+00 1.000000000000000000e+00

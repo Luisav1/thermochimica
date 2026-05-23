@@ -1,0 +1,2700 @@
+diff --git a/derivations.ipynb b/derivations.ipynb
+new file mode 100644
+index 0000000..916e60a
+--- /dev/null
++++ b/derivations.ipynb
+@@ -0,0 +1,236 @@
++{
++ "cells": [
++  {
++   "cell_type": "code",
++   "execution_count": 8,
++   "id": "7480ab4d",
++   "metadata": {},
++   "outputs": [
++    {
++     "data": {
++      "text/latex": [
++       "$\\displaystyle 3 x^{2} + 2 x$"
++      ],
++      "text/plain": [
++       "3*x**2 + 2*x"
++      ]
++     },
++     "execution_count": 8,
++     "metadata": {},
++     "output_type": "execute_result"
++    }
++   ],
++   "source": [
++    "import sympy as sp\n",
++    "\n",
++    "x = sp.symbols('x')\n",
++    "polynomial = x**3 + x**2\n",
++    "sp.diff(polynomial,'x')\n"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 15,
++   "id": "bb1f1c92",
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "        2   \n",
++      "  L₀⋅n_B    \n",
++      "────────────\n",
++      "           2\n",
++      "(n_A + n_B) \n",
++      "        2   \n",
++      "  L₀⋅n_A    \n",
++      "────────────\n",
++      "           2\n",
++      "(n_A + n_B) \n",
++      "         2  \n",
++      "-2⋅L₀⋅n_B   \n",
++      "────────────\n",
++      "           3\n",
++      "(n_A + n_B) \n",
++      "         2  \n",
++      "-2⋅L₀⋅n_A   \n",
++      "────────────\n",
++      "           3\n",
++      "(n_A + n_B) \n",
++      "2⋅L₀⋅n_A⋅n_B\n",
++      "────────────\n",
++      "           3\n",
++      "(n_A + n_B) \n"
++     ]
++    }
++   ],
++   "source": [
++    "import sympy as sp\n",
++    "\n",
++    "# Symbols\n",
++    "nA, nB, L0 = sp.symbols('n_A n_B L_0', positive=True)\n",
++    "\n",
++    "# Total moles and mole fractions\n",
++    "n = nA + nB\n",
++    "xA = nA / n\n",
++    "xB = nB / n\n",
++    "\n",
++    "# Excess Gibbs energy for v = 0\n",
++    "# G_ex = n * xA * xB * L0\n",
++    "# Equivalent form:\n",
++    "G = (nA * nB / n) * L0\n",
++    "\n",
++    "# first partial derivatives (chemical potentials)\n",
++    "muA = sp.simplify(sp.diff(G, nA))\n",
++    "muB = sp.simplify(sp.diff(G, nB))\n",
++    "\n",
++    "# second derivatives (Hessian)\n",
++    "G_AA = sp.simplify(sp.diff(muA, nA))\n",
++    "G_BB = sp.simplify(sp.diff(muB, nB))\n",
++    "G_AB = sp.simplify(sp.diff(muA, nB))  # = G_BA\n",
++    "\n",
++    "# show results\n",
++    "sp.pretty_print(muA)\n",
++    "sp.pretty_print(muB)\n",
++    "sp.pretty_print(G_AA)\n",
++    "sp.pretty_print(G_BB)\n",
++    "sp.pretty_print(G_AB)"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 16,
++   "id": "1515893c",
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "Mixed derivative symmetry OK? True\n"
++     ]
++    }
++   ],
++   "source": [
++    "# --- check 1: mixed derivative symmetry ---\n",
++    "symmetry_ok = sp.simplify(G_AB - sp.diff(muB, nA)) == 0\n",
++    "print(\"Mixed derivative symmetry OK?\", symmetry_ok)"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 17,
++   "id": "36391931",
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "Numeric finite-diff G_AA: -522.9594535194337 Symbolic G_AA: -524.7813411078718\n",
++      "Numeric finite-diff G_BB: -932.2320693172514 Symbolic G_BB: -932.9446064139942\n",
++      "Numeric finite-diff G_AB: 699.628799338825 Symbolic G_AB: 699.7084548104956\n",
++      "rel err G_AA: 0.003471708015745776\n",
++      "rel err G_BB: 0.0007637507005711047\n",
++      "rel err G_AB: 0.00011384094492915912\n"
++     ]
++    }
++   ],
++   "source": [
++    "# --- numeric finite-difference check (central differences) ---\n",
++    "# lambdify functions for numeric evaluation\n",
++    "fG = sp.lambdify((nA, nB, L0), G, 'numpy')\n",
++    "fG_AA_sym = sp.lambdify((nA, nB, L0), G_AA, 'numpy')\n",
++    "fG_BB_sym = sp.lambdify((nA, nB, L0), G_BB, 'numpy')\n",
++    "fG_AB_sym = sp.lambdify((nA, nB, L0), G_AB, 'numpy')\n",
++    "\n",
++    "def finite_diff_second(f, a, b, L0val, h=1e-6):\n",
++    "    # compute mixed and pure second derivatives of f(nA,nB)\n",
++    "    f00 = f(a, b, L0val)\n",
++    "    f_pp = f(a+h, b+h, L0val)\n",
++    "    f_pm = f(a+h, b-h, L0val)\n",
++    "    f_mp = f(a-h, b+h, L0val)\n",
++    "    f_mm = f(a-h, b-h, L0val)\n",
++    "    # central second derivatives:\n",
++    "    G_AA_fd = (f(a+h, b, L0val) - 2*f00 + f(a-h, b, L0val)) / (h*h)\n",
++    "    G_BB_fd = (f(a, b+h, L0val) - 2*f00 + f(a, b-h, L0val)) / (h*h)\n",
++    "    G_AB_fd = (f_pp - f_pm - f_mp + f_mm) / (4*h*h)\n",
++    "    return G_AA_fd, G_BB_fd, G_AB_fd\n",
++    "\n",
++    "# choose a reasonable test point (avoid zeros)\n",
++    "a = 2.0   # nA\n",
++    "b = 1.5   # nB\n",
++    "L0val = 5000.0\n",
++    "\n",
++    "G_AA_fd, G_BB_fd, G_AB_fd = finite_diff_second(fG, a, b, L0val, h=1e-6)\n",
++    "\n",
++    "# Evaluate symbolic expressions numerically\n",
++    "G_AA_sym = fG_AA_sym(a, b, L0val)\n",
++    "G_BB_sym = fG_BB_sym(a, b, L0val)\n",
++    "G_AB_sym = fG_AB_sym(a, b, L0val)\n",
++    "\n",
++    "print(\"Numeric finite-diff G_AA:\", G_AA_fd, \"Symbolic G_AA:\", G_AA_sym)\n",
++    "print(\"Numeric finite-diff G_BB:\", G_BB_fd, \"Symbolic G_BB:\", G_BB_sym)\n",
++    "print(\"Numeric finite-diff G_AB:\", G_AB_fd, \"Symbolic G_AB:\", G_AB_sym)\n",
++    "\n",
++    "# relative errors\n",
++    "rel_err = lambda sym, fd: abs((sym - fd) / (sym if sym!=0 else 1.0))\n",
++    "print(\"rel err G_AA:\", rel_err(G_AA_sym, G_AA_fd))\n",
++    "print(\"rel err G_BB:\", rel_err(G_BB_sym, G_BB_fd))\n",
++    "print(\"rel err G_AB:\", rel_err(G_AB_sym, G_AB_fd))\n"
++   ]
++  },
++  {
++   "cell_type": "markdown",
++   "id": "6b460b7f",
++   "metadata": {},
++   "source": []
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 18,
++   "id": "c652241f",
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "Gibbs-Duhem check for i=A (should be ~0): -2.2737367544323206e-13\n",
++      "Gibbs-Duhem check for i=B (should be ~0): 0.0\n"
++     ]
++    }
++   ],
++   "source": [
++    "# --- check 2: Gibbs-Duhem / Euler relations ---\n",
++    "# For each i: sum_j n_j * d^2G/dn_i dn_j == 0\n",
++    "left_A = a * G_AA_sym + b * G_AB_sym\n",
++    "left_B = a * G_AB_sym + b * G_BB_sym\n",
++    "print(\"Gibbs-Duhem check for i=A (should be ~0):\", left_A)\n",
++    "print(\"Gibbs-Duhem check for i=B (should be ~0):\", left_B)"
++   ]
++  }
++ ],
++ "metadata": {
++  "kernelspec": {
++   "display_name": ".venv",
++   "language": "python",
++   "name": "python3"
++  },
++  "language_info": {
++   "codemirror_mode": {
++    "name": "ipython",
++    "version": 3
++   },
++   "file_extension": ".py",
++   "mimetype": "text/x-python",
++   "name": "python",
++   "nbconvert_exporter": "python",
++   "pygments_lexer": "ipython3",
++   "version": "3.12.3"
++  }
++ },
++ "nbformat": 4,
++ "nbformat_minor": 5
++}
+diff --git a/full_changes.patch b/full_changes.patch
+new file mode 100644
+index 0000000..2dba806
+--- /dev/null
++++ b/full_changes.patch
+@@ -0,0 +1,792 @@
++diff --git a/inputs/trial-input-output.ti b/inputs/trial-input-output.ti
++index 2db637f..e0a8d0e 100644
++--- a/inputs/trial-input-output.ti
+++++ b/inputs/trial-input-output.ti
++@@ -1,11 +1,14 @@
++ ! Configuration variables:
++ temperature unit  = K
++ pressure unit     = atm
+++nphasesexcludedexcept = 2
++ mass unit         = moles
++ data file         = data/CO.dat
++ output            = ../outputs/newout.json
++ ! Specify output and debug modes:
++ print mode        = 2
+++phase constraint  = MSFL FCC
+++phase values      = 0.5 0.5
++ 
++ ! Set up calculation list
++ nEl         = 2
++diff --git a/src/Thermochimica-c.C b/src/Thermochimica-c.C
++index 75b32fa..61e084e 100644
++--- a/src/Thermochimica-c.C
+++++ b/src/Thermochimica-c.C
++@@ -36,6 +36,11 @@ void GetOutputChemPot(char *elementName, double *chemPot, int *info)
++   TCAPI_getOutputChemPot(elementName, strlen(elementName), chemPot, info);
++ }
++ 
+++void GetOutputChemPotDerivative(char *elementName1, char *elementName2, double *chemPotDerivative, int *info)
+++{
+++  TCAPI_getOutputChemPotDerivative(elementName1, strlen(elementName1), elementName2, strlen(elementName2), chemPotDerivative, info);
+++}
+++
++ void GetOutputSolnSpecies(const char *phaseName, const char *speciesName, double *moleFraction, double *chemPot, int *info)
++ {
++   TCAPI_getOutputSolnSpecies(phaseName, strlen(phaseName), speciesName, strlen(speciesName), moleFraction, chemPot, info);
++diff --git a/src/Thermochimica-c.h b/src/Thermochimica-c.h
++index f88e2f5..05eb8b1 100644
++--- a/src/Thermochimica-c.h
+++++ b/src/Thermochimica-c.h
++@@ -7,6 +7,7 @@ void SetUnitMass(const char *);
++ void SetUnits(const char *, const char *, const char *);
++ 
++ void GetOutputChemPot(char *, double *, int *);
+++void GetOutputChemPotDerivative(char *, char *, double *, int *);
++ void GetOutputSolnSpecies(const char *, char *, double *, double *, int *);
++ void GetOutputMolSpecies(const char *, double *, double *, int *);
++ void GetOutputMolSpeciesPhase(const char *, const char *, double *, int *);
++diff --git a/src/Thermochimica-cxx.C b/src/Thermochimica-cxx.C
++index 18c43c1..f894064 100644
++--- a/src/Thermochimica-cxx.C
+++++ b/src/Thermochimica-cxx.C
++@@ -326,6 +326,14 @@ namespace Thermochimica
++     return {chemPot, info};
++   }
++ 
+++  std::pair<double, int> getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2)
+++  {
+++    double chemPotDerivative;
+++    int info;
+++    TCAPI_getOutputChemPotDerivative(elementName1.c_str(), elementName1.length(), elementName2.c_str(), elementName2.length(), &chemPotDerivative, &info);
+++    return {chemPotDerivative, info};
+++  }
+++
++   std::tuple<double, double, int>
++   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName)
++   {
++diff --git a/src/Thermochimica-cxx.h b/src/Thermochimica-cxx.h
++index 80c2260..3a7b3af 100644
++--- a/src/Thermochimica-cxx.h
+++++ b/src/Thermochimica-cxx.h
++@@ -56,6 +56,8 @@ namespace Thermochimica
++ 
++   std::pair<double, int>
++   getOutputChemPot(const std::string &elementName);
+++  std::pair<double, int>
+++  getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2);
++   std::tuple<double, double, int>
++   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName);
++   std::tuple<double, double, int>
++diff --git a/src/Thermochimica.h b/src/Thermochimica.h
++index a7f7d33..ce88d54 100644
++--- a/src/Thermochimica.h
+++++ b/src/Thermochimica.h
++@@ -16,6 +16,7 @@ extern "C"
++   void TCAPI_getElementPotential(int *, double *, int *);
++ 
++   void TCAPI_getOutputChemPot(const char *, std::size_t, double *, int *);
+++  void TCAPI_getOutputChemPotDerivative(const char *, std::size_t, const char *, std::size_t, double *, int *);
++   void TCAPI_getOutputSolnSpecies(const char *, std::size_t, const char *, std::size_t, double *, double *, int *);
++   void TCAPI_getOutputMolSpecies(const char *, std::size_t, double *, double *, int *);
++   void TCAPI_getOutputMolSpeciesPhase(const char *, std::size_t, const char *, std::size_t, double *, int *);
++diff --git a/src/api/CouplingUtilitiesISO_C.f90 b/src/api/CouplingUtilitiesISO_C.f90
++index 89de2ae..ba51690 100644
++--- a/src/api/CouplingUtilitiesISO_C.f90
+++++ b/src/api/CouplingUtilitiesISO_C.f90
++@@ -853,6 +853,31 @@ subroutine GetOutputChemPotISO(cElementNameRequest, lcElementNameRequest, dEleme
++ 
++ end subroutine GetOutputChemPotISO
++ 
+++subroutine GetOutputChemPotDerivativeISO(cElementName1Request, lcElementName1Request, cElementName2Request, lcElementName2Request, dElementChemPotDerivative, INFO) &
+++    bind(C, name="TCAPI_getOutputChemPotDerivative")
+++
+++    USE,INTRINSIC :: ISO_C_BINDING
+++
+++    implicit none
+++
+++    integer(C_INT),      intent(out)                         :: INFO
+++    real(C_DOUBLE),      intent(out)                         :: dElementChemPotDerivative
+++    character(kind=c_char,len=1), target, intent(in)         :: cElementName1Request(*)
+++    integer(c_size_t), intent(in), value                     :: lcElementName1Request
+++    character(kind=c_char,len=1), target, intent(in)         :: cElementName2Request(*)
+++    integer(c_size_t), intent(in), value                     :: lcElementName2Request
+++    character(kind=c_char,len=lcElementName1Request), pointer :: fElementName1Request
+++    character(kind=c_char,len=lcElementName2Request), pointer :: fElementName2Request
+++
+++    call c_f_pointer(cptr=c_loc(cElementName1Request), fptr=fElementName1Request)
+++    call c_f_pointer(cptr=c_loc(cElementName2Request), fptr=fElementName2Request)
+++
+++    call GetOutputChemPotDerivative(fElementName1Request, fElementName2Request, dElementChemPotDerivative, INFO)
+++
+++    return
+++
+++end subroutine GetOutputChemPotDerivativeISO
+++
++ subroutine GetOutputMolSpeciesISO(cSpeciesOut, lcSpeciesOut, dMolFractionOut, dMolesOut, INFO) &
++     bind(C, name="TCAPI_getOutputMolSpecies")
++ 
++diff --git a/src/exec/RunCalculationList.F90 b/src/exec/RunCalculationList.F90
++index a3249d0..d02195d 100644
++--- a/src/exec/RunCalculationList.F90
+++++ b/src/exec/RunCalculationList.F90
++@@ -14,7 +14,7 @@ program RunCalculationList
++     integer :: iDelimiterPosition, iOpenPosition, iClosePosition, iElementNumber, iEqualPosition
++     character(1024) :: cLineInit, cThermoFileNameTemp, cOutputFilePathTemp
++     logical :: lEnd, lPressureUnit, lTemperatureUnit, lMassUnit, lData, lEl, lNel
++-    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass
+++    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass, cFileOut
++ 
++     character(16) :: intStr
++ 
++@@ -185,6 +185,23 @@ program RunCalculationList
++             return
++           endif
++           cOutputFilePath = cOutputFilePathTemp
+++        case('element moles','moles element','moles','moles of elements','elementmoles','moleselements')
+++          read(cValue,'(A)',IOSTAT = INFO) dMolesElement(1:nElIn)
+++          if(INFO /= 0) then
+++            INFOThermo = 54
+++            write(cErrMsg,'(A35,I10)') 'Cannot read output file on line', iCounter
+++            return
+++          endif
+++          cFileOut = cOutputFilePathTemp
+++        case ('phase fractions', 'Phase fractions', 'phaseFractions', 'Phase Fractions', 'phase_fractions', 'phase values',&
+++          'Phase values', 'Phase Values', 'phase_values', 'phaseValues')
+++          read(cValue,*,IOSTAT = INFO) dPhaseFracs(1:nPhasesExcludedExcept)
+++          if (INFO /= 0) then
+++            INFOThermo = 54
+++            write (cErrMsg, '(A78,I10)') 'Cannot read phase fractions on line: ', iCounter
+++            print *,  trim(cErrMsg)
+++            return
+++          end if
++         case ('data','Data','data_file','Data_file','data file','Data file','Data File',&
++           'dat','Dat','dat_file','Dat_file','dat file','Dat file','Dat File')
++           read(cValue,'(A)',IOSTAT = INFO) cThermoFileNameTemp
++@@ -271,14 +288,15 @@ program RunCalculationList
++             print *,  trim(cErrMsg)
++             return
++           end if
++-        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except')
+++        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except','phase constraints', 'phase names', 'phaseConstraints', 'phaseNames', 'phase_constraints', 'phase_names',&
+++          'Phase names', 'Phase Names', 'Phase Constraints', 'Phase constraints','phase constraint')
++           if (nPhasesExcludedExcept == 0) then
++             INFOThermo = 54
++             write (cErrMsg, '(A75,I10)') 'Need (nonzero) number of phases exclusion exceptions before phase list at ', iCounter
++             print *,  trim(cErrMsg)
++             return
++           end if
++-          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept)
+++          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept) ! also created here
++           if (INFO /= 0) then
++             INFOThermo = 54
++             write (cErrMsg, '(A50,I10)') 'Cannot parse phase exclusion exceptions on line: ', iCounter
++@@ -374,6 +392,7 @@ program RunCalculationList
++       do j = 1, nElIn
++         dElementMass(iEls(j)) = dEls(j)
++       end do
+++      lPhaseField = allocated(dPhaseFracs) .AND. SIZE(dPhaseFracs) > 0
++       call Thermochimica
++       call PrintResults
++       if (iPrintResultsMode > 0) call ThermoDebug
++diff --git a/src/gem/CheckConvergence.f90 b/src/gem/CheckConvergence.f90
++index c18b867..5238ce7 100755
++--- a/src/gem/CheckConvergence.f90
+++++ b/src/gem/CheckConvergence.f90
++@@ -61,6 +61,10 @@
++     !! <li> The number of moles of all species and phases are positive and non-zero. </li>
++     !! <li> Gibbs' Phase Rule has been satisfied. </li>
++     !! <li> The standard Gibbs energy of a pure condensed phase is not below the Gibbs Plane.
+++    !!
+++    !! (gibbs plane is the point of eq'm so the tangent where derivative is 0 - but that dosnt mean stble bc
+++    !! think of it like a balance like sure its balanced but temporarily - it'll tip over soon so ideally below gibbs plane is stable and eq'm)
+++    !!
++     !!      If so, this phase should be added to the assemblage. </li>
++     !! <li> The residuals of the chemical potential terms are below a specified tolerance. </li>
++     !! <li> The sum of site fractions on each sublattice must equal unity within tolerance. </li>
++@@ -94,9 +98,14 @@
++     ! dChemicalPotential        A double real vector representing the difference between the chemical potential
++     !                           (defined by the element potentials) and the standard molar Gibbs energy of the
++     !                           pure species divided by the total number of atoms per formula mass.
+++    !                               ofc bc rememebr G = mu * n so G / n = mu duh
++     ! dMolesPhase               The number of moles of a phase.
++     ! dMolesElement             Total number of moles of an element.
++     ! dEffStoichSolnPhase       The "effective" stoichiometry of a solution phase.
+++    ! the regular stoichiometry of a solution phase refers to the stoichiometric coefficients of the individual components 
+++    ! in the solution phase, while the effective stoichiometry of a solution phase refers to the actual number of moles of 
+++    ! each component that are present in the solution phase, taking into account the interactions between the components and the solution phase as a whole.
+++    !
++     ! dSumMolFractionSoln       Sum of mole fractions in a solution phase.
++     ! dTolerance                Acceptable numerical tolerance (defined in Init subroutine).
++     !
++@@ -112,9 +121,9 @@ subroutine CheckConvergence
++     implicit none
++ 
++     integer :: i, j, k, l, c, iMaxDrivingForce
++-    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent
+++    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent, dSumMoles
++     logical :: lCompEverything, lPhaseChange
++-
+++    real(8), dimension(nSolnPhases+nConPhases) :: dMolPhaseFrac
++ 
++     ! Initialize variables:
++     dResidual       = 0D0
++@@ -130,8 +139,9 @@ subroutine CheckConvergence
++ 
++     ! Test if the largest relative change in species mole fraction is large
++     ! This is a self-consistency check
+++    ! So, in summary, this code is checking if the largest relative change in species mole fraction is large enough to indicate a problem with the solution, and if so, it returns from the subroutine.
++     if (lDebugMode) print *, "Test self-consistency ", dMaxSpeciesChange
++-    if (dMaxSpeciesChange > LOG(2D0)) then
+++    if (dMaxSpeciesChange > LOG(2D0)) then ! just chekc if the convergence is large enough basically. if your value is greater than this then you havent converged enough adn return from the subrtoutine
++         return
++     end if
++ 
++@@ -276,7 +286,13 @@ subroutine CheckConvergence
++         end do LOOP_GRESIDUAL
++ 
++     end do LOOP_TEST5
++-
+++    dSumMoles = sum(dMolesPhase)
+++    LOOP_TESTNEW: do j = 1, nSolnPhases + nConPhases
+++        dMolPhaseFrac(j) = dMolesPhase(j)/dSumMoles
+++        print *, dSumMoles
+++        print *, dMolPhaseFrac(j)
+++        print *, dPhaseFracs(j)
+++    end do LOOP_TESTNEW
++     ! TEST #6: Check the residuals of site fractions on each sublattice of a CEF phase:
++     ! ---------------------------------------------------------------------------------
++     if (lDebugMode) print *, "Test 6 "
++diff --git a/src/gem/CheckPhaseAssemblage.f90 b/src/gem/CheckPhaseAssemblage.f90
++index dfdc5db..1589969 100755
++--- a/src/gem/CheckPhaseAssemblage.f90
+++++ b/src/gem/CheckPhaseAssemblage.f90
++@@ -84,9 +84,14 @@
++     !! <li> Remove a solution phase when the number of moles of that phase is less than a specified tolernace,
++     !!       </li>
++     !! <li> Add a pure condensed phase when the driving force is negative, </li>
++-    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity.
+++    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity. (aka greater than 100%)
++     !!       An equivalent statement is that the driving force of this phase is negative. </li>
++     !! </ol>
+++    ! Driving Force = Chemical Potential of Phase - Chemical Potential of Constituents
+++    ! So 
+++    ! Negative driving force: Phase is stable and wants to form, bc the chemical potential of phase is higher than its constituents so its a good phase that lowers the gibbs energy so keep it
+++    ! Positive driving force: Phase is unstable and wants to break down into its constituent parts, so its not a good phase prediction and get rid of it
+++    ! Driving force is where system is tending towards
++     !!
++     !! To prevent contradicting the Gibbs Phase Rule (i.e., the maximum number of phases is equal to the number of
++     !! elements when temperature and pressure are constant), a phase replaces another phase when the number of
++@@ -177,7 +182,7 @@ subroutine CheckPhaseAssemblage
++     if ((iterGlobal >= 30).AND.(iterGlobal - iterLast < 5)) return
++ 
++     ! Store the indices of phases in the current estimated phase assemblage in a iteration history matrix:
++-    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements)
+++    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements) ! store this array of only 1 column at column iterGlobal in array iterHistory (2D array)
++ 
++     ! If the system has become stagnant and is very far from convergence, revert the system:
++     if ((iterGlobal - iterLast > 50).AND.(dGEMFunctionNorm > 1D3)) then
++@@ -252,6 +257,7 @@ subroutine CheckPhaseAssemblage
++                     ! The determination of the driving force in the CheckConvergence subroutine is more rigorous
++                     ! than in CompMolFraction.  If the current driving force is negative and the functional norm
++                     ! is very small, then cycle to the next solution phase and use the current driving force.
+++                    ! "...then continue with the current solution phase and use the current driving force"
++                     if ((iterLastMiscGapCheck == iterGlobal - 1).AND.(dDrivingForceSoln(j) < 0D0)) cycle
++ 
++                     ! Only compute the mole fractions of constituents belonging to unstable phases:
++@@ -283,6 +289,11 @@ subroutine CheckPhaseAssemblage
++                 ! Determine whether a pure condensed phase should be considered first or a solution phase.
++                 ! This decision is based on whether the lowest driving force of a pure condensed phase is less
++                 ! than that of all solution phases:
+++                !
+++                ! Consider pure condensed phases first bc they’re typically more stable than solution phases which have
+++                ! thermodynamic fluctuations. Pure condensed phases have a fixed composition so much less fluctuating.
+++                ! So trying to find a stable solution closest to eq’m fastest and avoid complexities of solution phases. 
+++                ! Faster convergence to final soln basically
++                 IF_AddOrder: if (dMaxDrivingForce < MINVAL(dDrivingForceSoln)) then
++ 
++                     ! 4A) Check if a pure condensed phase should be added/swapped:
++diff --git a/src/gem/CompChemicalPotential.f90 b/src/gem/CompChemicalPotential.f90
++index 3d8d71f..b92fe14 100755
++--- a/src/gem/CompChemicalPotential.f90
+++++ b/src/gem/CompChemicalPotential.f90
++@@ -69,10 +69,11 @@ subroutine CompChemicalPotential(lCompEverything)
++         do i = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
++             dMolFraction(i) = dMolesSpecies(i) / dMolesPhase(k)
++         end do
++-        ! Compute excess terms:
+++        ! Compute excess terms: and chemical potentials here too
++         call CompExcessGibbsEnergy(l)
++     end do
++ 
+++    ! correction: Compute the mole fractions of all solution phase constituents"
++     ! Check if the chemical potentials for everything should be computed:
++     if (lCompEverything) then
++         ! Compute the chemical potentials for every solution phase in the system:
++diff --git a/src/gem/CompFunctionNorm.f90 b/src/gem/CompFunctionNorm.f90
++index 19700c9..d65e0ff 100755
++--- a/src/gem/CompFunctionNorm.f90
+++++ b/src/gem/CompFunctionNorm.f90
++@@ -20,11 +20,16 @@
++     ! Purpose:
++     ! ========
++     !
+++    ! So the eucledian norm basically
++     !> \details The purpose of this subroutine is to compute the functional norm for the line search algorithm to
++     !! determine whether the system is converging sufficinetly or diverging. The functional vector is not directly
++     !! computed because it is not needed. Thus, the functional norm is computed directly.  This term incorporates
++     !! the residuals of the mass balance equations, the average residual between the chemical potential of each
++     !! species and the corresponding value computed from the element potentials.
+++    ! The functional norm is a measure of the residuals of the system, and it's a way to quantify how far the system is from being in equilibrium.
+++    ! In other words, the functional norm is a measure of the "distance" between the current state of the system and the desired state of equilibrium. The higher the functional norm, the further away the system is from equilibrium.
+++    ! So, in the context of the GEM solver, the functional norm is a key quantity that's used to determine whether the system is converging or diverging. If the functional norm is decreasing, it means that the system is converging towards equilibrium. If the functional norm is increasing, it means that the system is diverging away from equilibrium.
+++    ! By monitoring the functional norm, the GEM solver can determine whether it needs to continue iterating or whether it's reached a stable solution. This is a key aspect of the GEM solver's convergence criteria, and it's what allows the solver to efficiently find a stable solution to the system.
++     !
++     !
++     ! Pertinent variables:
++diff --git a/src/gem/GEMLineSearch.f90 b/src/gem/GEMLineSearch.f90
++index 7bf59cc..58b04c1 100755
++--- a/src/gem/GEMLineSearch.f90
+++++ b/src/gem/GEMLineSearch.f90
++@@ -474,6 +474,7 @@ subroutine InitGEMLineSearch(dStepLength,dMolesSpeciesLast,dElementPotentialLast
++     end if
++ 
++     ! Further dampen the system if a miscible phase was recently added to the system:
+++    ! dampen: stabilize solution and reduce spurious oscillations
++     if ((iterGlobal - iterLast < 10).AND.(nMisciblePhases > 0)) dStepLength = dStepLength * 0.5D0
++ 
++     ! If the number of moles of a solution phase is changing by too large of an amount, then recompute
++@@ -499,7 +500,7 @@ end subroutine InitGEMLineSearch
++     ! ========
++     !
++     ! The purpose of this subroutine is to update the system variables using
++-    ! a specified steplength.
+++    ! a specified steplength. See if some are small enough that you'll need to use their tolerance instead of actual value
++     !
++     !---------------------------------------------------------------------------
++ 
++diff --git a/src/gem/GEMNewton.f90 b/src/gem/GEMNewton.f90
++index 41667af..1216d0b 100755
++--- a/src/gem/GEMNewton.f90
+++++ b/src/gem/GEMNewton.f90
++@@ -47,6 +47,8 @@
++     !! will also be zero.  This procedure effectively ignores the jth row while preventing a numerical
++     !! singularity.
++     !
+++    ! 
+++    ! Basically do this method to fill up the hessian in phd paper
++     !
++     ! References:
++     ! ===========
++@@ -67,6 +69,7 @@
++     ! Pertinent variables:
++     ! ====================
++     !
+++    ! This just means its a global variable so can be accessed from any subroutine obvs after having been set a value
++     !> \param[out]  INFO        An integer scalar used by LAPACK indicating a successful exit or an error.
++     !
++     ! nVar                      An integer scalar representing the total number of unknowns/linear equations.
++@@ -82,7 +85,7 @@
++     ! JacobianShort             A double real vector that incorporates the JacobianLong matrix along with the
++     !                            updated number of moles of each solution species.
++     ! A                         Hessian matrix
++-    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK)
+++    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK) aka unknown = direction vector
++     ! dEffStoichSolnPhase       A double real matrix representing the effective stoichiometry of a solution phase.
++     ! dUpdateVar                A double real vector represending the updated system variables.
++     !
++@@ -105,6 +108,7 @@ subroutine GEMNewton(INFO)
++     real(8), dimension(:,:), allocatable :: A
++ 
++     ! Count phases:
+++    ! Count number of *active* condensed phases
++     j = nConPhases
++     nConPhases  = 0
++     CountCon: do i = 1, j
++@@ -115,6 +119,7 @@ subroutine GEMNewton(INFO)
++         end if
++     end do CountCon
++ 
+++    ! Count number of *active* solution phases
++     j = nSolnPhases
++     nSolnPhases = 0
++     CountSoln: do i = nElements, nElements + 1 - j, -1
++@@ -125,9 +130,10 @@ subroutine GEMNewton(INFO)
++         end if
++     end do CountSoln
++ 
+++    ! Only proceed if there's at least one phase to work with
++     if ((nConPhases + nSolnPhases) <= 0) return
++ 
++-    ! Determine the number of unknowns/linear equations:
+++    ! Determine the number of unknowns/linear equations in the linear system. One per: element potential (lagrange multiplier), moles condensed phase, moles solution phase:
++     nVar = nElements + nConPhases + nSolnPhases
++ 
++     iErrCol = 0
++@@ -144,8 +150,8 @@ subroutine GEMNewton(INFO)
++         ! Initialize variables:
++         IPIV                = 0
++         INFO                = 0
++-        A                   = 0D0
++-        B                   = 0D0
+++        A                   = 0D0 ! Hessian
+++        B                   = 0D0 ! constraint vector k in Hu = k
++         dUpdateVar          = 0D0
++         dEffStoichSolnPhase = 0D0
++ 
++@@ -154,21 +160,22 @@ subroutine GEMNewton(INFO)
++             m = -iAssemblage(nElements - k + 1)
++             ! Loop through species in phase:
++             do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
++-                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l)
+++                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l) ! n_i(lambda) = n_lambda * x_i(lambda). Def'n of species amounts
++                 dMolesSpecies(l) = DMAX1(dMolesSpecies(l), dTolerance(8))
++             end do
++         end do
++ 
++-        ! Construct the Hessian matrix (elements):
++-        do j = 1, nElements
++-            do i = j, nElements
++-                do k = 1, nSolnPhases
+++        ! Construct the Hessian matrix (elements): so just the r matrix, the top left block of the hessian in parikshit's thesis
+++        do j = 1, nElements ! column index of hessian
+++            do i = j, nElements ! row index of hessian
+++                do k = 1, nSolnPhases ! loop through each soln phase lambda
++                     ! Absolute solution phase index:
++-                    m = -iAssemblage(nElements - k + 1)
+++                    m = -iAssemblage(nElements - k + 1) ! just indexing stuff
++                     ! Loop through species in phase:
++                     do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
+++                        !r_jk in eq. 5.31 phd paper
++                         dTemp  = dStoichSpecies(l,i) * dStoichSpecies(l,j) * dMolesSpecies(l)
++-                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2)
+++                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2) ! just normalizing numerically, not important
++                     end do
++                 end do
++                 ! Apply symmetry:
++@@ -176,38 +183,39 @@ subroutine GEMNewton(INFO)
++             end do
++         end do
++ 
++-        ! Compute the constraint vector (elements):
+++        ! Compute the constraint vector (elements): (eq. 5.35 in parikshit's phd paper. This is k) do j = 1, nElements -->for all elements
++         do j = 1, nElements
++             B(j) = dMolesElement(j)
++-            do l = 1, nSolnPhases
++-                k = -iAssemblage(nElements - l + 1)
++-                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k)
++-                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0)
++-                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i))
+++            do l = 1, nSolnPhases ! for all phases in our element
+++                k = -iAssemblage(nElements - l + 1) ! just indexing stuff
+++                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k) ! for all species in our phase
+++                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0) ! eq. 5.35 in parikshit's phd
+++                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i)) ! just numerical normallizing but also storing the constraint vector in B
++                 end do
++             end do
++         end do
++ 
++-        ! Construct the Hessian matrix and constraint vector (contribution from solution phases):
+++        ! Construct the Hessian matrix and constraint vector (contribution from solution phases): (eq. 5.31 in phd thesis)
++         do j = nElements + 1, nElements + nSolnPhases
++             l = 2 * nElements - j + 1       ! Relative solution phase index (in iAssemblage vector).
++             k = -iAssemblage(l)             ! Absolute solution phase index.
++ 
++-            ! Compute the stoichiometry of this phase:
++-            call CompStoichSolnPhase(k)
+++            ! Compute the stoichiometry of this phase: and store that in dEffStoichSolnPhase
+++            call CompStoichSolnPhase(k) ! doesnt just comp stoich soln phase. also calls CompExcessGibbsEnergy which calcs dGibbsSolnPhase
++ 
++             do i = 1,nElements
++-                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l)
+++                ! phi_jk ^m part
+++                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l) ! find all places where this is calc so its not calc bc get this from phase field jk maybe not
++                 A(j,i) = A(i,j)
++             end do
++-            B(j) = dGibbsSolnPhase(k)
+++            B(j) = dGibbsSolnPhase(k) ! storing constraint vector (Gibbs energy of soln phase) in B
++         end do
++ 
++         ! Construct the Hessian matrix and constraint vector (contribution from pure condensed phases):
++         do j = nElements + nSolnPhases + 1, nElements + nConPhases + nSolnPhases
++             k = j - nElements - nSolnPhases
++             do i = 1, nElements
++-                A(i,j) = dStoichSpecies(iAssemblage(k),i)
+++                A(i,j) = dStoichSpecies(iAssemblage(k),i) ! just nu bc nothing else depends on dMolesPhase
++                 A(j,i) = A(i,j)
++             end do
++             B(j) = dStdGibbsEnergy(iAssemblage(k))
++@@ -236,16 +244,18 @@ subroutine GEMNewton(INFO)
++             end do LOOP_SUB
++         end if
++ 
++-        ! Call the linear equation solver:
+++        ! Call the linear equation solver (LAPACK):
++         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
++             call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
++         else
++             do i = 1, nElements
++-                B(i) = dElementPotential(i)
+++                B(i) = dElementPotential(i) ! pi j's wrt r submatrix and also pi lambda's? bc at eqm pi's = element potentials ! MAKES NO SENSE !!!!
++             end do
++             B(nElements + 1) = dMolesPhase(1)
++         end if
++ 
+++        ! now that lapack was called, B contains unknown / direction vector u instead of k
+++        
++         do k = 1, iTry
++             j = nElements + nSolnPhases + nConPhases + k
++             B(j) = 0D0
++diff --git a/src/gem/GEMSolver.f90 b/src/gem/GEMSolver.f90
++index 09c6cba..1816155 100755
++--- a/src/gem/GEMSolver.f90
+++++ b/src/gem/GEMSolver.f90
++@@ -91,7 +91,7 @@ subroutine GEMSolver
++     implicit none
++ 
++     integer::   INFO
++-
+++    
++ 
++     ! Initialize the GEM solver:
++     call InitGEMSolver
++@@ -126,7 +126,9 @@ subroutine GEMSolver
++         call GEMLineSearch
++ 
++         ! Check if the estimated phase assemblage needs to be adjusted:
++-        call CheckPhaseAssemblage
+++        if(.NOT. lPhaseField) then
+++            call CheckPhaseAssemblage
+++        end if
++ 
++         ! Check convergence:
++         ! if (iterGlobal /= iterLast) call CheckConvergence
++diff --git a/src/gem/InitGEMSolver.f90 b/src/gem/InitGEMSolver.f90
++index d3259aa..4ea7e67 100755
++--- a/src/gem/InitGEMSolver.f90
+++++ b/src/gem/InitGEMSolver.f90
++@@ -57,7 +57,7 @@
++ subroutine InitGEMSolver
++ 
++     USE ModuleThermo
++-    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded
+++    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded, lPhaseField,dPhaseFracs ,cPhasesExcludedExcept
++     USE ModuleGEMSolver
++     USE ModuleReinit
++ 
++@@ -184,8 +184,11 @@ subroutine InitGEMSolver
++     lCompEverything         = .FALSE.
++     lConverged              = .FALSE.
++     lRevertSystem           = .FALSE.
++-
+++    ! if(lPhaseField) then
+++    !     dMolesPhaseLast = dPhaseFracs
+++    ! endif
++     ! Regrettably, branching here depending on whether reinit data has been loaded
+++    ! We are NEVER EVER EVER getting lReinitLoaded
++     IF_ReinitLoaded: if (lReinitLoaded) then
++       iAssemblage = iAssemblageLast
++       dMolFraction = dMolFraction_Old
++@@ -202,6 +205,7 @@ subroutine InitGEMSolver
++     else
++         ! Calculate the total number of moles for each solution phase:
++         do i = 1, nElements
+++            print *, iAssemblageLast
++             j           = iPhase(iAssemblageLast(i))
++             dTempVec(j) = dTempVec(j) + dMolesPhaseLast(i)
++         end do
++@@ -226,7 +230,7 @@ subroutine InitGEMSolver
++                 k = iPhase(iAssemblageLast(i))
++ 
++                 iAssemblage(j) = -k
++-                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9))
+++                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9)) ! This SHOULD NOT HAPPEN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++                 lSolnPhases(k) = .TRUE.
++             end if
++         end do LOOP_AddPhase
++@@ -243,7 +247,7 @@ subroutine InitGEMSolver
++                     dTemp = dTemp + dElementPotential(j) * dStoichSpecies(i,j)
++                 end do
++                 dTemp           = dTemp / DFLOAT(iParticlesPerMole(i))
++-                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i))
+++                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i)) ! eq. 5.38 
++                 dMolFraction(i) = DMIN1(dMolFraction(i),1D0)
++                 dSum            = dSum + dMolFraction(i)
++             end do
++@@ -260,15 +264,26 @@ subroutine InitGEMSolver
++                 end do
++             end if
++         end do LOOP_CompX
+++
+++        ! if(lPhaseField) then
+++        !     print '(A30,I30)', 'print iAssemblage'
+++        !     do i = 1, SIZE(iAssemblage)
+++        !         print *, iAssemblage(i)
+++        !     end do
+++        !     ! iAssemblage = cPhasesExcludedExcept
+++        !     dMolesPhase = dPhaseFracs
+++        ! end if
++     end if IF_ReinitLoaded
++ 
++     ! If there aren't any solution phases currently predicted to be stable, check if any should be added:
++-    if (nSolnPhases == 0) call InitGemCheckSolnPhase
+++    if (nSolnPhases == 0 .AND. .NOT. lPhaseField) then 
+++        call InitGemCheckSolnPhase
+++    end if
++ 
++     ! It may be possible that a single solution phase may be expected to form (as predicted by Leveling)
++     ! but that there are zero moles of this particular phase.  This can cause problems establishing the
++     ! Jacobian.
++-    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then
+++    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then !Possibly am ossie later question mark
++ 
++         ! Adjust the number of moles of pure condensed phases:
++         dMolesPhase = dMolesPhase * 0.95D0
++@@ -285,7 +300,7 @@ subroutine InitGEMSolver
++         l = -iAssemblage(k)    ! Absolute solution phase index
++ 
++         do j = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
++-            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j)
+++            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j) !Is Dmolfraction the phase frafctions or is it dmolesphase I think it's neither
++             dMolesSpecies(j) = DMAX1(dMolesSpecies(j), 1D-300)
++         end do
++ 
++@@ -299,35 +314,37 @@ subroutine InitGEMSolver
++ 
++     ! Check the phase assemblage to make sure that the Jacobian matrix is appropriate.  Only do this if there is
++     ! at least one solution phase:
++-    if (nSolnPhases > 0) then
++-
++-        i = MAX(1,nConPhases)
++-
++-        LOOP_CheckPhaseAssemblage: do j = 1, i
++-
++-                ! Check to make sure that the phase can be added:
++-                call CheckPhaseChange(lPhasePass,k)
++-
++-                if (k == 0) then
++-                    exit LOOP_CheckPhaseAssemblage
++-                elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
++-                    ! A pure condensed phase should be removed.
++-                    k = k - nElements - nSolnPhases
++-                    iAssemblage(k)          = iAssemblage(nConPhases)
++-                    dMolesPhase(k)          = dMolesPhase(nConPhases)
++-                    iAssemblage(nConPhases) = 0
++-                    dMolesPhase(nConPhases) = 0D0
++-                    nConPhases = nConPhases - 1
++-                else
++-                    ! Placeholder...the phase assemblage has failed...
++-                    exit LOOP_CheckPhaseAssemblage
++-                end if
++-        end do LOOP_CheckPhaseAssemblage
++-    end if
+++    if(.NOT. lPhaseField) then 
+++
+++        if (nSolnPhases > 0) then
+++
+++            i = MAX(1,nConPhases)
++ 
++-    dGEMFunctionNorm = 1D3
+++            LOOP_CheckPhaseAssemblage: do j = 1, i
+++
+++                    ! Check to make sure that the phase can be added:
+++                    call CheckPhaseChange(lPhasePass,k)
+++
+++                    if (k == 0) then
+++                        exit LOOP_CheckPhaseAssemblage
+++                    elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
+++                        ! A pure condensed phase should be removed.
+++                        k = k - nElements - nSolnPhases
+++                        iAssemblage(k)          = iAssemblage(nConPhases)
+++                        dMolesPhase(k)          = dMolesPhase(nConPhases)
+++                        iAssemblage(nConPhases) = 0
+++                        dMolesPhase(nConPhases) = 0D0 ! Should not happem
+++                        nConPhases = nConPhases - 1
+++                    else
+++                        ! Placeholder...the phase assemblage has failed...
+++                        exit LOOP_CheckPhaseAssemblage
+++                    end if
+++            end do LOOP_CheckPhaseAssemblage
+++        end if
+++    end if
+++        dGEMFunctionNorm = 1D3
++ 
++-    return
+++        return
++ 
++ end subroutine InitGEMSolver
++ 
++diff --git a/src/module/ModuleThermo.f90 b/src/module/ModuleThermo.f90
++index aed8cb1..01bff86 100755
++--- a/src/module/ModuleThermo.f90
+++++ b/src/module/ModuleThermo.f90
++@@ -116,6 +116,8 @@ module ModuleThermo
++     real(8),      dimension(:,:,:),allocatable::  dConstituentCoefficients
++ 
++     character(12), dimension(:),   allocatable::            cElementName
+++    character(12), dimension(:),   allocatable::            cElementName1
+++    character(12), dimension(:),   allocatable::            cElementName2
++     character(30), dimension(:),   allocatable, target::    cSpeciesName
++     character(8),  dimension(:),   allocatable::            cSolnPhaseType
++     character(25), dimension(:),   allocatable, target::    cSolnPhaseName
++diff --git a/src/module/ModuleThermoIO.f90 b/src/module/ModuleThermoIO.f90
++index 940ace8..7222369 100644
++--- a/src/module/ModuleThermoIO.f90
+++++ b/src/module/ModuleThermoIO.f90
++@@ -79,5 +79,6 @@ module ModuleThermoIO
++     character(25), dimension(:), allocatable :: cSolnPhaseNameOut, cPureConPhaseNameOut, cSpeciesNameOut, cSpeciesPhaseOut
++     logical, dimension(:), allocatable       :: lSpeciesStable
++     real(8)                                  :: dHeatCapacity = 0D0, dEntropy = 0D0, dEnthalpy = 0D0
++-
+++    logical                                  :: lPhaseField = .FALSE.
+++    real(8), dimension(:), allocatable       :: dPhaseFracs
++ end module ModuleThermoIO
++diff --git a/src/setup/GetNewAssemblage.f90 b/src/setup/GetNewAssemblage.f90
++index 85a57b5..6d0d075 100755
++--- a/src/setup/GetNewAssemblage.f90
+++++ b/src/setup/GetNewAssemblage.f90
++@@ -131,12 +131,16 @@ subroutine GetNewAssemblage(iter)
++         iAssemblage(k) = iNewPhase
++ 
++         ! 1) FIRST CHECK: The number of moles of each "phase" are non-negative and real:
++-        do j = 1,nElements
++-            do i = 1,nElements
++-                A(i,j) = dStoichSpecies(iAssemblage(j),i)
++-            end do
++-            dMolesPhase(j) = dMolesElement(j)
++-        end do
+++        ! if (.NOT. lPhaseField) then
+++        !     do j = 1,nElements
+++        !         do i = 1,nElements
+++        !             A(i,j) = dStoichSpecies(iAssemblage(j),i)
+++        !         end do
+++        !         dMolesPhase(j) = dMolesElement(j)
+++        !     end do
+++        ! else
+++        !     dMolesPhase = dPhaseFracs
+++        ! end if
++ 
++         ! Compute the sum of coefficients along each row.  If the sum of coefficients on a row is
++         ! equal to zero, this will result in a NaN.  This will quickly reject this phase assemblage
++diff --git a/src/setup/LevelingSolver.f90 b/src/setup/LevelingSolver.f90
++index 9b3f0e3..6282fa6 100755
++--- a/src/setup/LevelingSolver.f90
+++++ b/src/setup/LevelingSolver.f90
++@@ -215,7 +215,7 @@ subroutine LevelingSolver
++     ! If the GetFirstAssemblage subroutine determined the correct phase assemblage, then the
++     ! GetNewAssemblage subroutine was not called and the number of moles of each phase was not computed and
++     ! the number of moles of each constituent was not computed.
++-    if ((iter == 1).AND.(INFOThermo == 0)) then
+++    if ((iter == 1).AND.(INFOThermo == 0) .AND. .NOT. lPhaseField) then
++ 
++         ! Since the phase assemblage is comprised of only pure species, the number of moles of each phase
++         ! can be easily computed (the stoichiometry matrix is a diagonal matrix) by the following:
++@@ -225,6 +225,9 @@ subroutine LevelingSolver
++ 
++     end if
++ 
+++    ! if (lPhaseField) then
+++    !     dMolesPhase = dPhaseFracs
+++    ! end if
++     return
++ 
++ end subroutine LevelingSolver
+diff --git a/inputs/trial-input-output.ti b/inputs/trial-input-output.ti
+index 2db637f..e0a8d0e 100644
+--- a/inputs/trial-input-output.ti
++++ b/inputs/trial-input-output.ti
+@@ -1,11 +1,14 @@
+ ! Configuration variables:
+ temperature unit  = K
+ pressure unit     = atm
++nphasesexcludedexcept = 2
+ mass unit         = moles
+ data file         = data/CO.dat
+ output            = ../outputs/newout.json
+ ! Specify output and debug modes:
+ print mode        = 2
++phase constraint  = MSFL FCC
++phase values      = 0.5 0.5
+ 
+ ! Set up calculation list
+ nEl         = 2
+diff --git a/src/Thermochimica-c.C b/src/Thermochimica-c.C
+index 75b32fa..61e084e 100644
+--- a/src/Thermochimica-c.C
++++ b/src/Thermochimica-c.C
+@@ -36,6 +36,11 @@ void GetOutputChemPot(char *elementName, double *chemPot, int *info)
+   TCAPI_getOutputChemPot(elementName, strlen(elementName), chemPot, info);
+ }
+ 
++void GetOutputChemPotDerivative(char *elementName1, char *elementName2, double *chemPotDerivative, int *info)
++{
++  TCAPI_getOutputChemPotDerivative(elementName1, strlen(elementName1), elementName2, strlen(elementName2), chemPotDerivative, info);
++}
++
+ void GetOutputSolnSpecies(const char *phaseName, const char *speciesName, double *moleFraction, double *chemPot, int *info)
+ {
+   TCAPI_getOutputSolnSpecies(phaseName, strlen(phaseName), speciesName, strlen(speciesName), moleFraction, chemPot, info);
+diff --git a/src/Thermochimica-c.h b/src/Thermochimica-c.h
+index f88e2f5..05eb8b1 100644
+--- a/src/Thermochimica-c.h
++++ b/src/Thermochimica-c.h
+@@ -7,6 +7,7 @@ void SetUnitMass(const char *);
+ void SetUnits(const char *, const char *, const char *);
+ 
+ void GetOutputChemPot(char *, double *, int *);
++void GetOutputChemPotDerivative(char *, char *, double *, int *);
+ void GetOutputSolnSpecies(const char *, char *, double *, double *, int *);
+ void GetOutputMolSpecies(const char *, double *, double *, int *);
+ void GetOutputMolSpeciesPhase(const char *, const char *, double *, int *);
+diff --git a/src/Thermochimica-cxx.C b/src/Thermochimica-cxx.C
+index 18c43c1..f894064 100644
+--- a/src/Thermochimica-cxx.C
++++ b/src/Thermochimica-cxx.C
+@@ -326,6 +326,14 @@ namespace Thermochimica
+     return {chemPot, info};
+   }
+ 
++  std::pair<double, int> getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2)
++  {
++    double chemPotDerivative;
++    int info;
++    TCAPI_getOutputChemPotDerivative(elementName1.c_str(), elementName1.length(), elementName2.c_str(), elementName2.length(), &chemPotDerivative, &info);
++    return {chemPotDerivative, info};
++  }
++
+   std::tuple<double, double, int>
+   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName)
+   {
+diff --git a/src/Thermochimica-cxx.h b/src/Thermochimica-cxx.h
+index 80c2260..3a7b3af 100644
+--- a/src/Thermochimica-cxx.h
++++ b/src/Thermochimica-cxx.h
+@@ -56,6 +56,8 @@ namespace Thermochimica
+ 
+   std::pair<double, int>
+   getOutputChemPot(const std::string &elementName);
++  std::pair<double, int>
++  getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2);
+   std::tuple<double, double, int>
+   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName);
+   std::tuple<double, double, int>
+diff --git a/src/Thermochimica.h b/src/Thermochimica.h
+index a7f7d33..ce88d54 100644
+--- a/src/Thermochimica.h
++++ b/src/Thermochimica.h
+@@ -16,6 +16,7 @@ extern "C"
+   void TCAPI_getElementPotential(int *, double *, int *);
+ 
+   void TCAPI_getOutputChemPot(const char *, std::size_t, double *, int *);
++  void TCAPI_getOutputChemPotDerivative(const char *, std::size_t, const char *, std::size_t, double *, int *);
+   void TCAPI_getOutputSolnSpecies(const char *, std::size_t, const char *, std::size_t, double *, double *, int *);
+   void TCAPI_getOutputMolSpecies(const char *, std::size_t, double *, double *, int *);
+   void TCAPI_getOutputMolSpeciesPhase(const char *, std::size_t, const char *, std::size_t, double *, int *);
+diff --git a/src/api/CouplingUtilitiesISO_C.f90 b/src/api/CouplingUtilitiesISO_C.f90
+index 89de2ae..ba51690 100644
+--- a/src/api/CouplingUtilitiesISO_C.f90
++++ b/src/api/CouplingUtilitiesISO_C.f90
+@@ -853,6 +853,31 @@ subroutine GetOutputChemPotISO(cElementNameRequest, lcElementNameRequest, dEleme
+ 
+ end subroutine GetOutputChemPotISO
+ 
++subroutine GetOutputChemPotDerivativeISO(cElementName1Request, lcElementName1Request, cElementName2Request, lcElementName2Request, dElementChemPotDerivative, INFO) &
++    bind(C, name="TCAPI_getOutputChemPotDerivative")
++
++    USE,INTRINSIC :: ISO_C_BINDING
++
++    implicit none
++
++    integer(C_INT),      intent(out)                         :: INFO
++    real(C_DOUBLE),      intent(out)                         :: dElementChemPotDerivative
++    character(kind=c_char,len=1), target, intent(in)         :: cElementName1Request(*)
++    integer(c_size_t), intent(in), value                     :: lcElementName1Request
++    character(kind=c_char,len=1), target, intent(in)         :: cElementName2Request(*)
++    integer(c_size_t), intent(in), value                     :: lcElementName2Request
++    character(kind=c_char,len=lcElementName1Request), pointer :: fElementName1Request
++    character(kind=c_char,len=lcElementName2Request), pointer :: fElementName2Request
++
++    call c_f_pointer(cptr=c_loc(cElementName1Request), fptr=fElementName1Request)
++    call c_f_pointer(cptr=c_loc(cElementName2Request), fptr=fElementName2Request)
++
++    call GetOutputChemPotDerivative(fElementName1Request, fElementName2Request, dElementChemPotDerivative, INFO)
++
++    return
++
++end subroutine GetOutputChemPotDerivativeISO
++
+ subroutine GetOutputMolSpeciesISO(cSpeciesOut, lcSpeciesOut, dMolFractionOut, dMolesOut, INFO) &
+     bind(C, name="TCAPI_getOutputMolSpecies")
+ 
+diff --git a/src/api/GetOutputChemPotDerivative.f90 b/src/api/GetOutputChemPotDerivative.f90
+new file mode 100644
+index 0000000..3775970
+--- /dev/null
++++ b/src/api/GetOutputChemPotDerivative.f90
+@@ -0,0 +1,63 @@
++subroutine GetOutputChemPotDerivative(cElementName1Request, cElementName2Request, dElementChemPotDerivative, INFO)
++
++    USE ModuleThermo
++    USE ModuleThermoIO
++
++    implicit none
++
++    integer,      intent(out)   :: INFO
++    integer                     :: i, j1, j2
++    real(8),      intent(out)   :: dElementChemPotDerivative
++    character(*), intent(in)    :: cElementName1Request, cElementName2Request
++    character(3)                :: cElementName1Use, cElementName2Use
++
++
++    ! Initialize variables:
++    INFO            = 0
++    dElementChemPotDerivative = 0D0
++
++    ! Only proceed if Thermochimica solved successfully:
++    if (INFOThermo == 0) then
++
++        ! Remove trailing blanks:
++        cElementName1Use = cElementName1Request
++        cElementName1Use = TRIM(cElementName1Use)
++        cElementName2Use = cElementName2Request
++        cElementName2Use = TRIM(cElementName2Use)
++
++        ! Loop through elements to find the one corresponding to the element
++        ! being requested:
++        j1 = 0
++        j2 = 0
++        ! Find element 1
++        LOOP_A: do i = 1, nElements
++            if (cElementName1Use == cElementName(i)) then 
++                j1 = i
++                exit LOOP_A
++            end if
++        end do LOOP_A
++        ! Find element 2
++        do i = 1, nElements
++            if (cElementName2Use == cElementName(i)) then
++                j2 = i
++                exit
++            end if
++        end do
++
++        ! Check both were found
++        if (j1 == 0 .or. j2 == 0) then
++            INFO = 1       ! element not found, report an error
++            return
++        else
++            ! insert derivative logic here. dummy placeholder for now
++            dElementChemPotDerivative = (dElementPotential(j1) - dElementPotential(j2)) * dIdealConstant * dTemperature
++        end if
++
++    else
++        ! Record an error with INFO if INFOThermo /= 0.
++        INFO = -1
++    end if
++
++    return
++
++end subroutine GetOutputChemPotDerivative
+\ No newline at end of file
+diff --git a/src/exec/RunCalculationList.F90 b/src/exec/RunCalculationList.F90
+index a3249d0..d02195d 100644
+--- a/src/exec/RunCalculationList.F90
++++ b/src/exec/RunCalculationList.F90
+@@ -14,7 +14,7 @@ program RunCalculationList
+     integer :: iDelimiterPosition, iOpenPosition, iClosePosition, iElementNumber, iEqualPosition
+     character(1024) :: cLineInit, cThermoFileNameTemp, cOutputFilePathTemp
+     logical :: lEnd, lPressureUnit, lTemperatureUnit, lMassUnit, lData, lEl, lNel
+-    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass
++    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass, cFileOut
+ 
+     character(16) :: intStr
+ 
+@@ -185,6 +185,23 @@ program RunCalculationList
+             return
+           endif
+           cOutputFilePath = cOutputFilePathTemp
++        case('element moles','moles element','moles','moles of elements','elementmoles','moleselements')
++          read(cValue,'(A)',IOSTAT = INFO) dMolesElement(1:nElIn)
++          if(INFO /= 0) then
++            INFOThermo = 54
++            write(cErrMsg,'(A35,I10)') 'Cannot read output file on line', iCounter
++            return
++          endif
++          cFileOut = cOutputFilePathTemp
++        case ('phase fractions', 'Phase fractions', 'phaseFractions', 'Phase Fractions', 'phase_fractions', 'phase values',&
++          'Phase values', 'Phase Values', 'phase_values', 'phaseValues')
++          read(cValue,*,IOSTAT = INFO) dPhaseFracs(1:nPhasesExcludedExcept)
++          if (INFO /= 0) then
++            INFOThermo = 54
++            write (cErrMsg, '(A78,I10)') 'Cannot read phase fractions on line: ', iCounter
++            print *,  trim(cErrMsg)
++            return
++          end if
+         case ('data','Data','data_file','Data_file','data file','Data file','Data File',&
+           'dat','Dat','dat_file','Dat_file','dat file','Dat file','Dat File')
+           read(cValue,'(A)',IOSTAT = INFO) cThermoFileNameTemp
+@@ -271,14 +288,15 @@ program RunCalculationList
+             print *,  trim(cErrMsg)
+             return
+           end if
+-        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except')
++        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except','phase constraints', 'phase names', 'phaseConstraints', 'phaseNames', 'phase_constraints', 'phase_names',&
++          'Phase names', 'Phase Names', 'Phase Constraints', 'Phase constraints','phase constraint')
+           if (nPhasesExcludedExcept == 0) then
+             INFOThermo = 54
+             write (cErrMsg, '(A75,I10)') 'Need (nonzero) number of phases exclusion exceptions before phase list at ', iCounter
+             print *,  trim(cErrMsg)
+             return
+           end if
+-          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept)
++          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept) ! also created here
+           if (INFO /= 0) then
+             INFOThermo = 54
+             write (cErrMsg, '(A50,I10)') 'Cannot parse phase exclusion exceptions on line: ', iCounter
+@@ -374,6 +392,7 @@ program RunCalculationList
+       do j = 1, nElIn
+         dElementMass(iEls(j)) = dEls(j)
+       end do
++      lPhaseField = allocated(dPhaseFracs) .AND. SIZE(dPhaseFracs) > 0
+       call Thermochimica
+       call PrintResults
+       if (iPrintResultsMode > 0) call ThermoDebug
+diff --git a/src/gem/CheckConvergence.f90 b/src/gem/CheckConvergence.f90
+index c18b867..5238ce7 100755
+--- a/src/gem/CheckConvergence.f90
++++ b/src/gem/CheckConvergence.f90
+@@ -61,6 +61,10 @@
+     !! <li> The number of moles of all species and phases are positive and non-zero. </li>
+     !! <li> Gibbs' Phase Rule has been satisfied. </li>
+     !! <li> The standard Gibbs energy of a pure condensed phase is not below the Gibbs Plane.
++    !!
++    !! (gibbs plane is the point of eq'm so the tangent where derivative is 0 - but that dosnt mean stble bc
++    !! think of it like a balance like sure its balanced but temporarily - it'll tip over soon so ideally below gibbs plane is stable and eq'm)
++    !!
+     !!      If so, this phase should be added to the assemblage. </li>
+     !! <li> The residuals of the chemical potential terms are below a specified tolerance. </li>
+     !! <li> The sum of site fractions on each sublattice must equal unity within tolerance. </li>
+@@ -94,9 +98,14 @@
+     ! dChemicalPotential        A double real vector representing the difference between the chemical potential
+     !                           (defined by the element potentials) and the standard molar Gibbs energy of the
+     !                           pure species divided by the total number of atoms per formula mass.
++    !                               ofc bc rememebr G = mu * n so G / n = mu duh
+     ! dMolesPhase               The number of moles of a phase.
+     ! dMolesElement             Total number of moles of an element.
+     ! dEffStoichSolnPhase       The "effective" stoichiometry of a solution phase.
++    ! the regular stoichiometry of a solution phase refers to the stoichiometric coefficients of the individual components 
++    ! in the solution phase, while the effective stoichiometry of a solution phase refers to the actual number of moles of 
++    ! each component that are present in the solution phase, taking into account the interactions between the components and the solution phase as a whole.
++    !
+     ! dSumMolFractionSoln       Sum of mole fractions in a solution phase.
+     ! dTolerance                Acceptable numerical tolerance (defined in Init subroutine).
+     !
+@@ -112,9 +121,9 @@ subroutine CheckConvergence
+     implicit none
+ 
+     integer :: i, j, k, l, c, iMaxDrivingForce
+-    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent
++    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent, dSumMoles
+     logical :: lCompEverything, lPhaseChange
+-
++    real(8), dimension(nSolnPhases+nConPhases) :: dMolPhaseFrac
+ 
+     ! Initialize variables:
+     dResidual       = 0D0
+@@ -130,8 +139,9 @@ subroutine CheckConvergence
+ 
+     ! Test if the largest relative change in species mole fraction is large
+     ! This is a self-consistency check
++    ! So, in summary, this code is checking if the largest relative change in species mole fraction is large enough to indicate a problem with the solution, and if so, it returns from the subroutine.
+     if (lDebugMode) print *, "Test self-consistency ", dMaxSpeciesChange
+-    if (dMaxSpeciesChange > LOG(2D0)) then
++    if (dMaxSpeciesChange > LOG(2D0)) then ! just chekc if the convergence is large enough basically. if your value is greater than this then you havent converged enough adn return from the subrtoutine
+         return
+     end if
+ 
+@@ -276,7 +286,13 @@ subroutine CheckConvergence
+         end do LOOP_GRESIDUAL
+ 
+     end do LOOP_TEST5
+-
++    dSumMoles = sum(dMolesPhase)
++    LOOP_TESTNEW: do j = 1, nSolnPhases + nConPhases
++        dMolPhaseFrac(j) = dMolesPhase(j)/dSumMoles
++        print *, dSumMoles
++        print *, dMolPhaseFrac(j)
++        print *, dPhaseFracs(j)
++    end do LOOP_TESTNEW
+     ! TEST #6: Check the residuals of site fractions on each sublattice of a CEF phase:
+     ! ---------------------------------------------------------------------------------
+     if (lDebugMode) print *, "Test 6 "
+diff --git a/src/gem/CheckPhaseAssemblage.f90 b/src/gem/CheckPhaseAssemblage.f90
+index dfdc5db..1589969 100755
+--- a/src/gem/CheckPhaseAssemblage.f90
++++ b/src/gem/CheckPhaseAssemblage.f90
+@@ -84,9 +84,14 @@
+     !! <li> Remove a solution phase when the number of moles of that phase is less than a specified tolernace,
+     !!       </li>
+     !! <li> Add a pure condensed phase when the driving force is negative, </li>
+-    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity.
++    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity. (aka greater than 100%)
+     !!       An equivalent statement is that the driving force of this phase is negative. </li>
+     !! </ol>
++    ! Driving Force = Chemical Potential of Phase - Chemical Potential of Constituents
++    ! So 
++    ! Negative driving force: Phase is stable and wants to form, bc the chemical potential of phase is higher than its constituents so its a good phase that lowers the gibbs energy so keep it
++    ! Positive driving force: Phase is unstable and wants to break down into its constituent parts, so its not a good phase prediction and get rid of it
++    ! Driving force is where system is tending towards
+     !!
+     !! To prevent contradicting the Gibbs Phase Rule (i.e., the maximum number of phases is equal to the number of
+     !! elements when temperature and pressure are constant), a phase replaces another phase when the number of
+@@ -177,7 +182,7 @@ subroutine CheckPhaseAssemblage
+     if ((iterGlobal >= 30).AND.(iterGlobal - iterLast < 5)) return
+ 
+     ! Store the indices of phases in the current estimated phase assemblage in a iteration history matrix:
+-    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements)
++    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements) ! store this array of only 1 column at column iterGlobal in array iterHistory (2D array)
+ 
+     ! If the system has become stagnant and is very far from convergence, revert the system:
+     if ((iterGlobal - iterLast > 50).AND.(dGEMFunctionNorm > 1D3)) then
+@@ -252,6 +257,7 @@ subroutine CheckPhaseAssemblage
+                     ! The determination of the driving force in the CheckConvergence subroutine is more rigorous
+                     ! than in CompMolFraction.  If the current driving force is negative and the functional norm
+                     ! is very small, then cycle to the next solution phase and use the current driving force.
++                    ! "...then continue with the current solution phase and use the current driving force"
+                     if ((iterLastMiscGapCheck == iterGlobal - 1).AND.(dDrivingForceSoln(j) < 0D0)) cycle
+ 
+                     ! Only compute the mole fractions of constituents belonging to unstable phases:
+@@ -283,6 +289,11 @@ subroutine CheckPhaseAssemblage
+                 ! Determine whether a pure condensed phase should be considered first or a solution phase.
+                 ! This decision is based on whether the lowest driving force of a pure condensed phase is less
+                 ! than that of all solution phases:
++                !
++                ! Consider pure condensed phases first bc they’re typically more stable than solution phases which have
++                ! thermodynamic fluctuations. Pure condensed phases have a fixed composition so much less fluctuating.
++                ! So trying to find a stable solution closest to eq’m fastest and avoid complexities of solution phases. 
++                ! Faster convergence to final soln basically
+                 IF_AddOrder: if (dMaxDrivingForce < MINVAL(dDrivingForceSoln)) then
+ 
+                     ! 4A) Check if a pure condensed phase should be added/swapped:
+diff --git a/src/gem/CompChemicalPotential.f90 b/src/gem/CompChemicalPotential.f90
+index 3d8d71f..b92fe14 100755
+--- a/src/gem/CompChemicalPotential.f90
++++ b/src/gem/CompChemicalPotential.f90
+@@ -69,10 +69,11 @@ subroutine CompChemicalPotential(lCompEverything)
+         do i = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
+             dMolFraction(i) = dMolesSpecies(i) / dMolesPhase(k)
+         end do
+-        ! Compute excess terms:
++        ! Compute excess terms: and chemical potentials here too
+         call CompExcessGibbsEnergy(l)
+     end do
+ 
++    ! correction: Compute the mole fractions of all solution phase constituents"
+     ! Check if the chemical potentials for everything should be computed:
+     if (lCompEverything) then
+         ! Compute the chemical potentials for every solution phase in the system:
+diff --git a/src/gem/CompFunctionNorm.f90 b/src/gem/CompFunctionNorm.f90
+index 19700c9..d65e0ff 100755
+--- a/src/gem/CompFunctionNorm.f90
++++ b/src/gem/CompFunctionNorm.f90
+@@ -20,11 +20,16 @@
+     ! Purpose:
+     ! ========
+     !
++    ! So the eucledian norm basically
+     !> \details The purpose of this subroutine is to compute the functional norm for the line search algorithm to
+     !! determine whether the system is converging sufficinetly or diverging. The functional vector is not directly
+     !! computed because it is not needed. Thus, the functional norm is computed directly.  This term incorporates
+     !! the residuals of the mass balance equations, the average residual between the chemical potential of each
+     !! species and the corresponding value computed from the element potentials.
++    ! The functional norm is a measure of the residuals of the system, and it's a way to quantify how far the system is from being in equilibrium.
++    ! In other words, the functional norm is a measure of the "distance" between the current state of the system and the desired state of equilibrium. The higher the functional norm, the further away the system is from equilibrium.
++    ! So, in the context of the GEM solver, the functional norm is a key quantity that's used to determine whether the system is converging or diverging. If the functional norm is decreasing, it means that the system is converging towards equilibrium. If the functional norm is increasing, it means that the system is diverging away from equilibrium.
++    ! By monitoring the functional norm, the GEM solver can determine whether it needs to continue iterating or whether it's reached a stable solution. This is a key aspect of the GEM solver's convergence criteria, and it's what allows the solver to efficiently find a stable solution to the system.
+     !
+     !
+     ! Pertinent variables:
+diff --git a/src/gem/GEMLineSearch.f90 b/src/gem/GEMLineSearch.f90
+index 7bf59cc..58b04c1 100755
+--- a/src/gem/GEMLineSearch.f90
++++ b/src/gem/GEMLineSearch.f90
+@@ -474,6 +474,7 @@ subroutine InitGEMLineSearch(dStepLength,dMolesSpeciesLast,dElementPotentialLast
+     end if
+ 
+     ! Further dampen the system if a miscible phase was recently added to the system:
++    ! dampen: stabilize solution and reduce spurious oscillations
+     if ((iterGlobal - iterLast < 10).AND.(nMisciblePhases > 0)) dStepLength = dStepLength * 0.5D0
+ 
+     ! If the number of moles of a solution phase is changing by too large of an amount, then recompute
+@@ -499,7 +500,7 @@ end subroutine InitGEMLineSearch
+     ! ========
+     !
+     ! The purpose of this subroutine is to update the system variables using
+-    ! a specified steplength.
++    ! a specified steplength. See if some are small enough that you'll need to use their tolerance instead of actual value
+     !
+     !---------------------------------------------------------------------------
+ 
+diff --git a/src/gem/GEMNewton.f90 b/src/gem/GEMNewton.f90
+index 41667af..1216d0b 100755
+--- a/src/gem/GEMNewton.f90
++++ b/src/gem/GEMNewton.f90
+@@ -47,6 +47,8 @@
+     !! will also be zero.  This procedure effectively ignores the jth row while preventing a numerical
+     !! singularity.
+     !
++    ! 
++    ! Basically do this method to fill up the hessian in phd paper
+     !
+     ! References:
+     ! ===========
+@@ -67,6 +69,7 @@
+     ! Pertinent variables:
+     ! ====================
+     !
++    ! This just means its a global variable so can be accessed from any subroutine obvs after having been set a value
+     !> \param[out]  INFO        An integer scalar used by LAPACK indicating a successful exit or an error.
+     !
+     ! nVar                      An integer scalar representing the total number of unknowns/linear equations.
+@@ -82,7 +85,7 @@
+     ! JacobianShort             A double real vector that incorporates the JacobianLong matrix along with the
+     !                            updated number of moles of each solution species.
+     ! A                         Hessian matrix
+-    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK)
++    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK) aka unknown = direction vector
+     ! dEffStoichSolnPhase       A double real matrix representing the effective stoichiometry of a solution phase.
+     ! dUpdateVar                A double real vector represending the updated system variables.
+     !
+@@ -105,6 +108,7 @@ subroutine GEMNewton(INFO)
+     real(8), dimension(:,:), allocatable :: A
+ 
+     ! Count phases:
++    ! Count number of *active* condensed phases
+     j = nConPhases
+     nConPhases  = 0
+     CountCon: do i = 1, j
+@@ -115,6 +119,7 @@ subroutine GEMNewton(INFO)
+         end if
+     end do CountCon
+ 
++    ! Count number of *active* solution phases
+     j = nSolnPhases
+     nSolnPhases = 0
+     CountSoln: do i = nElements, nElements + 1 - j, -1
+@@ -125,9 +130,10 @@ subroutine GEMNewton(INFO)
+         end if
+     end do CountSoln
+ 
++    ! Only proceed if there's at least one phase to work with
+     if ((nConPhases + nSolnPhases) <= 0) return
+ 
+-    ! Determine the number of unknowns/linear equations:
++    ! Determine the number of unknowns/linear equations in the linear system. One per: element potential (lagrange multiplier), moles condensed phase, moles solution phase:
+     nVar = nElements + nConPhases + nSolnPhases
+ 
+     iErrCol = 0
+@@ -144,8 +150,8 @@ subroutine GEMNewton(INFO)
+         ! Initialize variables:
+         IPIV                = 0
+         INFO                = 0
+-        A                   = 0D0
+-        B                   = 0D0
++        A                   = 0D0 ! Hessian
++        B                   = 0D0 ! constraint vector k in Hu = k
+         dUpdateVar          = 0D0
+         dEffStoichSolnPhase = 0D0
+ 
+@@ -154,21 +160,22 @@ subroutine GEMNewton(INFO)
+             m = -iAssemblage(nElements - k + 1)
+             ! Loop through species in phase:
+             do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
+-                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l)
++                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l) ! n_i(lambda) = n_lambda * x_i(lambda). Def'n of species amounts
+                 dMolesSpecies(l) = DMAX1(dMolesSpecies(l), dTolerance(8))
+             end do
+         end do
+ 
+-        ! Construct the Hessian matrix (elements):
+-        do j = 1, nElements
+-            do i = j, nElements
+-                do k = 1, nSolnPhases
++        ! Construct the Hessian matrix (elements): so just the r matrix, the top left block of the hessian in parikshit's thesis
++        do j = 1, nElements ! column index of hessian
++            do i = j, nElements ! row index of hessian
++                do k = 1, nSolnPhases ! loop through each soln phase lambda
+                     ! Absolute solution phase index:
+-                    m = -iAssemblage(nElements - k + 1)
++                    m = -iAssemblage(nElements - k + 1) ! just indexing stuff
+                     ! Loop through species in phase:
+                     do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
++                        !r_jk in eq. 5.31 phd paper
+                         dTemp  = dStoichSpecies(l,i) * dStoichSpecies(l,j) * dMolesSpecies(l)
+-                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2)
++                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2) ! just normalizing numerically, not important
+                     end do
+                 end do
+                 ! Apply symmetry:
+@@ -176,38 +183,39 @@ subroutine GEMNewton(INFO)
+             end do
+         end do
+ 
+-        ! Compute the constraint vector (elements):
++        ! Compute the constraint vector (elements): (eq. 5.35 in parikshit's phd paper. This is k) do j = 1, nElements -->for all elements
+         do j = 1, nElements
+             B(j) = dMolesElement(j)
+-            do l = 1, nSolnPhases
+-                k = -iAssemblage(nElements - l + 1)
+-                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k)
+-                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0)
+-                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i))
++            do l = 1, nSolnPhases ! for all phases in our element
++                k = -iAssemblage(nElements - l + 1) ! just indexing stuff
++                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k) ! for all species in our phase
++                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0) ! eq. 5.35 in parikshit's phd
++                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i)) ! just numerical normallizing but also storing the constraint vector in B
+                 end do
+             end do
+         end do
+ 
+-        ! Construct the Hessian matrix and constraint vector (contribution from solution phases):
++        ! Construct the Hessian matrix and constraint vector (contribution from solution phases): (eq. 5.31 in phd thesis)
+         do j = nElements + 1, nElements + nSolnPhases
+             l = 2 * nElements - j + 1       ! Relative solution phase index (in iAssemblage vector).
+             k = -iAssemblage(l)             ! Absolute solution phase index.
+ 
+-            ! Compute the stoichiometry of this phase:
+-            call CompStoichSolnPhase(k)
++            ! Compute the stoichiometry of this phase: and store that in dEffStoichSolnPhase
++            call CompStoichSolnPhase(k) ! doesnt just comp stoich soln phase. also calls CompExcessGibbsEnergy which calcs dGibbsSolnPhase
+ 
+             do i = 1,nElements
+-                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l)
++                ! phi_jk ^m part
++                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l) ! find all places where this is calc so its not calc bc get this from phase field jk maybe not
+                 A(j,i) = A(i,j)
+             end do
+-            B(j) = dGibbsSolnPhase(k)
++            B(j) = dGibbsSolnPhase(k) ! storing constraint vector (Gibbs energy of soln phase) in B
+         end do
+ 
+         ! Construct the Hessian matrix and constraint vector (contribution from pure condensed phases):
+         do j = nElements + nSolnPhases + 1, nElements + nConPhases + nSolnPhases
+             k = j - nElements - nSolnPhases
+             do i = 1, nElements
+-                A(i,j) = dStoichSpecies(iAssemblage(k),i)
++                A(i,j) = dStoichSpecies(iAssemblage(k),i) ! just nu bc nothing else depends on dMolesPhase
+                 A(j,i) = A(i,j)
+             end do
+             B(j) = dStdGibbsEnergy(iAssemblage(k))
+@@ -236,16 +244,18 @@ subroutine GEMNewton(INFO)
+             end do LOOP_SUB
+         end if
+ 
+-        ! Call the linear equation solver:
++        ! Call the linear equation solver (LAPACK):
+         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
+             call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
+         else
+             do i = 1, nElements
+-                B(i) = dElementPotential(i)
++                B(i) = dElementPotential(i) ! pi j's wrt r submatrix and also pi lambda's? bc at eqm pi's = element potentials ! MAKES NO SENSE !!!!
+             end do
+             B(nElements + 1) = dMolesPhase(1)
+         end if
+ 
++        ! now that lapack was called, B contains unknown / direction vector u instead of k
++        
+         do k = 1, iTry
+             j = nElements + nSolnPhases + nConPhases + k
+             B(j) = 0D0
+diff --git a/src/gem/GEMSolver.f90 b/src/gem/GEMSolver.f90
+index 09c6cba..1816155 100755
+--- a/src/gem/GEMSolver.f90
++++ b/src/gem/GEMSolver.f90
+@@ -91,7 +91,7 @@ subroutine GEMSolver
+     implicit none
+ 
+     integer::   INFO
+-
++    
+ 
+     ! Initialize the GEM solver:
+     call InitGEMSolver
+@@ -126,7 +126,9 @@ subroutine GEMSolver
+         call GEMLineSearch
+ 
+         ! Check if the estimated phase assemblage needs to be adjusted:
+-        call CheckPhaseAssemblage
++        if(.NOT. lPhaseField) then
++            call CheckPhaseAssemblage
++        end if
+ 
+         ! Check convergence:
+         ! if (iterGlobal /= iterLast) call CheckConvergence
+diff --git a/src/gem/InitGEMSolver.f90 b/src/gem/InitGEMSolver.f90
+index d3259aa..4ea7e67 100755
+--- a/src/gem/InitGEMSolver.f90
++++ b/src/gem/InitGEMSolver.f90
+@@ -57,7 +57,7 @@
+ subroutine InitGEMSolver
+ 
+     USE ModuleThermo
+-    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded
++    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded, lPhaseField,dPhaseFracs ,cPhasesExcludedExcept
+     USE ModuleGEMSolver
+     USE ModuleReinit
+ 
+@@ -184,8 +184,11 @@ subroutine InitGEMSolver
+     lCompEverything         = .FALSE.
+     lConverged              = .FALSE.
+     lRevertSystem           = .FALSE.
+-
++    ! if(lPhaseField) then
++    !     dMolesPhaseLast = dPhaseFracs
++    ! endif
+     ! Regrettably, branching here depending on whether reinit data has been loaded
++    ! We are NEVER EVER EVER getting lReinitLoaded
+     IF_ReinitLoaded: if (lReinitLoaded) then
+       iAssemblage = iAssemblageLast
+       dMolFraction = dMolFraction_Old
+@@ -202,6 +205,7 @@ subroutine InitGEMSolver
+     else
+         ! Calculate the total number of moles for each solution phase:
+         do i = 1, nElements
++            print *, iAssemblageLast
+             j           = iPhase(iAssemblageLast(i))
+             dTempVec(j) = dTempVec(j) + dMolesPhaseLast(i)
+         end do
+@@ -226,7 +230,7 @@ subroutine InitGEMSolver
+                 k = iPhase(iAssemblageLast(i))
+ 
+                 iAssemblage(j) = -k
+-                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9))
++                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9)) ! This SHOULD NOT HAPPEN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                 lSolnPhases(k) = .TRUE.
+             end if
+         end do LOOP_AddPhase
+@@ -243,7 +247,7 @@ subroutine InitGEMSolver
+                     dTemp = dTemp + dElementPotential(j) * dStoichSpecies(i,j)
+                 end do
+                 dTemp           = dTemp / DFLOAT(iParticlesPerMole(i))
+-                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i))
++                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i)) ! eq. 5.38 
+                 dMolFraction(i) = DMIN1(dMolFraction(i),1D0)
+                 dSum            = dSum + dMolFraction(i)
+             end do
+@@ -260,15 +264,26 @@ subroutine InitGEMSolver
+                 end do
+             end if
+         end do LOOP_CompX
++
++        ! if(lPhaseField) then
++        !     print '(A30,I30)', 'print iAssemblage'
++        !     do i = 1, SIZE(iAssemblage)
++        !         print *, iAssemblage(i)
++        !     end do
++        !     ! iAssemblage = cPhasesExcludedExcept
++        !     dMolesPhase = dPhaseFracs
++        ! end if
+     end if IF_ReinitLoaded
+ 
+     ! If there aren't any solution phases currently predicted to be stable, check if any should be added:
+-    if (nSolnPhases == 0) call InitGemCheckSolnPhase
++    if (nSolnPhases == 0 .AND. .NOT. lPhaseField) then 
++        call InitGemCheckSolnPhase
++    end if
+ 
+     ! It may be possible that a single solution phase may be expected to form (as predicted by Leveling)
+     ! but that there are zero moles of this particular phase.  This can cause problems establishing the
+     ! Jacobian.
+-    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then
++    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then !Possibly am ossie later question mark
+ 
+         ! Adjust the number of moles of pure condensed phases:
+         dMolesPhase = dMolesPhase * 0.95D0
+@@ -285,7 +300,7 @@ subroutine InitGEMSolver
+         l = -iAssemblage(k)    ! Absolute solution phase index
+ 
+         do j = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
+-            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j)
++            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j) !Is Dmolfraction the phase frafctions or is it dmolesphase I think it's neither
+             dMolesSpecies(j) = DMAX1(dMolesSpecies(j), 1D-300)
+         end do
+ 
+@@ -299,35 +314,37 @@ subroutine InitGEMSolver
+ 
+     ! Check the phase assemblage to make sure that the Jacobian matrix is appropriate.  Only do this if there is
+     ! at least one solution phase:
+-    if (nSolnPhases > 0) then
+-
+-        i = MAX(1,nConPhases)
+-
+-        LOOP_CheckPhaseAssemblage: do j = 1, i
+-
+-                ! Check to make sure that the phase can be added:
+-                call CheckPhaseChange(lPhasePass,k)
+-
+-                if (k == 0) then
+-                    exit LOOP_CheckPhaseAssemblage
+-                elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
+-                    ! A pure condensed phase should be removed.
+-                    k = k - nElements - nSolnPhases
+-                    iAssemblage(k)          = iAssemblage(nConPhases)
+-                    dMolesPhase(k)          = dMolesPhase(nConPhases)
+-                    iAssemblage(nConPhases) = 0
+-                    dMolesPhase(nConPhases) = 0D0
+-                    nConPhases = nConPhases - 1
+-                else
+-                    ! Placeholder...the phase assemblage has failed...
+-                    exit LOOP_CheckPhaseAssemblage
+-                end if
+-        end do LOOP_CheckPhaseAssemblage
+-    end if
++    if(.NOT. lPhaseField) then 
++
++        if (nSolnPhases > 0) then
++
++            i = MAX(1,nConPhases)
+ 
+-    dGEMFunctionNorm = 1D3
++            LOOP_CheckPhaseAssemblage: do j = 1, i
++
++                    ! Check to make sure that the phase can be added:
++                    call CheckPhaseChange(lPhasePass,k)
++
++                    if (k == 0) then
++                        exit LOOP_CheckPhaseAssemblage
++                    elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
++                        ! A pure condensed phase should be removed.
++                        k = k - nElements - nSolnPhases
++                        iAssemblage(k)          = iAssemblage(nConPhases)
++                        dMolesPhase(k)          = dMolesPhase(nConPhases)
++                        iAssemblage(nConPhases) = 0
++                        dMolesPhase(nConPhases) = 0D0 ! Should not happem
++                        nConPhases = nConPhases - 1
++                    else
++                        ! Placeholder...the phase assemblage has failed...
++                        exit LOOP_CheckPhaseAssemblage
++                    end if
++            end do LOOP_CheckPhaseAssemblage
++        end if
++    end if
++        dGEMFunctionNorm = 1D3
+ 
+-    return
++        return
+ 
+ end subroutine InitGEMSolver
+ 
+diff --git a/src/module/ModuleThermo.f90 b/src/module/ModuleThermo.f90
+index aed8cb1..01bff86 100755
+--- a/src/module/ModuleThermo.f90
++++ b/src/module/ModuleThermo.f90
+@@ -116,6 +116,8 @@ module ModuleThermo
+     real(8),      dimension(:,:,:),allocatable::  dConstituentCoefficients
+ 
+     character(12), dimension(:),   allocatable::            cElementName
++    character(12), dimension(:),   allocatable::            cElementName1
++    character(12), dimension(:),   allocatable::            cElementName2
+     character(30), dimension(:),   allocatable, target::    cSpeciesName
+     character(8),  dimension(:),   allocatable::            cSolnPhaseType
+     character(25), dimension(:),   allocatable, target::    cSolnPhaseName
+diff --git a/src/module/ModuleThermoIO.f90 b/src/module/ModuleThermoIO.f90
+index 940ace8..7222369 100644
+--- a/src/module/ModuleThermoIO.f90
++++ b/src/module/ModuleThermoIO.f90
+@@ -79,5 +79,6 @@ module ModuleThermoIO
+     character(25), dimension(:), allocatable :: cSolnPhaseNameOut, cPureConPhaseNameOut, cSpeciesNameOut, cSpeciesPhaseOut
+     logical, dimension(:), allocatable       :: lSpeciesStable
+     real(8)                                  :: dHeatCapacity = 0D0, dEntropy = 0D0, dEnthalpy = 0D0
+-
++    logical                                  :: lPhaseField = .FALSE.
++    real(8), dimension(:), allocatable       :: dPhaseFracs
+ end module ModuleThermoIO
+diff --git a/src/setup/GetNewAssemblage.f90 b/src/setup/GetNewAssemblage.f90
+index 85a57b5..6d0d075 100755
+--- a/src/setup/GetNewAssemblage.f90
++++ b/src/setup/GetNewAssemblage.f90
+@@ -131,12 +131,16 @@ subroutine GetNewAssemblage(iter)
+         iAssemblage(k) = iNewPhase
+ 
+         ! 1) FIRST CHECK: The number of moles of each "phase" are non-negative and real:
+-        do j = 1,nElements
+-            do i = 1,nElements
+-                A(i,j) = dStoichSpecies(iAssemblage(j),i)
+-            end do
+-            dMolesPhase(j) = dMolesElement(j)
+-        end do
++        ! if (.NOT. lPhaseField) then
++        !     do j = 1,nElements
++        !         do i = 1,nElements
++        !             A(i,j) = dStoichSpecies(iAssemblage(j),i)
++        !         end do
++        !         dMolesPhase(j) = dMolesElement(j)
++        !     end do
++        ! else
++        !     dMolesPhase = dPhaseFracs
++        ! end if
+ 
+         ! Compute the sum of coefficients along each row.  If the sum of coefficients on a row is
+         ! equal to zero, this will result in a NaN.  This will quickly reject this phase assemblage
+diff --git a/src/setup/LevelingSolver.f90 b/src/setup/LevelingSolver.f90
+index 9b3f0e3..6282fa6 100755
+--- a/src/setup/LevelingSolver.f90
++++ b/src/setup/LevelingSolver.f90
+@@ -215,7 +215,7 @@ subroutine LevelingSolver
+     ! If the GetFirstAssemblage subroutine determined the correct phase assemblage, then the
+     ! GetNewAssemblage subroutine was not called and the number of moles of each phase was not computed and
+     ! the number of moles of each constituent was not computed.
+-    if ((iter == 1).AND.(INFOThermo == 0)) then
++    if ((iter == 1).AND.(INFOThermo == 0) .AND. .NOT. lPhaseField) then
+ 
+         ! Since the phase assemblage is comprised of only pure species, the number of moles of each phase
+         ! can be easily computed (the stoichiometry matrix is a diagonal matrix) by the following:
+@@ -225,6 +225,9 @@ subroutine LevelingSolver
+ 
+     end if
+ 
++    ! if (lPhaseField) then
++    !     dMolesPhase = dPhaseFracs
++    ! end if
+     return
+ 
+ end subroutine LevelingSolver
+diff --git a/unstaged_changes.patch b/unstaged_changes.patch
+new file mode 100644
+index 0000000..2dba806
+--- /dev/null
++++ b/unstaged_changes.patch
+@@ -0,0 +1,792 @@
++diff --git a/inputs/trial-input-output.ti b/inputs/trial-input-output.ti
++index 2db637f..e0a8d0e 100644
++--- a/inputs/trial-input-output.ti
+++++ b/inputs/trial-input-output.ti
++@@ -1,11 +1,14 @@
++ ! Configuration variables:
++ temperature unit  = K
++ pressure unit     = atm
+++nphasesexcludedexcept = 2
++ mass unit         = moles
++ data file         = data/CO.dat
++ output            = ../outputs/newout.json
++ ! Specify output and debug modes:
++ print mode        = 2
+++phase constraint  = MSFL FCC
+++phase values      = 0.5 0.5
++ 
++ ! Set up calculation list
++ nEl         = 2
++diff --git a/src/Thermochimica-c.C b/src/Thermochimica-c.C
++index 75b32fa..61e084e 100644
++--- a/src/Thermochimica-c.C
+++++ b/src/Thermochimica-c.C
++@@ -36,6 +36,11 @@ void GetOutputChemPot(char *elementName, double *chemPot, int *info)
++   TCAPI_getOutputChemPot(elementName, strlen(elementName), chemPot, info);
++ }
++ 
+++void GetOutputChemPotDerivative(char *elementName1, char *elementName2, double *chemPotDerivative, int *info)
+++{
+++  TCAPI_getOutputChemPotDerivative(elementName1, strlen(elementName1), elementName2, strlen(elementName2), chemPotDerivative, info);
+++}
+++
++ void GetOutputSolnSpecies(const char *phaseName, const char *speciesName, double *moleFraction, double *chemPot, int *info)
++ {
++   TCAPI_getOutputSolnSpecies(phaseName, strlen(phaseName), speciesName, strlen(speciesName), moleFraction, chemPot, info);
++diff --git a/src/Thermochimica-c.h b/src/Thermochimica-c.h
++index f88e2f5..05eb8b1 100644
++--- a/src/Thermochimica-c.h
+++++ b/src/Thermochimica-c.h
++@@ -7,6 +7,7 @@ void SetUnitMass(const char *);
++ void SetUnits(const char *, const char *, const char *);
++ 
++ void GetOutputChemPot(char *, double *, int *);
+++void GetOutputChemPotDerivative(char *, char *, double *, int *);
++ void GetOutputSolnSpecies(const char *, char *, double *, double *, int *);
++ void GetOutputMolSpecies(const char *, double *, double *, int *);
++ void GetOutputMolSpeciesPhase(const char *, const char *, double *, int *);
++diff --git a/src/Thermochimica-cxx.C b/src/Thermochimica-cxx.C
++index 18c43c1..f894064 100644
++--- a/src/Thermochimica-cxx.C
+++++ b/src/Thermochimica-cxx.C
++@@ -326,6 +326,14 @@ namespace Thermochimica
++     return {chemPot, info};
++   }
++ 
+++  std::pair<double, int> getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2)
+++  {
+++    double chemPotDerivative;
+++    int info;
+++    TCAPI_getOutputChemPotDerivative(elementName1.c_str(), elementName1.length(), elementName2.c_str(), elementName2.length(), &chemPotDerivative, &info);
+++    return {chemPotDerivative, info};
+++  }
+++
++   std::tuple<double, double, int>
++   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName)
++   {
++diff --git a/src/Thermochimica-cxx.h b/src/Thermochimica-cxx.h
++index 80c2260..3a7b3af 100644
++--- a/src/Thermochimica-cxx.h
+++++ b/src/Thermochimica-cxx.h
++@@ -56,6 +56,8 @@ namespace Thermochimica
++ 
++   std::pair<double, int>
++   getOutputChemPot(const std::string &elementName);
+++  std::pair<double, int>
+++  getOutputChemPotDerivative(const std::string &elementName1, const std::string &elementName2);
++   std::tuple<double, double, int>
++   getOutputSolnSpecies(const std::string &phaseName, const std::string &speciesName);
++   std::tuple<double, double, int>
++diff --git a/src/Thermochimica.h b/src/Thermochimica.h
++index a7f7d33..ce88d54 100644
++--- a/src/Thermochimica.h
+++++ b/src/Thermochimica.h
++@@ -16,6 +16,7 @@ extern "C"
++   void TCAPI_getElementPotential(int *, double *, int *);
++ 
++   void TCAPI_getOutputChemPot(const char *, std::size_t, double *, int *);
+++  void TCAPI_getOutputChemPotDerivative(const char *, std::size_t, const char *, std::size_t, double *, int *);
++   void TCAPI_getOutputSolnSpecies(const char *, std::size_t, const char *, std::size_t, double *, double *, int *);
++   void TCAPI_getOutputMolSpecies(const char *, std::size_t, double *, double *, int *);
++   void TCAPI_getOutputMolSpeciesPhase(const char *, std::size_t, const char *, std::size_t, double *, int *);
++diff --git a/src/api/CouplingUtilitiesISO_C.f90 b/src/api/CouplingUtilitiesISO_C.f90
++index 89de2ae..ba51690 100644
++--- a/src/api/CouplingUtilitiesISO_C.f90
+++++ b/src/api/CouplingUtilitiesISO_C.f90
++@@ -853,6 +853,31 @@ subroutine GetOutputChemPotISO(cElementNameRequest, lcElementNameRequest, dEleme
++ 
++ end subroutine GetOutputChemPotISO
++ 
+++subroutine GetOutputChemPotDerivativeISO(cElementName1Request, lcElementName1Request, cElementName2Request, lcElementName2Request, dElementChemPotDerivative, INFO) &
+++    bind(C, name="TCAPI_getOutputChemPotDerivative")
+++
+++    USE,INTRINSIC :: ISO_C_BINDING
+++
+++    implicit none
+++
+++    integer(C_INT),      intent(out)                         :: INFO
+++    real(C_DOUBLE),      intent(out)                         :: dElementChemPotDerivative
+++    character(kind=c_char,len=1), target, intent(in)         :: cElementName1Request(*)
+++    integer(c_size_t), intent(in), value                     :: lcElementName1Request
+++    character(kind=c_char,len=1), target, intent(in)         :: cElementName2Request(*)
+++    integer(c_size_t), intent(in), value                     :: lcElementName2Request
+++    character(kind=c_char,len=lcElementName1Request), pointer :: fElementName1Request
+++    character(kind=c_char,len=lcElementName2Request), pointer :: fElementName2Request
+++
+++    call c_f_pointer(cptr=c_loc(cElementName1Request), fptr=fElementName1Request)
+++    call c_f_pointer(cptr=c_loc(cElementName2Request), fptr=fElementName2Request)
+++
+++    call GetOutputChemPotDerivative(fElementName1Request, fElementName2Request, dElementChemPotDerivative, INFO)
+++
+++    return
+++
+++end subroutine GetOutputChemPotDerivativeISO
+++
++ subroutine GetOutputMolSpeciesISO(cSpeciesOut, lcSpeciesOut, dMolFractionOut, dMolesOut, INFO) &
++     bind(C, name="TCAPI_getOutputMolSpecies")
++ 
++diff --git a/src/exec/RunCalculationList.F90 b/src/exec/RunCalculationList.F90
++index a3249d0..d02195d 100644
++--- a/src/exec/RunCalculationList.F90
+++++ b/src/exec/RunCalculationList.F90
++@@ -14,7 +14,7 @@ program RunCalculationList
++     integer :: iDelimiterPosition, iOpenPosition, iClosePosition, iElementNumber, iEqualPosition
++     character(1024) :: cLineInit, cThermoFileNameTemp, cOutputFilePathTemp
++     logical :: lEnd, lPressureUnit, lTemperatureUnit, lMassUnit, lData, lEl, lNel
++-    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass
+++    character(15) :: cRunUnitTemperature, cRunUnitPressure, cRunUnitMass, cFileOut
++ 
++     character(16) :: intStr
++ 
++@@ -185,6 +185,23 @@ program RunCalculationList
++             return
++           endif
++           cOutputFilePath = cOutputFilePathTemp
+++        case('element moles','moles element','moles','moles of elements','elementmoles','moleselements')
+++          read(cValue,'(A)',IOSTAT = INFO) dMolesElement(1:nElIn)
+++          if(INFO /= 0) then
+++            INFOThermo = 54
+++            write(cErrMsg,'(A35,I10)') 'Cannot read output file on line', iCounter
+++            return
+++          endif
+++          cFileOut = cOutputFilePathTemp
+++        case ('phase fractions', 'Phase fractions', 'phaseFractions', 'Phase Fractions', 'phase_fractions', 'phase values',&
+++          'Phase values', 'Phase Values', 'phase_values', 'phaseValues')
+++          read(cValue,*,IOSTAT = INFO) dPhaseFracs(1:nPhasesExcludedExcept)
+++          if (INFO /= 0) then
+++            INFOThermo = 54
+++            write (cErrMsg, '(A78,I10)') 'Cannot read phase fractions on line: ', iCounter
+++            print *,  trim(cErrMsg)
+++            return
+++          end if
++         case ('data','Data','data_file','Data_file','data file','Data file','Data File',&
++           'dat','Dat','dat_file','Dat_file','dat file','Dat file','Dat File')
++           read(cValue,'(A)',IOSTAT = INFO) cThermoFileNameTemp
++@@ -271,14 +288,15 @@ program RunCalculationList
++             print *,  trim(cErrMsg)
++             return
++           end if
++-        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except')
+++        case ('phasesExcludedExcept','phasesexcludedexcept','phases excluded except','phase constraints', 'phase names', 'phaseConstraints', 'phaseNames', 'phase_constraints', 'phase_names',&
+++          'Phase names', 'Phase Names', 'Phase Constraints', 'Phase constraints','phase constraint')
++           if (nPhasesExcludedExcept == 0) then
++             INFOThermo = 54
++             write (cErrMsg, '(A75,I10)') 'Need (nonzero) number of phases exclusion exceptions before phase list at ', iCounter
++             print *,  trim(cErrMsg)
++             return
++           end if
++-          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept)
+++          read(cValue,*,IOSTAT = INFO) cPhasesExcludedExcept(1:nPhasesExcludedExcept) ! also created here
++           if (INFO /= 0) then
++             INFOThermo = 54
++             write (cErrMsg, '(A50,I10)') 'Cannot parse phase exclusion exceptions on line: ', iCounter
++@@ -374,6 +392,7 @@ program RunCalculationList
++       do j = 1, nElIn
++         dElementMass(iEls(j)) = dEls(j)
++       end do
+++      lPhaseField = allocated(dPhaseFracs) .AND. SIZE(dPhaseFracs) > 0
++       call Thermochimica
++       call PrintResults
++       if (iPrintResultsMode > 0) call ThermoDebug
++diff --git a/src/gem/CheckConvergence.f90 b/src/gem/CheckConvergence.f90
++index c18b867..5238ce7 100755
++--- a/src/gem/CheckConvergence.f90
+++++ b/src/gem/CheckConvergence.f90
++@@ -61,6 +61,10 @@
++     !! <li> The number of moles of all species and phases are positive and non-zero. </li>
++     !! <li> Gibbs' Phase Rule has been satisfied. </li>
++     !! <li> The standard Gibbs energy of a pure condensed phase is not below the Gibbs Plane.
+++    !!
+++    !! (gibbs plane is the point of eq'm so the tangent where derivative is 0 - but that dosnt mean stble bc
+++    !! think of it like a balance like sure its balanced but temporarily - it'll tip over soon so ideally below gibbs plane is stable and eq'm)
+++    !!
++     !!      If so, this phase should be added to the assemblage. </li>
++     !! <li> The residuals of the chemical potential terms are below a specified tolerance. </li>
++     !! <li> The sum of site fractions on each sublattice must equal unity within tolerance. </li>
++@@ -94,9 +98,14 @@
++     ! dChemicalPotential        A double real vector representing the difference between the chemical potential
++     !                           (defined by the element potentials) and the standard molar Gibbs energy of the
++     !                           pure species divided by the total number of atoms per formula mass.
+++    !                               ofc bc rememebr G = mu * n so G / n = mu duh
++     ! dMolesPhase               The number of moles of a phase.
++     ! dMolesElement             Total number of moles of an element.
++     ! dEffStoichSolnPhase       The "effective" stoichiometry of a solution phase.
+++    ! the regular stoichiometry of a solution phase refers to the stoichiometric coefficients of the individual components 
+++    ! in the solution phase, while the effective stoichiometry of a solution phase refers to the actual number of moles of 
+++    ! each component that are present in the solution phase, taking into account the interactions between the components and the solution phase as a whole.
+++    !
++     ! dSumMolFractionSoln       Sum of mole fractions in a solution phase.
++     ! dTolerance                Acceptable numerical tolerance (defined in Init subroutine).
++     !
++@@ -112,9 +121,9 @@ subroutine CheckConvergence
++     implicit none
++ 
++     integer :: i, j, k, l, c, iMaxDrivingForce
++-    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent
+++    real(8) :: dResidual, dMaxDrivingForce, dTempGibbs, dMassNorm, dNormComponent, dSumMoles
++     logical :: lCompEverything, lPhaseChange
++-
+++    real(8), dimension(nSolnPhases+nConPhases) :: dMolPhaseFrac
++ 
++     ! Initialize variables:
++     dResidual       = 0D0
++@@ -130,8 +139,9 @@ subroutine CheckConvergence
++ 
++     ! Test if the largest relative change in species mole fraction is large
++     ! This is a self-consistency check
+++    ! So, in summary, this code is checking if the largest relative change in species mole fraction is large enough to indicate a problem with the solution, and if so, it returns from the subroutine.
++     if (lDebugMode) print *, "Test self-consistency ", dMaxSpeciesChange
++-    if (dMaxSpeciesChange > LOG(2D0)) then
+++    if (dMaxSpeciesChange > LOG(2D0)) then ! just chekc if the convergence is large enough basically. if your value is greater than this then you havent converged enough adn return from the subrtoutine
++         return
++     end if
++ 
++@@ -276,7 +286,13 @@ subroutine CheckConvergence
++         end do LOOP_GRESIDUAL
++ 
++     end do LOOP_TEST5
++-
+++    dSumMoles = sum(dMolesPhase)
+++    LOOP_TESTNEW: do j = 1, nSolnPhases + nConPhases
+++        dMolPhaseFrac(j) = dMolesPhase(j)/dSumMoles
+++        print *, dSumMoles
+++        print *, dMolPhaseFrac(j)
+++        print *, dPhaseFracs(j)
+++    end do LOOP_TESTNEW
++     ! TEST #6: Check the residuals of site fractions on each sublattice of a CEF phase:
++     ! ---------------------------------------------------------------------------------
++     if (lDebugMode) print *, "Test 6 "
++diff --git a/src/gem/CheckPhaseAssemblage.f90 b/src/gem/CheckPhaseAssemblage.f90
++index dfdc5db..1589969 100755
++--- a/src/gem/CheckPhaseAssemblage.f90
+++++ b/src/gem/CheckPhaseAssemblage.f90
++@@ -84,9 +84,14 @@
++     !! <li> Remove a solution phase when the number of moles of that phase is less than a specified tolernace,
++     !!       </li>
++     !! <li> Add a pure condensed phase when the driving force is negative, </li>
++-    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity.
+++    !! <li> Add a solution phase when the sum of all mole fractions within the phase is greater than unity. (aka greater than 100%)
++     !!       An equivalent statement is that the driving force of this phase is negative. </li>
++     !! </ol>
+++    ! Driving Force = Chemical Potential of Phase - Chemical Potential of Constituents
+++    ! So 
+++    ! Negative driving force: Phase is stable and wants to form, bc the chemical potential of phase is higher than its constituents so its a good phase that lowers the gibbs energy so keep it
+++    ! Positive driving force: Phase is unstable and wants to break down into its constituent parts, so its not a good phase prediction and get rid of it
+++    ! Driving force is where system is tending towards
++     !!
++     !! To prevent contradicting the Gibbs Phase Rule (i.e., the maximum number of phases is equal to the number of
++     !! elements when temperature and pressure are constant), a phase replaces another phase when the number of
++@@ -177,7 +182,7 @@ subroutine CheckPhaseAssemblage
++     if ((iterGlobal >= 30).AND.(iterGlobal - iterLast < 5)) return
++ 
++     ! Store the indices of phases in the current estimated phase assemblage in a iteration history matrix:
++-    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements)
+++    iterHistory(1:nElements,iterGlobal) = iAssemblage(1:nElements) ! store this array of only 1 column at column iterGlobal in array iterHistory (2D array)
++ 
++     ! If the system has become stagnant and is very far from convergence, revert the system:
++     if ((iterGlobal - iterLast > 50).AND.(dGEMFunctionNorm > 1D3)) then
++@@ -252,6 +257,7 @@ subroutine CheckPhaseAssemblage
++                     ! The determination of the driving force in the CheckConvergence subroutine is more rigorous
++                     ! than in CompMolFraction.  If the current driving force is negative and the functional norm
++                     ! is very small, then cycle to the next solution phase and use the current driving force.
+++                    ! "...then continue with the current solution phase and use the current driving force"
++                     if ((iterLastMiscGapCheck == iterGlobal - 1).AND.(dDrivingForceSoln(j) < 0D0)) cycle
++ 
++                     ! Only compute the mole fractions of constituents belonging to unstable phases:
++@@ -283,6 +289,11 @@ subroutine CheckPhaseAssemblage
++                 ! Determine whether a pure condensed phase should be considered first or a solution phase.
++                 ! This decision is based on whether the lowest driving force of a pure condensed phase is less
++                 ! than that of all solution phases:
+++                !
+++                ! Consider pure condensed phases first bc they’re typically more stable than solution phases which have
+++                ! thermodynamic fluctuations. Pure condensed phases have a fixed composition so much less fluctuating.
+++                ! So trying to find a stable solution closest to eq’m fastest and avoid complexities of solution phases. 
+++                ! Faster convergence to final soln basically
++                 IF_AddOrder: if (dMaxDrivingForce < MINVAL(dDrivingForceSoln)) then
++ 
++                     ! 4A) Check if a pure condensed phase should be added/swapped:
++diff --git a/src/gem/CompChemicalPotential.f90 b/src/gem/CompChemicalPotential.f90
++index 3d8d71f..b92fe14 100755
++--- a/src/gem/CompChemicalPotential.f90
+++++ b/src/gem/CompChemicalPotential.f90
++@@ -69,10 +69,11 @@ subroutine CompChemicalPotential(lCompEverything)
++         do i = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
++             dMolFraction(i) = dMolesSpecies(i) / dMolesPhase(k)
++         end do
++-        ! Compute excess terms:
+++        ! Compute excess terms: and chemical potentials here too
++         call CompExcessGibbsEnergy(l)
++     end do
++ 
+++    ! correction: Compute the mole fractions of all solution phase constituents"
++     ! Check if the chemical potentials for everything should be computed:
++     if (lCompEverything) then
++         ! Compute the chemical potentials for every solution phase in the system:
++diff --git a/src/gem/CompFunctionNorm.f90 b/src/gem/CompFunctionNorm.f90
++index 19700c9..d65e0ff 100755
++--- a/src/gem/CompFunctionNorm.f90
+++++ b/src/gem/CompFunctionNorm.f90
++@@ -20,11 +20,16 @@
++     ! Purpose:
++     ! ========
++     !
+++    ! So the eucledian norm basically
++     !> \details The purpose of this subroutine is to compute the functional norm for the line search algorithm to
++     !! determine whether the system is converging sufficinetly or diverging. The functional vector is not directly
++     !! computed because it is not needed. Thus, the functional norm is computed directly.  This term incorporates
++     !! the residuals of the mass balance equations, the average residual between the chemical potential of each
++     !! species and the corresponding value computed from the element potentials.
+++    ! The functional norm is a measure of the residuals of the system, and it's a way to quantify how far the system is from being in equilibrium.
+++    ! In other words, the functional norm is a measure of the "distance" between the current state of the system and the desired state of equilibrium. The higher the functional norm, the further away the system is from equilibrium.
+++    ! So, in the context of the GEM solver, the functional norm is a key quantity that's used to determine whether the system is converging or diverging. If the functional norm is decreasing, it means that the system is converging towards equilibrium. If the functional norm is increasing, it means that the system is diverging away from equilibrium.
+++    ! By monitoring the functional norm, the GEM solver can determine whether it needs to continue iterating or whether it's reached a stable solution. This is a key aspect of the GEM solver's convergence criteria, and it's what allows the solver to efficiently find a stable solution to the system.
++     !
++     !
++     ! Pertinent variables:
++diff --git a/src/gem/GEMLineSearch.f90 b/src/gem/GEMLineSearch.f90
++index 7bf59cc..58b04c1 100755
++--- a/src/gem/GEMLineSearch.f90
+++++ b/src/gem/GEMLineSearch.f90
++@@ -474,6 +474,7 @@ subroutine InitGEMLineSearch(dStepLength,dMolesSpeciesLast,dElementPotentialLast
++     end if
++ 
++     ! Further dampen the system if a miscible phase was recently added to the system:
+++    ! dampen: stabilize solution and reduce spurious oscillations
++     if ((iterGlobal - iterLast < 10).AND.(nMisciblePhases > 0)) dStepLength = dStepLength * 0.5D0
++ 
++     ! If the number of moles of a solution phase is changing by too large of an amount, then recompute
++@@ -499,7 +500,7 @@ end subroutine InitGEMLineSearch
++     ! ========
++     !
++     ! The purpose of this subroutine is to update the system variables using
++-    ! a specified steplength.
+++    ! a specified steplength. See if some are small enough that you'll need to use their tolerance instead of actual value
++     !
++     !---------------------------------------------------------------------------
++ 
++diff --git a/src/gem/GEMNewton.f90 b/src/gem/GEMNewton.f90
++index 41667af..1216d0b 100755
++--- a/src/gem/GEMNewton.f90
+++++ b/src/gem/GEMNewton.f90
++@@ -47,6 +47,8 @@
++     !! will also be zero.  This procedure effectively ignores the jth row while preventing a numerical
++     !! singularity.
++     !
+++    ! 
+++    ! Basically do this method to fill up the hessian in phd paper
++     !
++     ! References:
++     ! ===========
++@@ -67,6 +69,7 @@
++     ! Pertinent variables:
++     ! ====================
++     !
+++    ! This just means its a global variable so can be accessed from any subroutine obvs after having been set a value
++     !> \param[out]  INFO        An integer scalar used by LAPACK indicating a successful exit or an error.
++     !
++     ! nVar                      An integer scalar representing the total number of unknowns/linear equations.
++@@ -82,7 +85,7 @@
++     ! JacobianShort             A double real vector that incorporates the JacobianLong matrix along with the
++     !                            updated number of moles of each solution species.
++     ! A                         Hessian matrix
++-    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK)
+++    ! B                         Constraint vector (before call to LAPACK); unknown vector (after call to LAPACK) aka unknown = direction vector
++     ! dEffStoichSolnPhase       A double real matrix representing the effective stoichiometry of a solution phase.
++     ! dUpdateVar                A double real vector represending the updated system variables.
++     !
++@@ -105,6 +108,7 @@ subroutine GEMNewton(INFO)
++     real(8), dimension(:,:), allocatable :: A
++ 
++     ! Count phases:
+++    ! Count number of *active* condensed phases
++     j = nConPhases
++     nConPhases  = 0
++     CountCon: do i = 1, j
++@@ -115,6 +119,7 @@ subroutine GEMNewton(INFO)
++         end if
++     end do CountCon
++ 
+++    ! Count number of *active* solution phases
++     j = nSolnPhases
++     nSolnPhases = 0
++     CountSoln: do i = nElements, nElements + 1 - j, -1
++@@ -125,9 +130,10 @@ subroutine GEMNewton(INFO)
++         end if
++     end do CountSoln
++ 
+++    ! Only proceed if there's at least one phase to work with
++     if ((nConPhases + nSolnPhases) <= 0) return
++ 
++-    ! Determine the number of unknowns/linear equations:
+++    ! Determine the number of unknowns/linear equations in the linear system. One per: element potential (lagrange multiplier), moles condensed phase, moles solution phase:
++     nVar = nElements + nConPhases + nSolnPhases
++ 
++     iErrCol = 0
++@@ -144,8 +150,8 @@ subroutine GEMNewton(INFO)
++         ! Initialize variables:
++         IPIV                = 0
++         INFO                = 0
++-        A                   = 0D0
++-        B                   = 0D0
+++        A                   = 0D0 ! Hessian
+++        B                   = 0D0 ! constraint vector k in Hu = k
++         dUpdateVar          = 0D0
++         dEffStoichSolnPhase = 0D0
++ 
++@@ -154,21 +160,22 @@ subroutine GEMNewton(INFO)
++             m = -iAssemblage(nElements - k + 1)
++             ! Loop through species in phase:
++             do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
++-                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l)
+++                dMolesSpecies(l) = dMolesPhase(nElements - k + 1) * dMolFraction(l) ! n_i(lambda) = n_lambda * x_i(lambda). Def'n of species amounts
++                 dMolesSpecies(l) = DMAX1(dMolesSpecies(l), dTolerance(8))
++             end do
++         end do
++ 
++-        ! Construct the Hessian matrix (elements):
++-        do j = 1, nElements
++-            do i = j, nElements
++-                do k = 1, nSolnPhases
+++        ! Construct the Hessian matrix (elements): so just the r matrix, the top left block of the hessian in parikshit's thesis
+++        do j = 1, nElements ! column index of hessian
+++            do i = j, nElements ! row index of hessian
+++                do k = 1, nSolnPhases ! loop through each soln phase lambda
++                     ! Absolute solution phase index:
++-                    m = -iAssemblage(nElements - k + 1)
+++                    m = -iAssemblage(nElements - k + 1) ! just indexing stuff
++                     ! Loop through species in phase:
++                     do l = nSpeciesPhase(m-1) + 1, nSpeciesPhase(m)
+++                        !r_jk in eq. 5.31 phd paper
++                         dTemp  = dStoichSpecies(l,i) * dStoichSpecies(l,j) * dMolesSpecies(l)
++-                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2)
+++                        A(i,j) = A(i,j) + dTemp / (DFLOAT(iParticlesPerMole(l))**2) ! just normalizing numerically, not important
++                     end do
++                 end do
++                 ! Apply symmetry:
++@@ -176,38 +183,39 @@ subroutine GEMNewton(INFO)
++             end do
++         end do
++ 
++-        ! Compute the constraint vector (elements):
+++        ! Compute the constraint vector (elements): (eq. 5.35 in parikshit's phd paper. This is k) do j = 1, nElements -->for all elements
++         do j = 1, nElements
++             B(j) = dMolesElement(j)
++-            do l = 1, nSolnPhases
++-                k = -iAssemblage(nElements - l + 1)
++-                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k)
++-                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0)
++-                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i))
+++            do l = 1, nSolnPhases ! for all phases in our element
+++                k = -iAssemblage(nElements - l + 1) ! just indexing stuff
+++                do i = nSpeciesPhase(k-1) + 1, nSpeciesPhase(k) ! for all species in our phase
+++                    dTemp = dStoichSpecies(i,j) * dMolesSpecies(i) * (dChemicalPotential(i) - 1D0) ! eq. 5.35 in parikshit's phd
+++                    B(j)  = B(j) + dTemp / DFLOAT(iParticlesPerMole(i)) ! just numerical normallizing but also storing the constraint vector in B
++                 end do
++             end do
++         end do
++ 
++-        ! Construct the Hessian matrix and constraint vector (contribution from solution phases):
+++        ! Construct the Hessian matrix and constraint vector (contribution from solution phases): (eq. 5.31 in phd thesis)
++         do j = nElements + 1, nElements + nSolnPhases
++             l = 2 * nElements - j + 1       ! Relative solution phase index (in iAssemblage vector).
++             k = -iAssemblage(l)             ! Absolute solution phase index.
++ 
++-            ! Compute the stoichiometry of this phase:
++-            call CompStoichSolnPhase(k)
+++            ! Compute the stoichiometry of this phase: and store that in dEffStoichSolnPhase
+++            call CompStoichSolnPhase(k) ! doesnt just comp stoich soln phase. also calls CompExcessGibbsEnergy which calcs dGibbsSolnPhase
++ 
++             do i = 1,nElements
++-                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l)
+++                ! phi_jk ^m part
+++                A(i,j) = dEffStoichSolnPhase(k,i) * dMolesPhase(l) ! find all places where this is calc so its not calc bc get this from phase field jk maybe not
++                 A(j,i) = A(i,j)
++             end do
++-            B(j) = dGibbsSolnPhase(k)
+++            B(j) = dGibbsSolnPhase(k) ! storing constraint vector (Gibbs energy of soln phase) in B
++         end do
++ 
++         ! Construct the Hessian matrix and constraint vector (contribution from pure condensed phases):
++         do j = nElements + nSolnPhases + 1, nElements + nConPhases + nSolnPhases
++             k = j - nElements - nSolnPhases
++             do i = 1, nElements
++-                A(i,j) = dStoichSpecies(iAssemblage(k),i)
+++                A(i,j) = dStoichSpecies(iAssemblage(k),i) ! just nu bc nothing else depends on dMolesPhase
++                 A(j,i) = A(i,j)
++             end do
++             B(j) = dStdGibbsEnergy(iAssemblage(k))
++@@ -236,16 +244,18 @@ subroutine GEMNewton(INFO)
++             end do LOOP_SUB
++         end if
++ 
++-        ! Call the linear equation solver:
+++        ! Call the linear equation solver (LAPACK):
++         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
++             call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
++         else
++             do i = 1, nElements
++-                B(i) = dElementPotential(i)
+++                B(i) = dElementPotential(i) ! pi j's wrt r submatrix and also pi lambda's? bc at eqm pi's = element potentials ! MAKES NO SENSE !!!!
++             end do
++             B(nElements + 1) = dMolesPhase(1)
++         end if
++ 
+++        ! now that lapack was called, B contains unknown / direction vector u instead of k
+++        
++         do k = 1, iTry
++             j = nElements + nSolnPhases + nConPhases + k
++             B(j) = 0D0
++diff --git a/src/gem/GEMSolver.f90 b/src/gem/GEMSolver.f90
++index 09c6cba..1816155 100755
++--- a/src/gem/GEMSolver.f90
+++++ b/src/gem/GEMSolver.f90
++@@ -91,7 +91,7 @@ subroutine GEMSolver
++     implicit none
++ 
++     integer::   INFO
++-
+++    
++ 
++     ! Initialize the GEM solver:
++     call InitGEMSolver
++@@ -126,7 +126,9 @@ subroutine GEMSolver
++         call GEMLineSearch
++ 
++         ! Check if the estimated phase assemblage needs to be adjusted:
++-        call CheckPhaseAssemblage
+++        if(.NOT. lPhaseField) then
+++            call CheckPhaseAssemblage
+++        end if
++ 
++         ! Check convergence:
++         ! if (iterGlobal /= iterLast) call CheckConvergence
++diff --git a/src/gem/InitGEMSolver.f90 b/src/gem/InitGEMSolver.f90
++index d3259aa..4ea7e67 100755
++--- a/src/gem/InitGEMSolver.f90
+++++ b/src/gem/InitGEMSolver.f90
++@@ -57,7 +57,7 @@
++ subroutine InitGEMSolver
++ 
++     USE ModuleThermo
++-    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded
+++    USE ModuleThermoIO, ONLY: INFOThermo, lReinitLoaded, lPhaseField,dPhaseFracs ,cPhasesExcludedExcept
++     USE ModuleGEMSolver
++     USE ModuleReinit
++ 
++@@ -184,8 +184,11 @@ subroutine InitGEMSolver
++     lCompEverything         = .FALSE.
++     lConverged              = .FALSE.
++     lRevertSystem           = .FALSE.
++-
+++    ! if(lPhaseField) then
+++    !     dMolesPhaseLast = dPhaseFracs
+++    ! endif
++     ! Regrettably, branching here depending on whether reinit data has been loaded
+++    ! We are NEVER EVER EVER getting lReinitLoaded
++     IF_ReinitLoaded: if (lReinitLoaded) then
++       iAssemblage = iAssemblageLast
++       dMolFraction = dMolFraction_Old
++@@ -202,6 +205,7 @@ subroutine InitGEMSolver
++     else
++         ! Calculate the total number of moles for each solution phase:
++         do i = 1, nElements
+++            print *, iAssemblageLast
++             j           = iPhase(iAssemblageLast(i))
++             dTempVec(j) = dTempVec(j) + dMolesPhaseLast(i)
++         end do
++@@ -226,7 +230,7 @@ subroutine InitGEMSolver
++                 k = iPhase(iAssemblageLast(i))
++ 
++                 iAssemblage(j) = -k
++-                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9))
+++                dMolesPhase(j) = DMAX1(dTempVec(k),dTolerance(9)) ! This SHOULD NOT HAPPEN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++                 lSolnPhases(k) = .TRUE.
++             end if
++         end do LOOP_AddPhase
++@@ -243,7 +247,7 @@ subroutine InitGEMSolver
++                     dTemp = dTemp + dElementPotential(j) * dStoichSpecies(i,j)
++                 end do
++                 dTemp           = dTemp / DFLOAT(iParticlesPerMole(i))
++-                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i))
+++                dMolFraction(i) = DEXP(dTemp - dStdGibbsEnergy(i) - dMagGibbsEnergy(i)) ! eq. 5.38 
++                 dMolFraction(i) = DMIN1(dMolFraction(i),1D0)
++                 dSum            = dSum + dMolFraction(i)
++             end do
++@@ -260,15 +264,26 @@ subroutine InitGEMSolver
++                 end do
++             end if
++         end do LOOP_CompX
+++
+++        ! if(lPhaseField) then
+++        !     print '(A30,I30)', 'print iAssemblage'
+++        !     do i = 1, SIZE(iAssemblage)
+++        !         print *, iAssemblage(i)
+++        !     end do
+++        !     ! iAssemblage = cPhasesExcludedExcept
+++        !     dMolesPhase = dPhaseFracs
+++        ! end if
++     end if IF_ReinitLoaded
++ 
++     ! If there aren't any solution phases currently predicted to be stable, check if any should be added:
++-    if (nSolnPhases == 0) call InitGemCheckSolnPhase
+++    if (nSolnPhases == 0 .AND. .NOT. lPhaseField) then 
+++        call InitGemCheckSolnPhase
+++    end if
++ 
++     ! It may be possible that a single solution phase may be expected to form (as predicted by Leveling)
++     ! but that there are zero moles of this particular phase.  This can cause problems establishing the
++     ! Jacobian.
++-    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then
+++    if ((nSolnPhases == 1).AND.(dMolesPhase(nElements) == 0D0)) then !Possibly am ossie later question mark
++ 
++         ! Adjust the number of moles of pure condensed phases:
++         dMolesPhase = dMolesPhase * 0.95D0
++@@ -285,7 +300,7 @@ subroutine InitGEMSolver
++         l = -iAssemblage(k)    ! Absolute solution phase index
++ 
++         do j = nSpeciesPhase(l-1) + 1, nSpeciesPhase(l)
++-            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j)
+++            dMolesSpecies(j) = dMolesPhase(k) * dMolFraction(j) !Is Dmolfraction the phase frafctions or is it dmolesphase I think it's neither
++             dMolesSpecies(j) = DMAX1(dMolesSpecies(j), 1D-300)
++         end do
++ 
++@@ -299,35 +314,37 @@ subroutine InitGEMSolver
++ 
++     ! Check the phase assemblage to make sure that the Jacobian matrix is appropriate.  Only do this if there is
++     ! at least one solution phase:
++-    if (nSolnPhases > 0) then
++-
++-        i = MAX(1,nConPhases)
++-
++-        LOOP_CheckPhaseAssemblage: do j = 1, i
++-
++-                ! Check to make sure that the phase can be added:
++-                call CheckPhaseChange(lPhasePass,k)
++-
++-                if (k == 0) then
++-                    exit LOOP_CheckPhaseAssemblage
++-                elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
++-                    ! A pure condensed phase should be removed.
++-                    k = k - nElements - nSolnPhases
++-                    iAssemblage(k)          = iAssemblage(nConPhases)
++-                    dMolesPhase(k)          = dMolesPhase(nConPhases)
++-                    iAssemblage(nConPhases) = 0
++-                    dMolesPhase(nConPhases) = 0D0
++-                    nConPhases = nConPhases - 1
++-                else
++-                    ! Placeholder...the phase assemblage has failed...
++-                    exit LOOP_CheckPhaseAssemblage
++-                end if
++-        end do LOOP_CheckPhaseAssemblage
++-    end if
+++    if(.NOT. lPhaseField) then 
+++
+++        if (nSolnPhases > 0) then
+++
+++            i = MAX(1,nConPhases)
++ 
++-    dGEMFunctionNorm = 1D3
+++            LOOP_CheckPhaseAssemblage: do j = 1, i
+++
+++                    ! Check to make sure that the phase can be added:
+++                    call CheckPhaseChange(lPhasePass,k)
+++
+++                    if (k == 0) then
+++                        exit LOOP_CheckPhaseAssemblage
+++                    elseif ((k > nElements + nSolnPhases) .AND. (nConPhases > 0)) then
+++                        ! A pure condensed phase should be removed.
+++                        k = k - nElements - nSolnPhases
+++                        iAssemblage(k)          = iAssemblage(nConPhases)
+++                        dMolesPhase(k)          = dMolesPhase(nConPhases)
+++                        iAssemblage(nConPhases) = 0
+++                        dMolesPhase(nConPhases) = 0D0 ! Should not happem
+++                        nConPhases = nConPhases - 1
+++                    else
+++                        ! Placeholder...the phase assemblage has failed...
+++                        exit LOOP_CheckPhaseAssemblage
+++                    end if
+++            end do LOOP_CheckPhaseAssemblage
+++        end if
+++    end if
+++        dGEMFunctionNorm = 1D3
++ 
++-    return
+++        return
++ 
++ end subroutine InitGEMSolver
++ 
++diff --git a/src/module/ModuleThermo.f90 b/src/module/ModuleThermo.f90
++index aed8cb1..01bff86 100755
++--- a/src/module/ModuleThermo.f90
+++++ b/src/module/ModuleThermo.f90
++@@ -116,6 +116,8 @@ module ModuleThermo
++     real(8),      dimension(:,:,:),allocatable::  dConstituentCoefficients
++ 
++     character(12), dimension(:),   allocatable::            cElementName
+++    character(12), dimension(:),   allocatable::            cElementName1
+++    character(12), dimension(:),   allocatable::            cElementName2
++     character(30), dimension(:),   allocatable, target::    cSpeciesName
++     character(8),  dimension(:),   allocatable::            cSolnPhaseType
++     character(25), dimension(:),   allocatable, target::    cSolnPhaseName
++diff --git a/src/module/ModuleThermoIO.f90 b/src/module/ModuleThermoIO.f90
++index 940ace8..7222369 100644
++--- a/src/module/ModuleThermoIO.f90
+++++ b/src/module/ModuleThermoIO.f90
++@@ -79,5 +79,6 @@ module ModuleThermoIO
++     character(25), dimension(:), allocatable :: cSolnPhaseNameOut, cPureConPhaseNameOut, cSpeciesNameOut, cSpeciesPhaseOut
++     logical, dimension(:), allocatable       :: lSpeciesStable
++     real(8)                                  :: dHeatCapacity = 0D0, dEntropy = 0D0, dEnthalpy = 0D0
++-
+++    logical                                  :: lPhaseField = .FALSE.
+++    real(8), dimension(:), allocatable       :: dPhaseFracs
++ end module ModuleThermoIO
++diff --git a/src/setup/GetNewAssemblage.f90 b/src/setup/GetNewAssemblage.f90
++index 85a57b5..6d0d075 100755
++--- a/src/setup/GetNewAssemblage.f90
+++++ b/src/setup/GetNewAssemblage.f90
++@@ -131,12 +131,16 @@ subroutine GetNewAssemblage(iter)
++         iAssemblage(k) = iNewPhase
++ 
++         ! 1) FIRST CHECK: The number of moles of each "phase" are non-negative and real:
++-        do j = 1,nElements
++-            do i = 1,nElements
++-                A(i,j) = dStoichSpecies(iAssemblage(j),i)
++-            end do
++-            dMolesPhase(j) = dMolesElement(j)
++-        end do
+++        ! if (.NOT. lPhaseField) then
+++        !     do j = 1,nElements
+++        !         do i = 1,nElements
+++        !             A(i,j) = dStoichSpecies(iAssemblage(j),i)
+++        !         end do
+++        !         dMolesPhase(j) = dMolesElement(j)
+++        !     end do
+++        ! else
+++        !     dMolesPhase = dPhaseFracs
+++        ! end if
++ 
++         ! Compute the sum of coefficients along each row.  If the sum of coefficients on a row is
++         ! equal to zero, this will result in a NaN.  This will quickly reject this phase assemblage
++diff --git a/src/setup/LevelingSolver.f90 b/src/setup/LevelingSolver.f90
++index 9b3f0e3..6282fa6 100755
++--- a/src/setup/LevelingSolver.f90
+++++ b/src/setup/LevelingSolver.f90
++@@ -215,7 +215,7 @@ subroutine LevelingSolver
++     ! If the GetFirstAssemblage subroutine determined the correct phase assemblage, then the
++     ! GetNewAssemblage subroutine was not called and the number of moles of each phase was not computed and
++     ! the number of moles of each constituent was not computed.
++-    if ((iter == 1).AND.(INFOThermo == 0)) then
+++    if ((iter == 1).AND.(INFOThermo == 0) .AND. .NOT. lPhaseField) then
++ 
++         ! Since the phase assemblage is comprised of only pure species, the number of moles of each phase
++         ! can be easily computed (the stoichiometry matrix is a diagonal matrix) by the following:
++@@ -225,6 +225,9 @@ subroutine LevelingSolver
++ 
++     end if
++ 
+++    ! if (lPhaseField) then
+++    !     dMolesPhase = dPhaseFracs
+++    ! end if
++     return
++ 
++ end subroutine LevelingSolver

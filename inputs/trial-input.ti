@@ -1,13 +1,17 @@
 ! Initialize variables:
-pressure          = 2
+pressure          = 1
 temperature       = 900
-mass(6)           = 1
-mass(8)           = 1
+mass(6)           = 0.60191
+mass(8)           = 0.39809
 temperature unit  = K
 pressure unit     = atm
 mass unit         = moles
-data file         = data/C-O.dat
+data file         = data/CO.dat
 
 ! Specify output and debug modes:
 print mode        = 2
 debug mode        = .FALSE.
+
+! Exclude some phases
+number excluded = 1
+phases excluded = CO2
