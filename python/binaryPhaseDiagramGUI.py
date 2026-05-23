@@ -1,5 +1,5 @@
 import binaryPhaseDiagramFunctions
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 import os
 import sys
 import pickle
@@ -101,19 +101,20 @@ class CalculationWindow:
                 errorWindow.close()
                 return
             if not cancelRun:
-                self.calculation.run(grid_density,grid_density,pressure,tunit,punit,0,1,tlo,thi,el1,el2,'moles',fuzzy=values["-fuzzy-"])
-                self.calculation.makePlot()
-                self.sgw.Element('Refine').Update(disabled = False)
-                self.sgw.Element('Auto Refine').Update(disabled = False)
-                self.sgw.Element('Auto Smoothen').Update(disabled = False)
-                self.sgw.Element('Add Label').Update(disabled = False)
-                self.sgw.Element('Auto Label').Update(disabled = False)
-                self.sgw.Element('Plot').Update(disabled = False)
-                self.sgw.Element('Undo').Update(disabled = False)
-                self.sgw.Element('Inspect').Update(disabled = False)
-                self.sgw.Element('Export Diagram Data').Update(disabled = False)
-                self.sgw.Element('Export Plot').Update(disabled = False)
-                self.macro.append(f'macroPD.run({grid_density},{grid_density},{pressure},"{tunit}","{punit}",{0},{1},{tlo},{thi},"{el1}","{el2}","moles",fuzzy={values["-fuzzy-"]})')
+                runSuccess = self.calculation.run(grid_density,grid_density,pressure,tunit,punit,0,1,tlo,thi,el1,el2,'moles',fuzzy=values["-fuzzy-"])
+                if runSuccess:
+                    self.calculation.makePlot()
+                    self.sgw.Element('Refine').Update(disabled = False)
+                    self.sgw.Element('Auto Refine').Update(disabled = False)
+                    self.sgw.Element('Auto Smoothen').Update(disabled = False)
+                    self.sgw.Element('Add Label').Update(disabled = False)
+                    self.sgw.Element('Auto Label').Update(disabled = False)
+                    self.sgw.Element('Plot').Update(disabled = False)
+                    self.sgw.Element('Undo').Update(disabled = False)
+                    self.sgw.Element('Inspect').Update(disabled = False)
+                    self.sgw.Element('Export Diagram Data').Update(disabled = False)
+                    self.sgw.Element('Export Plot').Update(disabled = False)
+                    self.macro.append(f'macroPD.run({grid_density},{grid_density},{pressure},"{tunit}","{punit}",{0},{1},{tlo},{thi},"{el1}","{el2}","moles",fuzzy={values["-fuzzy-"]})')
         elif event =='Refine':
             refineWindow = RefineWindow(self)
             self.children.append(refineWindow)
@@ -584,10 +585,10 @@ class InspectWindow:
                 self.parent.macro.append(f'macroPD.suppressed[{self.index}] = not(macroPD.suppressed[{self.index}])')
                 self.sgw['-status-'].update(f'{"Suppressed" if self.parent.calculation.suppressed[self.index] else "Active"}')
         elif event == 'Apply Filter':
-            tlo = -np.Inf
-            thi  = np.Inf
-            xlo = -np.Inf
-            xhi  = np.Inf
+            tlo = -np.inf
+            thi  = np.inf
+            xlo = -np.inf
+            xhi  = np.inf
             try:
                 tlo = float(values['-tfilterlow-'])
             except:
