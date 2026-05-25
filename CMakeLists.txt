@@ -11,10 +11,13 @@ endif()
 
 set(THERMOCHIMICA_DEFAULT_TOLERANCE_EPSILON "1D-14" CACHE STRING
     "Standalone Thermochimica default numerical epsilon used to derive solver tolerances")
+set(THERMOCHIMICA_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/outputs/" CACHE PATH
+    "Standalone Thermochimica default output directory used by ModuleThermoIO")
 
 SET(Fortran_FLAGS
     -cpp
     -D"DATA_DIRECTORY='${CMAKE_CURRENT_SOURCE_DIR}/data/'"
+    -D"OUTPUT_DIRECTORY='${THERMOCHIMICA_OUTPUT_DIRECTORY}'"
     -DTHERMOCHIMICA_DEFAULT_TOLERANCE_EPSILON=${THERMOCHIMICA_DEFAULT_TOLERANCE_EPSILON}
 )
 

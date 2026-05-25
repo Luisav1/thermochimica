@@ -2,6 +2,7 @@
 bin/
 obj/
 lib/
+build/
 # ignore doc subdirectories
 doc/html/
 doc/latex/

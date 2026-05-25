@@ -1,0 +1,15 @@
+{
+  "source_dirs": [
+    "./src/**",
+    "./test/**"
+  ],
+  "pp_suffixes": [
+    ".F90",
+    ".f90"
+  ],
+  "pp_defs": {
+    "DATA_DIRECTORY": "'./data/'",
+    "OUTPUT_DIRECTORY": "'./outputs/'",
+    "THERMOCHIMICA_DEFAULT_TOLERANCE_EPSILON": "1D-14"
+  }
+}
