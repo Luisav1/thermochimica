@@ -23,6 +23,7 @@ test/doc/
 *.a
 *.ti
 *.png
+!/*.png
 *.jpg
 *.jpeg
 *.la
