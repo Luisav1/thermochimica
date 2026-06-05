@@ -3,6 +3,10 @@
     "./src/**",
     "./test/**"
   ],
+  "include_dirs": [
+    "./obj/**",
+    "./build/modules/**"
+  ],
   "pp_suffixes": [
     ".F90",
     ".f90"
