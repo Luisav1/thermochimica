@@ -818,12 +818,11 @@ end subroutine SetGibbsMinCheck
 
 subroutine InitThermoAPI
 
-  USE ModuleThermoTolerance, ONLY: SetMachineDefaultTolerances, ApplyToleranceOverride
+  USE ModuleThermoTolerance, ONLY: ApplyToleranceOverride
 
   implicit none
 
   call InitThermo
-  call SetMachineDefaultTolerances
   call ApplyToleranceOverride
 
   return
@@ -906,7 +905,7 @@ end subroutine SetMassBalanceTolerance
 !   Smaller x_min  =>  larger dTolerance(1)  =>  looser mass balance
 !   convergence criterion, but trace elements are not discarded.
 !
-! Under the API defaults, dToleranceEpsilon is the actual machine epsilon.
+! Under the API defaults, dToleranceEpsilon is the compile-time default.
 !-----------------------------------------------------------------------
 subroutine SetMinMoleFraction(dMinMolFrac)
 
