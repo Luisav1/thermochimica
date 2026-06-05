@@ -11,10 +11,13 @@ test/doc/
 # ignore outputs
 *.out
 *.txt
+!/*.txt
 *.dat
 *.DAT
 *.Dat
 *.json
+# ignore all json files except root level ones
+!/*.json
 *.pdf
 *.mod
 *.a
@@ -30,6 +33,7 @@ test/doc/
 *.0
 *.lai
 *.csv
+!/*.csv
 *.pkl
 # ignore vscode cache
 .vscode/
