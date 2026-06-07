@@ -184,6 +184,9 @@ subroutine InitGEMSolver
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.
+    lUseRKMPExactHessian    = .FALSE.
+    lDebugRKMPHessianFD     = .FALSE.
+    dRKMPHessianBlendAlpha  = 0.10D0
 
     ! Regrettably, branching here depending on whether reinit data has been loaded
     IF_ReinitLoaded: if (lReinitLoaded) then

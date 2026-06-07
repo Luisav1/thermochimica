@@ -64,11 +64,13 @@ module ModuleGEMSolver
     integer, dimension(:,:), allocatable ::  iterHistory
 
     real(8)                              ::  dGEMFunctionNorm,    dGEMFunctionNormLast, dMaxSpeciesChange, dMinGibbs
+    real(8)                              ::  dRKMPHessianBlendAlpha
     real(8), dimension(:),   allocatable ::  dSumMolFractionSoln, dMolesPhaseLast, dUpdateVar, dDrivingForceSoln
     real(8), dimension(:),   allocatable ::  dPartialExcessGibbs, dPartialExcessGibbsLast
     real(8), dimension(:,:), allocatable ::  dEffStoichSolnPhase
 
     logical                              ::  lDebugMode, lRevertSystem, lConverged
+    logical                              ::  lUseRKMPExactHessian, lDebugRKMPHessianFD
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver

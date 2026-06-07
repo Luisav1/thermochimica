@@ -222,6 +222,9 @@ subroutine GEMNewton(INFO)
             B(j) = 0D0
         end do
 
+        ! Optionally blend mapped RKMP second-order terms into constrained Newton matrix:
+        if (lUseRKMPExactHessian) call MapRKMPHessianToGEMVariables(A,nVar)
+
         ! Check if the Hessian is properly structured if the system contains any charged phases:
         if (nCountSublattice > 0) then
             ! Loop through elements

@@ -151,6 +151,8 @@ subroutine ThermoDEBUG
     elseif (INFOThermo == 44) then
         print *, 'DEBUG: An unsupported type of excess mixing term in the SUBI phase is included in the data-file.'
         print *, 'Please contact the developers and share this data-file.'
+    elseif (INFOThermo == 46) then
+        print *, 'DEBUG: RKMP unconstrained Hessian output buffer has incompatible dimensions.'
     elseif (INFOThermo == 50) then
         print *, 'DEBUG: Input file cannot be opened.'
     elseif (INFOThermo == 51) then

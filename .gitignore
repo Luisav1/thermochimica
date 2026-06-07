@@ -1,3 +1,4 @@
+research-notes/
 # ignore bin/ and obj/ and lib/
 bin/
 obj/
@@ -11,7 +12,6 @@ test/doc/
 # ignore outputs
 *.out
 *.txt
-!/*.txt
 *.dat
 *.DAT
 *.Dat
@@ -23,7 +23,6 @@ test/doc/
 *.a
 *.ti
 *.png
-!/*.png
 *.jpg
 *.jpeg
 *.la
