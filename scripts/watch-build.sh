@@ -33,13 +33,55 @@ else
   MAKE_ARGS=("$@")
 fi
 
+# By default, run tests after a successful build. Disable with `-n` or
+# `--no-run-tests`, or control with the `RUN_TESTS` environment variable.
+RUN_TESTS=${RUN_TESTS:-1}
+filtered=()
+for _arg in "${MAKE_ARGS[@]}"; do
+  case "${_arg}" in
+    -T|--run-tests)
+      RUN_TESTS=1
+      ;;
+    -n|--no-run-tests)
+      RUN_TESTS=0
+      ;;
+    *)
+      filtered+=("${_arg}")
+      ;;
+  esac
+done
+MAKE_ARGS=("${filtered[@]}")
+
+# Build command string for use in watcher helpers that run a shell command
+MAKE_CMD="make"
+for _arg in "${MAKE_ARGS[@]}"; do
+  MAKE_CMD+=" $(printf '%q' "${_arg}")"
+done
+
 run_build() {
   printf '\n[%s] Running: make' "$(date '+%Y-%m-%d %H:%M:%S')"
   for arg in "${MAKE_ARGS[@]}"; do
     printf ' %q' "$arg"
   done
   printf '\n\n'
-  make "${MAKE_ARGS[@]}"
+  if make "${MAKE_ARGS[@]}"; then
+    if [[ "${RUN_TESTS}" -eq 1 ]]; then
+      run_tests
+    fi
+    return 0
+  else
+    return 1
+  fi
+}
+
+run_tests() {
+  printf '\n[%s] Running tests\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  if [[ -x ./run_tests ]]; then
+    ./run_tests
+    return $?
+  fi
+  make test
+  return $?
 }
 
 source_files() {
@@ -53,11 +95,19 @@ poll_signature() {
 }
 
 if command -v watchexec >/dev/null 2>&1; then
-  exec watchexec -e f90,F90,inc,h -- make "${MAKE_ARGS[@]}"
+  if [[ "${RUN_TESTS}" -eq 1 ]]; then
+    exec watchexec -e f90,F90,inc,h -- sh -c "${MAKE_CMD} && (./run_tests || make test)"
+  else
+    exec watchexec -e f90,F90,inc,h -- sh -c "${MAKE_CMD}"
+  fi
 fi
 
 if command -v entr >/dev/null 2>&1; then
-  source_files | entr -r make "${MAKE_ARGS[@]}"
+  if [[ "${RUN_TESTS}" -eq 1 ]]; then
+    source_files | entr -r sh -c "${MAKE_CMD} && (./run_tests || make test)"
+  else
+    source_files | entr -r make "${MAKE_ARGS[@]}"
+  fi
   exit $?
 fi
 
