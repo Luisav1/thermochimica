@@ -1,0 +1,15 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gfortran \
+    make \
+    git \
+    python3 \
+    python3-pip \
+    python3-venv \
+    liblapack-dev \
+    libblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
