@@ -35,7 +35,7 @@ subroutine MapRKMPHessianToGEMVariables(A,nVar)
 
     USE ModuleThermo
     USE ModuleGEMSolver
-    USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
+    USE ModuleThermoIO, ONLY: INFOThermo
 
     implicit none
 
@@ -51,7 +51,7 @@ subroutine MapRKMPHessianToGEMVariables(A,nVar)
         end subroutine DebugRKMPHessianFiniteDifference
     end interface
 
-    integer                              :: i, j, k, l, nVar
+    integer                              :: i, j, k, nVar
     integer                              :: iFirst, iLast, nPhaseSpecies, iSolnPhases
     real(8)                              :: dAlpha, dHnn
     real(8), dimension(nVar,nVar)        :: A, ARKMP

@@ -133,7 +133,7 @@ contains
         real(8), intent(in), dimension(:) :: dMoles
 
         integer :: iParamLocal, iaLocal, ibLocal, iExponentLocal
-        real(8) :: dNLocal, dDeltaLocal
+        real(8) :: dNLocal
 
         CompSupportedBinaryRKMPExcessEnergy = 0D0
         dNLocal = SUM(dMoles)
