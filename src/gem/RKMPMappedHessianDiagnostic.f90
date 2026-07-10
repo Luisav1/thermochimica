@@ -15,9 +15,16 @@ subroutine RKMPMappedHessianDiagnostic
     real(8), dimension(:), allocatable     :: dLocalMoles
     real(8), dimension(:,:), allocatable   :: dJ, dHloc, dKmap
 
+    interface
+        subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
+            integer, intent(in)                  :: iSolnIndex
+            real(8), intent(out), dimension(:,:) :: dHess
+        end subroutine CompExcessGibbsEnergyRKMP_unconstrained
+    end interface
+
     do k = 1, nSolnPhases
         m = -iAssemblage(nElements - k + 1)
-        if ((cSolnPhaseType(m) /= 'RKMP') .AND. (cSolnPhaseType(m) /= 'RKMPM')) cycle
+        if (cSolnPhaseType(m) /= 'RKMP') cycle
 
         nLocalSpecies = nSpeciesPhase(m) - nSpeciesPhase(m-1)
         if (nLocalSpecies <= 0) cycle

@@ -67,7 +67,7 @@ subroutine DebugRKMPMappedHessianFiniteDifference(iSolnIndex, dJ, dKmap, nLocalS
     dFD   = (dEp - 2D0*dE0 + dEm) / (dEps*dEps)
     dSumV = SUM(dV)
 
-    write(*,'(A,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6)') &
+    write(*,'(A,1X,A,1X,I0,1X,A,1X,ES15.6E3,1X,A,1X,ES15.6E3,1X,A,1X,ES15.6E3,1X,A,1X,ES15.6E3)') &
         'RKMP_MAPPED_FD_DEBUG', TRIM(cSolnPhaseName(iSolnIndex)), iSolnIndex, &
         'analytic=', dAnalytic, 'fd=', dFD, 'sumv=', dSumV, 'eps=', dEps
 
@@ -75,4 +75,4 @@ subroutine DebugRKMPMappedHessianFiniteDifference(iSolnIndex, dJ, dKmap, nLocalS
 
     return
 
-end subroutine DebugRKMPMappedHessianFiniteDifference
+end subroutine
