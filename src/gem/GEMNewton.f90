@@ -245,7 +245,7 @@ subroutine GEMNewton(INFO)
         end if
 
         ! Optionally blend mapped RKMP second-order terms into constrained Newton matrix:
-        if (lUseRKMPExactHessian) call MapRKMPHessianToGEMVariables(A, nVar)
+        if (lUseRKMPExactHessian) call MapRKMPHessianToGEMVariables(A, B, nVar)
 
         ! Call the linear equation solver:
         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
