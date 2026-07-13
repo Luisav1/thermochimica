@@ -238,7 +238,10 @@ subroutine GEMNewton(INFO)
         end if
 
         ! Optionally validate mapped RKMP second-order terms without changing the Newton matrix:
-        if (lDebugRKMPHessianFD) call RKMPMappedHessianDiagnostic
+        if (lDebugRKMPHessianFD) then
+            call RKMPMappedHessianDiagnostic
+            call RKMPResponseDiagnostic
+        end if
 
         ! Optionally blend mapped RKMP second-order terms into constrained Newton matrix:
         if (lUseRKMPExactHessian) call MapRKMPHessianToGEMVariables(A, nVar)
