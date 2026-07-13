@@ -241,6 +241,7 @@ subroutine GEMNewton(INFO)
         if (lDebugRKMPHessianFD) then
             call RKMPMappedHessianDiagnostic
             call RKMPResponseDiagnostic
+            call RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
         end if
 
         ! Optionally blend mapped RKMP second-order terms into constrained Newton matrix:
