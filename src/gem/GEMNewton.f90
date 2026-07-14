@@ -246,7 +246,7 @@ subroutine GEMNewton(INFO)
 
         ! Call the linear equation solver:
         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
-            if (lUseRKMPExactHessian) then
+            if (lUseRKMPExactHessian .AND. lRKMPHessianActive) then
                 call SolveRKMPAlphaTrust(A, B, nVar, IPIV, INFO)
             else
                 call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
@@ -312,7 +312,9 @@ contains
     !! be settled, and the previous nonlinear step must have maintained residual progress.  Once locally ready,
     !! candidates are tried in descending alpha order.  Floating-point validity, an emergency correction-ratio
     !! guard, DGESV success, update size, and direction agreement with the alpha-zero solve are checked.  The
-    !! accepted correction is replayed once with metrics enabled.
+    !! accepted correction is replayed once with metrics enabled.  Alpha is a correction-blend value selected by
+    !! the globalization/trust logic and applied to the fully constructed condensed GEM matrix and residual
+    !! correction; it does not scale the RKMP derivatives or the local excess Hessian itself.
     subroutine SolveRKMPAlphaTrust(AIn, BIn, nLocalVar, IPIVIn, INFOOut)
 
         integer, intent(in)                    :: nLocalVar

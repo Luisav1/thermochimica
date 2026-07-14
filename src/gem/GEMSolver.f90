@@ -116,6 +116,9 @@ subroutine GEMSolver
     ! Begin the global iteration cycle:
     LOOP_GEMSolver: do iterGlobal = 1, iterGlobalMax
 
+        ! Ensures Newton and line-search paths know whether the current assemblage contains plain RKMP
+        call UpdateRKMPHessianActivity
+
         ! If in debug mode, call the debugger:
         if (lDebugMode) call GEMDebug(1)
 
@@ -127,6 +130,9 @@ subroutine GEMSolver
 
         ! Check if the estimated phase assemblage needs to be adjusted:
         call CheckPhaseAssemblage
+
+        ! Phase assemblage may have changed, so it needs to be refreshed before CheckConvergence and end-of-solve reporting.
+        call UpdateRKMPHessianActivity
 
         ! Check convergence:
         ! if (iterGlobal /= iterLast) call CheckConvergence
@@ -143,7 +149,7 @@ subroutine GEMSolver
     ! Report an error if the GEMSolver did not converge but no other errors were encountered:
     if (.NOT.(lConverged).AND.(INFOThermo == 0)) INFOThermo = 12
 
-    if (lDebugRKMPHessianFD .OR. lUseRKMPExactHessian) then
+    if (lDebugRKMPHessianFD .OR. (lUseRKMPExactHessian .AND. lRKMPHessianWasActive)) then
         ! Positional records keep the opt-in summary compact.  Fields follow the corresponding groups in
         ! ModuleGEMSolver: solve state, correction metrics/rejections, then nonlinear trust/direction metrics.
         write(*,*) 'RKMP_SOLVER_IMPACT', lUseRKMPExactHessian, dRKMPHessianBlendAlpha, &
@@ -159,5 +165,28 @@ subroutine GEMSolver
     end if
 
     return
+
+contains
+
+    !> \brief Refresh whether the current assemblage contains a supported RKMP phase.
+    !!
+    !> \details Exact-curvature solver behavior is meaningful only while a plain RKMP phase is active.  The
+    !! historical flag preserves end-of-solve diagnostics when that phase disappears before convergence.
+    subroutine UpdateRKMPHessianActivity
+
+        integer :: iPhase, kPhase
+
+        lRKMPHessianActive = .FALSE.
+        do iPhase = 1, nSolnPhases
+            kPhase = -iAssemblage(nElements - iPhase + 1)
+            if (kPhase <= 0) cycle
+            if (cSolnPhaseType(kPhase) == 'RKMP') then
+                lRKMPHessianActive = .TRUE.
+                exit
+            end if
+        end do
+        lRKMPHessianWasActive = lRKMPHessianWasActive .OR. lRKMPHessianActive
+
+    end subroutine UpdateRKMPHessianActivity
 
 end subroutine GEMSolver

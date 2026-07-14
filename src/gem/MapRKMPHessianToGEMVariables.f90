@@ -19,7 +19,9 @@
 !> \param[in,out] A GEMNewton matrix.  On return, receives alpha-scaled RKMP response deltas in the element block.
 !> \param[in,out] B GEMNewton right-hand side.  On return, receives the matching alpha-scaled RKMP residual delta.
 !> \param[in] nVar Number of GEMNewton unknowns represented by A and B.
-!> \param[in] dAlphaInput Candidate alpha for this trial or accepted application; internally clamped to [0,1].
+!> \param[in] dAlphaInput Candidate correction-blend alpha selected by trust logic and internally clamped to
+!!                        [0,1].  It scales mapped deltaA and deltaB only after the full RKMP curvature and
+!!                        constrained response have been constructed.
 !> \param[in] lUpdateMetrics If true, update RKMP audit counters and emit detailed debug diagnostics when enabled.
 !> \param[out] lCorrectionOK False when an RKMP mapped correction contains invalid floating-point values.
 !> \param[out] dTrialMaxRatio Maximum alpha-scaled A correction relative to the current element block.

@@ -140,7 +140,8 @@ subroutine GEMLineSearch
     nMaxWolfe               = 5
     ! A mixed solution/pure assemblage can require additional backtracking while curvature changes both local
     ! composition response and phase competition.  Keep the historical budget for every default-off solve.
-    if (lUseRKMPExactHessian .AND. nSolnPhases > 0 .AND. nConPhases > 0) nMaxWolfe = 10
+    if (lUseRKMPExactHessian .AND. lRKMPHessianActive .AND. &
+        nSolnPhases > 0 .AND. nConPhases > 0) nMaxWolfe = 10
 
     ! Initialize the line search method:
     call InitGEMLineSearch(dStepLength,dMolesSpeciesLast,dElementPotentialLast)

@@ -39,7 +39,9 @@
     !> \param nRKMPHessianRejectDirection Number of RKMP alpha trials rejected because their solved direction
     !!                                    was insufficiently aligned with the alpha-zero direction.
     !> \param nRKMPHessianFullAlphaCount Number of GEM iterations that accepted the undamped RKMP correction.
-    !> \param dRKMPHessianBlendAlpha User-facing nominal blend factor for the experimental RKMP correction.
+    !> \param dRKMPHessianBlendAlpha Requested upper blend for the mapped RKMP GEM correction.  Trust logic
+    !!                                selects the effective blend; neither value scales the RKMP derivatives or
+    !!                                local excess Hessian.
     !> \param dRKMPHessianMaxAppliedA Maximum accepted alpha-scaled RKMP correction applied to the GEM A matrix.
     !> \param dRKMPHessianMaxAppliedB Maximum accepted alpha-scaled RKMP correction applied to the GEM B vector.
     !> \param dRKMPHessianMaxAppliedRatio Maximum accepted A correction relative to the current element block.
@@ -51,6 +53,8 @@
     !> \param dRKMPHessianDirectionDifference Relative two-norm difference between those update directions.
     !> \param lRKMPHessianNonlinearReady True after the current state is feasible, near the best Gibbs state,
     !!                                   locally settled, and making acceptable residual progress.
+    !> \param lRKMPHessianActive True when the current assemblage contains a plain RKMP solution phase.
+    !> \param lRKMPHessianWasActive True after a plain RKMP phase has appeared during the current GEM solve.
     !> \param lDebugMode        A logical variable used for debugging purposes.  When it is TRUE, a number
     !!                           of print statements are applied.
     !> \param lRevertSystem     A logical variable identifying whether the system should be reverted (TRUE)
@@ -107,7 +111,7 @@ module ModuleGEMSolver
 
     logical                              ::  lDebugMode, lRevertSystem, lConverged
     logical                              ::  lUseRKMPExactHessian, lDebugRKMPHessianFD
-    logical                              ::  lRKMPHessianNonlinearReady
+    logical                              ::  lRKMPHessianNonlinearReady, lRKMPHessianActive, lRKMPHessianWasActive
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver

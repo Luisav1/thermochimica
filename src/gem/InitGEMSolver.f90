@@ -199,6 +199,8 @@ subroutine InitGEMSolver
     dRKMPHessianDirectionCosine = 1D0
     dRKMPHessianDirectionDifference = 0D0
     lRKMPHessianNonlinearReady = .FALSE.
+    lRKMPHessianActive     = .FALSE.
+    lRKMPHessianWasActive  = .FALSE.
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.

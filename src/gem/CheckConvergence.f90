@@ -223,7 +223,7 @@ subroutine CheckConvergence
     ! call it a day:
     ! The experimental RKMP response can change basin timing, so it must complete the phase-driving-force and
     ! global-stability checks below instead of accepting a small residual in a metastable assemblage.
-    if (.NOT. lUseRKMPExactHessian) then
+    if (.NOT. (lUseRKMPExactHessian .AND. lRKMPHessianActive)) then
         if ((dGEMFunctionNorm < dTolerance(12)).AND.(iterGlobal - iterLast > 100).AND.(iterGlobal > 1000))  then
             lConverged = .TRUE.
             return
