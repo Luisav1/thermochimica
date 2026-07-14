@@ -165,6 +165,9 @@ subroutine InitGEMSolver
     nRKMPHessianRejectBadDelta = 0
     nRKMPHessianRejectRatio = 0
     nRKMPHessianRejectUpdate = 0
+    nRKMPHessianRejectNonlinear = 0
+    nRKMPHessianRejectDirection = 0
+    nRKMPHessianFullAlphaCount = 0
     nConPhases              = 0
     nSolnPhases             = 0
     iConPhaseLast           = 0
@@ -193,6 +196,9 @@ subroutine InitGEMSolver
     dRKMPHessianMaxDeltaB   = 0D0
     dRKMPHessianSelectedAlpha = 0D0
     dRKMPHessianUpdateNormRatio = 0D0
+    dRKMPHessianDirectionCosine = 1D0
+    dRKMPHessianDirectionDifference = 0D0
+    lRKMPHessianNonlinearReady = .FALSE.
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.

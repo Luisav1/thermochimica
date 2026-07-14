@@ -34,6 +34,11 @@
     !!                                correction was too large relative to the existing element block.
     !> \param nRKMPHessianRejectUpdate Number of RKMP alpha-trust trial systems rejected because the solved
     !!                                 update was too large relative to the alpha-zero update.
+    !> \param nRKMPHessianRejectNonlinear Number of GEM iterations kept on the ideal direction because the
+    !!                                    current state had not yet established local nonlinear trust.
+    !> \param nRKMPHessianRejectDirection Number of RKMP alpha trials rejected because their solved direction
+    !!                                    was insufficiently aligned with the alpha-zero direction.
+    !> \param nRKMPHessianFullAlphaCount Number of GEM iterations that accepted the undamped RKMP correction.
     !> \param dRKMPHessianBlendAlpha User-facing nominal blend factor for the experimental RKMP correction.
     !> \param dRKMPHessianMaxAppliedA Maximum accepted alpha-scaled RKMP correction applied to the GEM A matrix.
     !> \param dRKMPHessianMaxAppliedB Maximum accepted alpha-scaled RKMP correction applied to the GEM B vector.
@@ -42,6 +47,10 @@
     !> \param dRKMPHessianMaxDeltaB Maximum unscaled RKMP correction candidate for the GEM B vector.
     !> \param dRKMPHessianSelectedAlpha Largest RKMP alpha accepted by the Stage 1E alpha-trust trial solve.
     !> \param dRKMPHessianUpdateNormRatio Accepted update norm divided by the alpha-zero update norm.
+    !> \param dRKMPHessianDirectionCosine Cosine between the accepted RKMP and alpha-zero update directions.
+    !> \param dRKMPHessianDirectionDifference Relative two-norm difference between those update directions.
+    !> \param lRKMPHessianNonlinearReady True after the current state is feasible, near the best Gibbs state,
+    !!                                   locally settled, and making acceptable residual progress.
     !> \param lDebugMode        A logical variable used for debugging purposes.  When it is TRUE, a number
     !!                           of print statements are applied.
     !> \param lRevertSystem     A logical variable identifying whether the system should be reverted (TRUE)
@@ -79,6 +88,8 @@ module ModuleGEMSolver
     integer                              ::  nRKMPHessianApplyCount
     integer                              ::  nRKMPHessianRejectDGESV, nRKMPHessianRejectBadDelta
     integer                              ::  nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate
+    integer                              ::  nRKMPHessianRejectNonlinear, nRKMPHessianRejectDirection
+    integer                              ::  nRKMPHessianFullAlphaCount
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
@@ -89,12 +100,14 @@ module ModuleGEMSolver
     real(8)                              ::  dRKMPHessianMaxAppliedRatio, dRKMPHessianMaxDeltaA
     real(8)                              ::  dRKMPHessianMaxDeltaB
     real(8)                              ::  dRKMPHessianSelectedAlpha, dRKMPHessianUpdateNormRatio
+    real(8)                              ::  dRKMPHessianDirectionCosine, dRKMPHessianDirectionDifference
     real(8), dimension(:),   allocatable ::  dSumMolFractionSoln, dMolesPhaseLast, dUpdateVar, dDrivingForceSoln
     real(8), dimension(:),   allocatable ::  dPartialExcessGibbs, dPartialExcessGibbsLast
     real(8), dimension(:,:), allocatable ::  dEffStoichSolnPhase
 
     logical                              ::  lDebugMode, lRevertSystem, lConverged
     logical                              ::  lUseRKMPExactHessian, lDebugRKMPHessianFD
+    logical                              ::  lRKMPHessianNonlinearReady
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver

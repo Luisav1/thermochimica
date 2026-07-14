@@ -144,19 +144,18 @@ subroutine GEMSolver
     if (.NOT.(lConverged).AND.(INFOThermo == 0)) INFOThermo = 12
 
     if (lDebugRKMPHessianFD .OR. lUseRKMPExactHessian) then
-        write(*,'(A,1X,A,1X,L1,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,L1,1X,A,1X,L1,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0)') &
-            'RKMP_SOLVER_IMPACT', 'useExact=', lUseRKMPExactHessian, &
-            'alpha=', dRKMPHessianBlendAlpha, 'selectedAlpha=', dRKMPHessianSelectedAlpha, &
-            'updateNormRatio=', dRKMPHessianUpdateNormRatio, 'iterGlobal=', iterGlobal, &
-            'iterLast=', iterLast, 'iterRevert=', iterRevert, &
-            'converged=', lConverged, 'revert=', lRevertSystem, 'INFOThermo=', INFOThermo, &
-            'nSolnPhases=', nSolnPhases, 'nConPhases=', nConPhases, &
-            'finalNorm=', dGEMFunctionNorm, 'maxAppliedA=', dRKMPHessianMaxAppliedA, &
-            'maxAppliedB=', dRKMPHessianMaxAppliedB, 'maxAppliedRatio=', dRKMPHessianMaxAppliedRatio, &
-            'maxDeltaA=', dRKMPHessianMaxDeltaA, 'maxDeltaB=', dRKMPHessianMaxDeltaB, &
-            'applyCount=', nRKMPHessianApplyCount, 'rejectDGESV=', nRKMPHessianRejectDGESV, &
-            'rejectBadDelta=', nRKMPHessianRejectBadDelta, 'rejectRatio=', nRKMPHessianRejectRatio, &
-            'rejectUpdate=', nRKMPHessianRejectUpdate
+        ! Positional records keep the opt-in summary compact.  Fields follow the corresponding groups in
+        ! ModuleGEMSolver: solve state, correction metrics/rejections, then nonlinear trust/direction metrics.
+        write(*,*) 'RKMP_SOLVER_IMPACT', lUseRKMPExactHessian, dRKMPHessianBlendAlpha, &
+            dRKMPHessianSelectedAlpha, dRKMPHessianUpdateNormRatio, iterGlobal, iterLast, iterRevert, &
+            lConverged, lRevertSystem, INFOThermo, nSolnPhases, nConPhases, dGEMFunctionNorm
+        write(*,*) 'RKMP_SOLVER_CORRECTION', dRKMPHessianMaxAppliedA, dRKMPHessianMaxAppliedB, &
+            dRKMPHessianMaxAppliedRatio, dRKMPHessianMaxDeltaA, dRKMPHessianMaxDeltaB, &
+            nRKMPHessianApplyCount, nRKMPHessianRejectDGESV, nRKMPHessianRejectBadDelta, &
+            nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate
+        write(*,*) 'RKMP_NONLINEAR_TRUST', lRKMPHessianNonlinearReady, dRKMPHessianDirectionCosine, &
+            dRKMPHessianDirectionDifference, nRKMPHessianRejectNonlinear, nRKMPHessianRejectDirection, &
+            nRKMPHessianFullAlphaCount
     end if
 
     return

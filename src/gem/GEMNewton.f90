@@ -92,7 +92,7 @@
 subroutine GEMNewton(INFO)
 
     USE ModuleThermo
-    USE ModuleThermoIO, ONLY: INFOThermo
+    USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
     USE ModuleGEMSolver
 
     implicit none
@@ -305,6 +305,14 @@ subroutine GEMNewton(INFO)
 
 contains
 
+    !> \brief Select the largest locally trustworthy RKMP response correction.
+    !!
+    !> \details The alpha-zero solve remains the reference direction.  RKMP curvature is withheld while the
+    !! solver is finding a basin: a feasible Gibbs minimum must already have been recorded, the assemblage must
+    !! be settled, and the previous nonlinear step must have maintained residual progress.  Once locally ready,
+    !! candidates are tried in descending alpha order.  Floating-point validity, an emergency correction-ratio
+    !! guard, DGESV success, update size, and direction agreement with the alpha-zero solve are checked.  The
+    !! accepted correction is replayed once with metrics enabled.
     subroutine SolveRKMPAlphaTrust(AIn, BIn, nLocalVar, IPIVIn, INFOOut)
 
         integer, intent(in)                    :: nLocalVar
@@ -313,25 +321,35 @@ contains
         real(8), dimension(:,:)                :: AIn
         real(8), dimension(:)                  :: BIn
 
-        integer                                :: iAlpha, INFOBase, INFOTrial
+        integer                                :: iAlpha, iLocal, INFOBase, INFOTrial
         integer, dimension(:), allocatable     :: IPIVTrial
         real(8)                                :: dAlphaCandidate, dBestAlpha, dNormBase, dNormTrial
         real(8)                                :: dTrialRatio, dBestUpdateRatio
-        real(8), parameter                     :: dRatioCap = 2D-3
+        real(8)                                :: dCurrentGibbs, dGibbsScale, dDirectionCosine, dDirectionDifference
+        real(8)                                :: dNormBase2, dNormTrial2
+        real(8), parameter                     :: dEmergencyRatioCap = 1D6
         real(8), parameter                     :: dUpdateRatioCap = 1.25D0
+        real(8), parameter                     :: dDirectionCosineMin = 0.90D0
+        real(8), parameter                     :: dDirectionDifferenceCap = 0.50D0
+        real(8), parameter                     :: dLocalNormThreshold = 5D-2
+        real(8), parameter                     :: dProgressAllowance = 1.05D0
+        real(8), parameter                     :: dGibbsActivationTolerance = 1D-6
+        real(8), parameter                     :: dGibbsRetentionTolerance = 1D-4
         real(8), dimension(5)                  :: dAlphaList
-        real(8), dimension(:), allocatable     :: BBase, BTrial
+        real(8), dimension(:), allocatable     :: BBase, BTrial, BZero
         real(8), dimension(:,:), allocatable   :: ABase, ATrial
         logical                                :: lCorrectionOK, lAccepted
 
         dAlphaList = [1D0, 1D-1, 1D-2, 1D-3, 0D0]
         dBestAlpha = 0D0
         dBestUpdateRatio = 0D0
+        dDirectionCosine = 1D0
+        dDirectionDifference = 0D0
         lAccepted = .FALSE.
         INFOOut = 0
 
         allocate(ABase(nLocalVar,nLocalVar), ATrial(nLocalVar,nLocalVar), &
-                 BBase(nLocalVar), BTrial(nLocalVar), IPIVTrial(nLocalVar))
+                 BBase(nLocalVar), BTrial(nLocalVar), BZero(nLocalVar), IPIVTrial(nLocalVar))
 
         ABase = AIn
         BBase = BIn
@@ -343,15 +361,44 @@ contains
         call CheckSolvedUpdate(BTrial, nLocalVar, INFOBase)
         if (INFOBase /= 0) then
             INFOOut = INFOBase
-            deallocate(ABase, ATrial, BBase, BTrial, IPIVTrial)
+            deallocate(ABase, ATrial, BBase, BTrial, BZero, IPIVTrial)
             return
         end if
 
+        BZero = BTrial
         dNormBase = DMAX1(MAXVAL(DABS(BTrial)), 1D-30)
+        dNormBase2 = DMAX1(SQRT(SUM(BZero**2)), 1D-30)
 
-        if (dRKMPHessianBlendAlpha <= 0D0) then
+        dCurrentGibbs = 0D0
+        do iLocal = 1, nElements
+            dCurrentGibbs = dCurrentGibbs + dElementPotential(iLocal) * dMolesElement(iLocal)
+        end do
+        dCurrentGibbs = dCurrentGibbs * dTemperature * dIdealConstant
+        dGibbsScale = DMAX1(DABS(dMinGibbs), 1D0)
+
+        ! The ideal solve owns basin finding.  RKMP curvature becomes eligible only near a feasible Gibbs state
+        ! after a settled, non-diverging nonlinear step.
+        if (.NOT. lRKMPHessianNonlinearReady) then
+            lRKMPHessianNonlinearReady = (dMinGibbs < 0.5D0 * 1D200) .AND. &
+                (dGEMFunctionNorm < dLocalNormThreshold) .AND. (iterGlobal - iterLast >= 5) .AND. &
+                (dGEMFunctionNorm <= dProgressAllowance * DMAX1(dGEMFunctionNormLast,1D-30)) .AND. &
+                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dGibbsActivationTolerance)
+        else
+            ! Retain local trust through small nonlinear oscillations, but return basin control to the ideal
+            ! solve if residual or Gibbs behavior leaves the neighborhood where trust was established.
+            lRKMPHessianNonlinearReady = (dGEMFunctionNorm < dProgressAllowance * dLocalNormThreshold) .AND. &
+                (iterGlobal - iterLast >= 5) .AND. &
+                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dGibbsRetentionTolerance)
+        end if
+
+        if ((dRKMPHessianBlendAlpha <= 0D0) .OR. (.NOT. lRKMPHessianNonlinearReady)) then
             dRKMPHessianSelectedAlpha = 0D0
             dRKMPHessianUpdateNormRatio = 1D0
+            dRKMPHessianDirectionCosine = 1D0
+            dRKMPHessianDirectionDifference = 0D0
+            if ((dRKMPHessianBlendAlpha > 0D0) .AND. (.NOT. lRKMPHessianNonlinearReady)) then
+                nRKMPHessianRejectNonlinear = nRKMPHessianRejectNonlinear + 1
+            end if
         else
             LOOP_ALPHA_TRUST: do iAlpha = 1, 5
                 dAlphaCandidate = dAlphaList(iAlpha)
@@ -368,7 +415,9 @@ contains
                     cycle LOOP_ALPHA_TRUST
                 end if
 
-                if (dTrialRatio > dRatioCap) then
+                ! This cap catches pathological scaling only; ordinary trust is based on nonlinear state and
+                ! solved-direction behavior rather than the entrywise matrix-correction ratio.
+                if (dTrialRatio > dEmergencyRatioCap) then
                     nRKMPHessianRejectRatio = nRKMPHessianRejectRatio + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
@@ -388,6 +437,16 @@ contains
                     cycle LOOP_ALPHA_TRUST
                 end if
 
+                dNormTrial2 = DMAX1(SQRT(SUM(BTrial**2)), 1D-30)
+                dDirectionCosine = DOT_PRODUCT(BZero,BTrial) / (dNormBase2*dNormTrial2)
+                dDirectionDifference = SQRT(SUM((BTrial-BZero)**2)) / dNormBase2
+                if ((dAlphaCandidate > 0D0) .AND. &
+                    ((dDirectionCosine < dDirectionCosineMin) .OR. &
+                     (dDirectionDifference > dDirectionDifferenceCap))) then
+                    nRKMPHessianRejectDirection = nRKMPHessianRejectDirection + 1
+                    cycle LOOP_ALPHA_TRUST
+                end if
+
                 dBestAlpha = dAlphaCandidate
                 lAccepted = .TRUE.
                 exit LOOP_ALPHA_TRUST
@@ -396,10 +455,14 @@ contains
             if (.NOT. lAccepted) then
                 dBestAlpha = 0D0
                 dBestUpdateRatio = 1D0
+                dDirectionCosine = 1D0
+                dDirectionDifference = 0D0
             end if
 
             dRKMPHessianSelectedAlpha = dBestAlpha
             dRKMPHessianUpdateNormRatio = dBestUpdateRatio
+            dRKMPHessianDirectionCosine = dDirectionCosine
+            dRKMPHessianDirectionDifference = dDirectionDifference
         end if
 
         AIn = ABase
@@ -410,8 +473,11 @@ contains
         IPIVIn = 0
         call dgesv(nLocalVar, 1, AIn, nLocalVar, IPIVIn, BIn, nLocalVar, INFOOut)
         call CheckSolvedUpdate(BIn, nLocalVar, INFOOut)
+        if ((INFOOut == 0) .AND. (dBestAlpha >= 1D0)) then
+            nRKMPHessianFullAlphaCount = nRKMPHessianFullAlphaCount + 1
+        end if
 
-        deallocate(ABase, ATrial, BBase, BTrial, IPIVTrial)
+        deallocate(ABase, ATrial, BBase, BTrial, BZero, IPIVTrial)
 
     end subroutine SolveRKMPAlphaTrust
 
