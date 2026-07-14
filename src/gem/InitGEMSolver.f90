@@ -161,6 +161,10 @@ subroutine InitGEMSolver
     iterLastMiscGapCheck    = 0
     iterGlobal              = 0
     nRKMPHessianApplyCount  = 0
+    nRKMPHessianRejectDGESV = 0
+    nRKMPHessianRejectBadDelta = 0
+    nRKMPHessianRejectRatio = 0
+    nRKMPHessianRejectUpdate = 0
     nConPhases              = 0
     nSolnPhases             = 0
     iConPhaseLast           = 0
@@ -187,6 +191,8 @@ subroutine InitGEMSolver
     dRKMPHessianMaxAppliedRatio = 0D0
     dRKMPHessianMaxDeltaA   = 0D0
     dRKMPHessianMaxDeltaB   = 0D0
+    dRKMPHessianSelectedAlpha = 0D0
+    dRKMPHessianUpdateNormRatio = 0D0
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.

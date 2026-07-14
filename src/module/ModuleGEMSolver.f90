@@ -25,6 +25,23 @@
     !!                              mixing of each species in the system.
     !> \param dEffStoichSolnPhase   A double real matrix representing the effective stoichiometry of each
     !!                               solution phase.
+    !> \param nRKMPHessianApplyCount Number of accepted RKMP response corrections applied during the current
+    !!                               GEM solve.
+    !> \param nRKMPHessianRejectDGESV Number of RKMP alpha-trust trial systems rejected because DGESV failed.
+    !> \param nRKMPHessianRejectBadDelta Number of RKMP alpha-trust trial systems rejected because the mapped
+    !!                                   correction contained invalid floating-point values.
+    !> \param nRKMPHessianRejectRatio Number of RKMP alpha-trust trial systems rejected because the mapped
+    !!                                correction was too large relative to the existing element block.
+    !> \param nRKMPHessianRejectUpdate Number of RKMP alpha-trust trial systems rejected because the solved
+    !!                                 update was too large relative to the alpha-zero update.
+    !> \param dRKMPHessianBlendAlpha User-facing nominal blend factor for the experimental RKMP correction.
+    !> \param dRKMPHessianMaxAppliedA Maximum accepted alpha-scaled RKMP correction applied to the GEM A matrix.
+    !> \param dRKMPHessianMaxAppliedB Maximum accepted alpha-scaled RKMP correction applied to the GEM B vector.
+    !> \param dRKMPHessianMaxAppliedRatio Maximum accepted A correction relative to the current element block.
+    !> \param dRKMPHessianMaxDeltaA Maximum unscaled RKMP correction candidate for the GEM A matrix.
+    !> \param dRKMPHessianMaxDeltaB Maximum unscaled RKMP correction candidate for the GEM B vector.
+    !> \param dRKMPHessianSelectedAlpha Largest RKMP alpha accepted by the Stage 1E alpha-trust trial solve.
+    !> \param dRKMPHessianUpdateNormRatio Accepted update norm divided by the alpha-zero update norm.
     !> \param lDebugMode        A logical variable used for debugging purposes.  When it is TRUE, a number
     !!                           of print statements are applied.
     !> \param lRevertSystem     A logical variable identifying whether the system should be reverted (TRUE)
@@ -60,6 +77,8 @@ module ModuleGEMSolver
     integer                              ::  iterLast,      iterStep, iterRevert, iterGlobal
     integer                              ::  iterLastCon,   iterLastSoln,         iterSwap,   iterLastMiscGapCheck
     integer                              ::  nRKMPHessianApplyCount
+    integer                              ::  nRKMPHessianRejectDGESV, nRKMPHessianRejectBadDelta
+    integer                              ::  nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
@@ -69,6 +88,7 @@ module ModuleGEMSolver
     real(8)                              ::  dRKMPHessianMaxAppliedA, dRKMPHessianMaxAppliedB
     real(8)                              ::  dRKMPHessianMaxAppliedRatio, dRKMPHessianMaxDeltaA
     real(8)                              ::  dRKMPHessianMaxDeltaB
+    real(8)                              ::  dRKMPHessianSelectedAlpha, dRKMPHessianUpdateNormRatio
     real(8), dimension(:),   allocatable ::  dSumMolFractionSoln, dMolesPhaseLast, dUpdateVar, dDrivingForceSoln
     real(8), dimension(:),   allocatable ::  dPartialExcessGibbs, dPartialExcessGibbsLast
     real(8), dimension(:,:), allocatable ::  dEffStoichSolnPhase

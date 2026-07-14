@@ -1,18 +1,32 @@
-    !---------------------------------------------------------------------------------------------------------
-    !
-    ! Purpose:
-    ! --------
-    ! Blend mapped RKMP local-response contributions into the GEMNewton constrained matrix A.
-    !
-    ! Current status:
-    ! ---------------
-    ! This is an experimental, opt-in Stage 1D path.  It uses the validated local RKMP curvature as part of a
-    ! constrained mole-fraction response solve, then applies only the difference between the RKMP response and
-    ! the corresponding ideal response to GEMNewton's element block.
-    !
-    !---------------------------------------------------------------------------------------------------------
+!-------------------------------------------------------------------------------------------------------------
+!
+!> \file    MapRKMPHessianToGEMVariables.f90
+!> \brief   Map plain-RKMP local response curvature into GEMNewton trial systems.
+!
+!> \details This experimental Stage 1D/1E routine converts the validated RKMP local excess Hessian into a
+!! constrained mole-fraction response, subtracts the corresponding ideal-response contribution, and applies the
+!! resulting delta to GEMNewton's element-potential block and residual vector.  The mapper is intentionally
+!! RKMP-only and is used both for accepted solver updates and for Stage 1E alpha-trust trial solves.
+!!
+!! Stage 1D supplies the response correction:
+!!   deltaA = A_RKMP_response - A_ideal_response
+!!   deltaB = deltaA * element_potential
+!!
+!! Stage 1E supplies an explicit trial alpha and controls whether accepted-run metrics are updated.  Trial calls
+!! use the same thermodynamic correction as accepted calls, but leave global counters untouched so rejected
+!! candidate alphas do not pollute the final audit summary.
+!
+!> \param[in,out] A GEMNewton matrix.  On return, receives alpha-scaled RKMP response deltas in the element block.
+!> \param[in,out] B GEMNewton right-hand side.  On return, receives the matching alpha-scaled RKMP residual delta.
+!> \param[in] nVar Number of GEMNewton unknowns represented by A and B.
+!> \param[in] dAlphaInput Candidate alpha for this trial or accepted application; internally clamped to [0,1].
+!> \param[in] lUpdateMetrics If true, update RKMP audit counters and emit detailed debug diagnostics when enabled.
+!> \param[out] lCorrectionOK False when an RKMP mapped correction contains invalid floating-point values.
+!> \param[out] dTrialMaxRatio Maximum alpha-scaled A correction relative to the current element block.
+!
+!-------------------------------------------------------------------------------------------------------------
 
-subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
+subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCorrectionOK,dTrialMaxRatio)
 
     USE ModuleThermo
     USE ModuleGEMSolver
@@ -34,9 +48,11 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
 
     integer                              :: i, j, k, p, nVar, nPhaseSpecies, iSolnPhases
     integer                              :: iFirst, iLast, INFO, nDiagFlip, nDiagNegAfter, nDiagNegBefore
-    real(8)                              :: dAlpha, dMaxA, dMaxDelta, dMaxApplied, dRatio, dTotalMoles
+    real(8)                              :: dAlphaInput, dAlpha, dMaxA, dMaxDelta, dMaxApplied, dRatio, dTotalMoles
     real(8)                              :: dMaxDeltaB, dMaxAppliedB
+    real(8)                              :: dTrialMaxRatio
     logical                              :: lBadDelta
+    logical                              :: lUpdateMetrics, lCorrectionOK
     real(8), dimension(nVar,nVar)        :: A, ARKMP
     real(8), dimension(nVar)             :: B, BRKMP
     real(8), allocatable, dimension(:)   :: dX, dLocalMoles
@@ -46,10 +62,12 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
 
     ARKMP = 0D0
     BRKMP = 0D0
+    lCorrectionOK = .TRUE.
+    dTrialMaxRatio = 0D0
 
     if (nSolnPhases <= 0) return
 
-    dAlpha = dRKMPHessianBlendAlpha
+    dAlpha = dAlphaInput
     dAlpha = DMAX1(0D0, DMIN1(1D0, dAlpha))
 
     LOOP_SOLN: do iSolnPhases = 1, nSolnPhases
@@ -93,7 +111,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
             return
         end if
 
-        if (lDebugRKMPHessianFD) call DebugRKMPHessianFiniteDifference(k,dHloc)
+        if (lDebugRKMPHessianFD .AND. lUpdateMetrics) call DebugRKMPHessianFiniteDifference(k,dHloc)
 
         ! Convert mole-number excess curvature to fixed-phase-amount mole-fraction curvature, then add
         ! ideal mixing curvature to form the local response matrix.
@@ -144,12 +162,15 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
             dMaxApplied = dAlpha * dMaxDelta
             dMaxAppliedB = dAlpha * dMaxDeltaB
             dRatio      = dMaxApplied / DMAX1(dMaxA, 1D-30)
-            nRKMPHessianApplyCount = nRKMPHessianApplyCount + 1
-            dRKMPHessianMaxAppliedA = DMAX1(dRKMPHessianMaxAppliedA, dMaxApplied)
-            dRKMPHessianMaxAppliedB = DMAX1(dRKMPHessianMaxAppliedB, dMaxAppliedB)
-            dRKMPHessianMaxAppliedRatio = DMAX1(dRKMPHessianMaxAppliedRatio, dRatio)
-            dRKMPHessianMaxDeltaA = DMAX1(dRKMPHessianMaxDeltaA, dMaxDelta)
-            dRKMPHessianMaxDeltaB = DMAX1(dRKMPHessianMaxDeltaB, dMaxDeltaB)
+            dTrialMaxRatio = DMAX1(dTrialMaxRatio, dRatio)
+            if (lUpdateMetrics) then
+                nRKMPHessianApplyCount = nRKMPHessianApplyCount + 1
+                dRKMPHessianMaxAppliedA = DMAX1(dRKMPHessianMaxAppliedA, dMaxApplied)
+                dRKMPHessianMaxAppliedB = DMAX1(dRKMPHessianMaxAppliedB, dMaxAppliedB)
+                dRKMPHessianMaxAppliedRatio = DMAX1(dRKMPHessianMaxAppliedRatio, dRatio)
+                dRKMPHessianMaxDeltaA = DMAX1(dRKMPHessianMaxDeltaA, dMaxDelta)
+                dRKMPHessianMaxDeltaB = DMAX1(dRKMPHessianMaxDeltaB, dMaxDeltaB)
+            end if
             nDiagFlip   = 0
             nDiagNegAfter  = 0
             nDiagNegBefore = 0
@@ -159,7 +180,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
                 if ((A(i,i) * (A(i,i) + dAlpha*dDelta(i,i))) < 0D0) nDiagFlip = nDiagFlip + 1
             end do
 
-            if (lDebugRKMPHessianFD) then
+            if (lDebugRKMPHessianFD .AND. lUpdateMetrics) then
                 write(*,'(A,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, &
                     'maxA=', dMaxA, 'maxDelta=', dMaxDelta, 'maxApplied=', dMaxApplied, &
@@ -170,9 +191,12 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
 
             ARKMP(1:nElements,1:nElements) = ARKMP(1:nElements,1:nElements) + dDelta
             BRKMP(1:nElements) = BRKMP(1:nElements) + dDeltaB
-        else if (lDebugRKMPHessianFD) then
-            write(*,'(A,1X,A,1X,I0,1X,A)') &
-                'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'skipped_bad_delta'
+        else
+            lCorrectionOK = .FALSE.
+            if (lDebugRKMPHessianFD .AND. lUpdateMetrics) then
+                write(*,'(A,1X,A,1X,I0,1X,A)') &
+                    'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'skipped_bad_delta'
+            end if
         end if
 
         deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &

@@ -244,12 +244,13 @@ subroutine GEMNewton(INFO)
             call RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
         end if
 
-        ! Optionally blend mapped RKMP second-order terms into constrained Newton matrix:
-        if (lUseRKMPExactHessian) call MapRKMPHessianToGEMVariables(A, B, nVar)
-
         ! Call the linear equation solver:
         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
-            call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
+            if (lUseRKMPExactHessian) then
+                call SolveRKMPAlphaTrust(A, B, nVar, IPIV, INFO)
+            else
+                call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
+            end if
         else
             do i = 1, nElements
                 B(i) = dElementPotential(i)
@@ -301,5 +302,138 @@ subroutine GEMNewton(INFO)
     if (i /= 0) INFOThermo = 24
 
     return
+
+contains
+
+    subroutine SolveRKMPAlphaTrust(AIn, BIn, nLocalVar, IPIVIn, INFOOut)
+
+        integer, intent(in)                    :: nLocalVar
+        integer, intent(out)                   :: INFOOut
+        integer, dimension(:)                  :: IPIVIn
+        real(8), dimension(:,:)                :: AIn
+        real(8), dimension(:)                  :: BIn
+
+        integer                                :: iAlpha, INFOBase, INFOTrial
+        integer, dimension(:), allocatable     :: IPIVTrial
+        real(8)                                :: dAlphaCandidate, dBestAlpha, dNormBase, dNormTrial
+        real(8)                                :: dTrialRatio, dBestUpdateRatio
+        real(8), parameter                     :: dRatioCap = 2D-3
+        real(8), parameter                     :: dUpdateRatioCap = 1.25D0
+        real(8), dimension(5)                  :: dAlphaList
+        real(8), dimension(:), allocatable     :: BBase, BTrial
+        real(8), dimension(:,:), allocatable   :: ABase, ATrial
+        logical                                :: lCorrectionOK, lAccepted
+
+        dAlphaList = [1D0, 1D-1, 1D-2, 1D-3, 0D0]
+        dBestAlpha = 0D0
+        dBestUpdateRatio = 0D0
+        lAccepted = .FALSE.
+        INFOOut = 0
+
+        allocate(ABase(nLocalVar,nLocalVar), ATrial(nLocalVar,nLocalVar), &
+                 BBase(nLocalVar), BTrial(nLocalVar), IPIVTrial(nLocalVar))
+
+        ABase = AIn
+        BBase = BIn
+
+        ATrial = ABase
+        BTrial = BBase
+        IPIVTrial = 0
+        call dgesv(nLocalVar, 1, ATrial, nLocalVar, IPIVTrial, BTrial, nLocalVar, INFOBase)
+        call CheckSolvedUpdate(BTrial, nLocalVar, INFOBase)
+        if (INFOBase /= 0) then
+            INFOOut = INFOBase
+            deallocate(ABase, ATrial, BBase, BTrial, IPIVTrial)
+            return
+        end if
+
+        dNormBase = DMAX1(MAXVAL(DABS(BTrial)), 1D-30)
+
+        if (dRKMPHessianBlendAlpha <= 0D0) then
+            dRKMPHessianSelectedAlpha = 0D0
+            dRKMPHessianUpdateNormRatio = 1D0
+        else
+            LOOP_ALPHA_TRUST: do iAlpha = 1, 5
+                dAlphaCandidate = dAlphaList(iAlpha)
+
+                ATrial = ABase
+                BTrial = BBase
+                lCorrectionOK = .TRUE.
+                dTrialRatio = 0D0
+                call MapRKMPHessianToGEMVariables(ATrial, BTrial, nLocalVar, dAlphaCandidate, &
+                                                   .FALSE., lCorrectionOK, dTrialRatio)
+
+                if (.NOT. lCorrectionOK) then
+                    nRKMPHessianRejectBadDelta = nRKMPHessianRejectBadDelta + 1
+                    cycle LOOP_ALPHA_TRUST
+                end if
+
+                if (dTrialRatio > dRatioCap) then
+                    nRKMPHessianRejectRatio = nRKMPHessianRejectRatio + 1
+                    cycle LOOP_ALPHA_TRUST
+                end if
+
+                IPIVTrial = 0
+                call dgesv(nLocalVar, 1, ATrial, nLocalVar, IPIVTrial, BTrial, nLocalVar, INFOTrial)
+                call CheckSolvedUpdate(BTrial, nLocalVar, INFOTrial)
+                if (INFOTrial /= 0) then
+                    nRKMPHessianRejectDGESV = nRKMPHessianRejectDGESV + 1
+                    cycle LOOP_ALPHA_TRUST
+                end if
+
+                dNormTrial = MAXVAL(DABS(BTrial))
+                dBestUpdateRatio = dNormTrial / dNormBase
+                if (dBestUpdateRatio > dUpdateRatioCap) then
+                    nRKMPHessianRejectUpdate = nRKMPHessianRejectUpdate + 1
+                    cycle LOOP_ALPHA_TRUST
+                end if
+
+                dBestAlpha = dAlphaCandidate
+                lAccepted = .TRUE.
+                exit LOOP_ALPHA_TRUST
+            end do LOOP_ALPHA_TRUST
+
+            if (.NOT. lAccepted) then
+                dBestAlpha = 0D0
+                dBestUpdateRatio = 1D0
+            end if
+
+            dRKMPHessianSelectedAlpha = dBestAlpha
+            dRKMPHessianUpdateNormRatio = dBestUpdateRatio
+        end if
+
+        AIn = ABase
+        BIn = BBase
+        lCorrectionOK = .TRUE.
+        dTrialRatio = 0D0
+        call MapRKMPHessianToGEMVariables(AIn, BIn, nLocalVar, dBestAlpha, .TRUE., lCorrectionOK, dTrialRatio)
+        IPIVIn = 0
+        call dgesv(nLocalVar, 1, AIn, nLocalVar, IPIVIn, BIn, nLocalVar, INFOOut)
+        call CheckSolvedUpdate(BIn, nLocalVar, INFOOut)
+
+        deallocate(ABase, ATrial, BBase, BTrial, IPIVTrial)
+
+    end subroutine SolveRKMPAlphaTrust
+
+
+    subroutine CheckSolvedUpdate(BLocal, nLocalVar, INFOLocal)
+
+        integer, intent(in)                  :: nLocalVar
+        integer, intent(inout)               :: INFOLocal
+        real(8), dimension(:), intent(in)    :: BLocal
+
+        integer                              :: iLocal
+
+        if (INFOLocal /= 0) return
+
+        do iLocal = 1, nLocalVar
+            if ((BLocal(iLocal) /= BLocal(iLocal)) .OR. &
+                (DABS(BLocal(iLocal)) > 0.5D0 * HUGE(1D0))) then
+                INFOLocal = 1
+                return
+            end if
+        end do
+
+    end subroutine CheckSolvedUpdate
 
 end subroutine GEMNewton
