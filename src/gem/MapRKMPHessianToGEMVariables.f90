@@ -10,7 +10,7 @@
 !!
 !! Stage 1D supplies the response correction:
 !!   deltaA = A_RKMP_response - A_ideal_response
-!!   deltaB = deltaA * element_potential
+!!   deltaB = N C^T (R_RKMP - R_ideal) mu
 !!
 !! Stage 1E supplies an explicit trial alpha and controls whether accepted-run metrics are updated.  Trial calls
 !! use the same thermodynamic correction as accepted calls, but leave global counters untouched so rejected
@@ -55,9 +55,10 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
     logical                              :: lUpdateMetrics, lCorrectionOK
     real(8), dimension(nVar,nVar)        :: A, ARKMP
     real(8), dimension(nVar)             :: B, BRKMP
-    real(8), allocatable, dimension(:)   :: dX, dLocalMoles
+    real(8), allocatable, dimension(:)   :: dX, dLocalMoles, dMu
     real(8), allocatable, dimension(:)   :: dDeltaB
-    real(8), allocatable, dimension(:,:) :: dC, dHloc, dHx, dResponse, dIdealCandidate
+    real(8), allocatable, dimension(:,:) :: dC, dHloc, dHx, dResponse, dIdealCandidate, dIdealResponse
+    real(8), allocatable, dimension(:,:) :: dMuRHS, dMuResponse, dIdealMuResponse
     real(8), allocatable, dimension(:,:) :: dCandidate, dDelta
 
     ARKMP = 0D0
@@ -81,21 +82,27 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
         nPhaseSpecies = iLast - iFirst + 1
         if (nPhaseSpecies <= 1) cycle LOOP_SOLN
 
-        allocate(dX(nPhaseSpecies), dLocalMoles(nPhaseSpecies), dC(nPhaseSpecies,nElements), &
+        allocate(dX(nPhaseSpecies), dLocalMoles(nPhaseSpecies), dMu(nPhaseSpecies), &
+                 dC(nPhaseSpecies,nElements), &
                  dHloc(nPhaseSpecies,nPhaseSpecies), dHx(nPhaseSpecies,nPhaseSpecies), &
-                 dResponse(nPhaseSpecies,nElements), dIdealCandidate(nElements,nElements), &
+                 dResponse(nPhaseSpecies,nElements), dIdealResponse(nPhaseSpecies,nElements), &
+                 dMuRHS(nPhaseSpecies,1), dMuResponse(nPhaseSpecies,1), &
+                 dIdealMuResponse(nPhaseSpecies,1), dIdealCandidate(nElements,nElements), &
                  dCandidate(nElements,nElements), dDelta(nElements,nElements), dDeltaB(nElements))
 
         dLocalMoles = dMolesSpecies(iFirst:iLast)
         dTotalMoles = SUM(dLocalMoles)
         if (dTotalMoles <= 1D-30) then
-            deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &
-                       dCandidate, dDelta, dDeltaB)
+            deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                       dDelta, dDeltaB)
             cycle LOOP_SOLN
         end if
 
         dX = DMAX1(dLocalMoles / dTotalMoles, 1D-30)
         dX = dX / SUM(dX)
+        dMu = dChemicalPotential(iFirst:iLast)
+        dMuRHS(:,1) = dMu
 
         do j = 1, nElements
             do i = 1, nPhaseSpecies
@@ -106,8 +113,9 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
         call CompExcessGibbsEnergyRKMP_unconstrained(k,dHloc)
         if (INFOThermo /= 0) then
-            deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &
-                       dCandidate, dDelta, dDeltaB)
+            deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                       dDelta, dDeltaB)
             return
         end if
 
@@ -126,25 +134,37 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
                 write(*,'(A,1X,A,1X,I0,1X,A,1X,I0)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'response_solve_info=', INFO
             end if
-            deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &
-                       dCandidate, dDelta, dDeltaB)
+            deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                       dDelta, dDeltaB)
+            cycle LOOP_SOLN
+        end if
+
+        call SolveLocalResponse(nPhaseSpecies, 1, dHx, dMuRHS, dMuResponse, INFO)
+        if (INFO /= 0) then
+            deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                       dDelta, dDeltaB)
             cycle LOOP_SOLN
         end if
 
         dCandidate = MATMUL(TRANSPOSE(dC), dTotalMoles * dResponse)
-        call ComputeIdealCandidate(nPhaseSpecies, nElements, dX, dC, dTotalMoles, dIdealCandidate, INFO)
+        call ComputeIdealCandidate(nPhaseSpecies, nElements, dX, dC, dMuRHS, dTotalMoles, &
+                                   dIdealCandidate, dIdealResponse, dIdealMuResponse, INFO)
         if (INFO /= 0) then
             if (lDebugRKMPHessianFD) then
                 write(*,'(A,1X,A,1X,I0,1X,A,1X,I0)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'ideal_solve_info=', INFO
             end if
-            deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &
-                       dCandidate, dDelta, dDeltaB)
+            deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                       dDelta, dDeltaB)
             cycle LOOP_SOLN
         end if
 
         dDelta = dCandidate - dIdealCandidate
-        dDeltaB = MATMUL(dDelta, dElementPotential(1:nElements))
+        dDeltaB = MATMUL(TRANSPOSE(dC), dTotalMoles * &
+            (dMuResponse(:,1) - dIdealMuResponse(:,1)))
 
         lBadDelta = .FALSE.
         do j = 1, nElements
@@ -199,8 +219,9 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             end if
         end if
 
-        deallocate(dX, dLocalMoles, dC, dHloc, dHx, dResponse, dIdealCandidate, &
-                   dCandidate, dDelta, dDeltaB)
+        deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
+                   dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
+                   dDelta, dDeltaB)
 
     end do LOOP_SOLN
 
@@ -251,19 +272,22 @@ contains
 
     end subroutine SolveLocalResponse
 
-    subroutine ComputeIdealCandidate(nSpecies, nElem, dXLocal, dCLocal, dPhaseMoles, dIdeal, INFO)
+    subroutine ComputeIdealCandidate(nSpecies, nElem, dXLocal, dCLocal, dMuLocal, dPhaseMoles, &
+                                     dIdeal, dRespIdeal, dMuRespIdeal, INFO)
 
         integer, intent(in)                    :: nSpecies, nElem
         integer, intent(out)                   :: INFO
         real(8), intent(in), dimension(:)      :: dXLocal
         real(8), intent(in), dimension(:,:)    :: dCLocal
+        real(8), intent(in), dimension(:,:)    :: dMuLocal
         real(8), intent(in)                    :: dPhaseMoles
         real(8), intent(out), dimension(:,:)   :: dIdeal
+        real(8), intent(out), dimension(:,:)   :: dRespIdeal, dMuRespIdeal
 
         integer                                :: ii
-        real(8), dimension(:,:), allocatable   :: dHideal, dRespIdeal
+        real(8), dimension(:,:), allocatable   :: dHideal
 
-        allocate(dHideal(nSpecies,nSpecies), dRespIdeal(nSpecies,nElem))
+        allocate(dHideal(nSpecies,nSpecies))
         dHideal = 0D0
         do ii = 1, nSpecies
             dHideal(ii,ii) = 1D0 / dXLocal(ii)
@@ -272,11 +296,13 @@ contains
         call SolveLocalResponse(nSpecies, nElem, dHideal, dCLocal, dRespIdeal, INFO)
         if (INFO == 0) then
             dIdeal = MATMUL(TRANSPOSE(dCLocal), dPhaseMoles * dRespIdeal)
+            call SolveLocalResponse(nSpecies, 1, dHideal, dMuLocal, dMuRespIdeal, INFO)
         else
             dIdeal = 0D0
+            dMuRespIdeal = 0D0
         end if
 
-        deallocate(dHideal, dRespIdeal)
+        deallocate(dHideal)
 
     end subroutine ComputeIdealCandidate
 

@@ -336,7 +336,7 @@ contains
         real(8), parameter                     :: dGibbsActivationTolerance = 1D-6
         real(8), parameter                     :: dGibbsRetentionTolerance = 1D-4
         real(8), dimension(5)                  :: dAlphaList
-        real(8), dimension(:), allocatable     :: BBase, BTrial, BZero
+        real(8), dimension(:), allocatable     :: BBase, BTrial, BZero, dStepTrial, dStepZero
         real(8), dimension(:,:), allocatable   :: ABase, ATrial
         logical                                :: lCorrectionOK, lAccepted
 
@@ -349,7 +349,8 @@ contains
         INFOOut = 0
 
         allocate(ABase(nLocalVar,nLocalVar), ATrial(nLocalVar,nLocalVar), &
-                 BBase(nLocalVar), BTrial(nLocalVar), BZero(nLocalVar), IPIVTrial(nLocalVar))
+                 BBase(nLocalVar), BTrial(nLocalVar), BZero(nLocalVar), &
+                 dStepTrial(nLocalVar), dStepZero(nLocalVar), IPIVTrial(nLocalVar))
 
         ABase = AIn
         BBase = BIn
@@ -361,13 +362,14 @@ contains
         call CheckSolvedUpdate(BTrial, nLocalVar, INFOBase)
         if (INFOBase /= 0) then
             INFOOut = INFOBase
-            deallocate(ABase, ATrial, BBase, BTrial, BZero, IPIVTrial)
+            deallocate(ABase, ATrial, BBase, BTrial, BZero, dStepTrial, dStepZero, IPIVTrial)
             return
         end if
 
         BZero = BTrial
-        dNormBase = DMAX1(MAXVAL(DABS(BTrial)), 1D-30)
-        dNormBase2 = DMAX1(SQRT(SUM(BZero**2)), 1D-30)
+        call BuildSolvedDisplacement(BZero, nLocalVar, dStepZero)
+        dNormBase = DMAX1(MAXVAL(DABS(dStepZero)), 1D-30)
+        dNormBase2 = DMAX1(SQRT(SUM(dStepZero**2)), 1D-30)
 
         dCurrentGibbs = 0D0
         do iLocal = 1, nElements
@@ -430,16 +432,17 @@ contains
                     cycle LOOP_ALPHA_TRUST
                 end if
 
-                dNormTrial = MAXVAL(DABS(BTrial))
+                call BuildSolvedDisplacement(BTrial, nLocalVar, dStepTrial)
+                dNormTrial = MAXVAL(DABS(dStepTrial))
                 dBestUpdateRatio = dNormTrial / dNormBase
                 if (dBestUpdateRatio > dUpdateRatioCap) then
                     nRKMPHessianRejectUpdate = nRKMPHessianRejectUpdate + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
 
-                dNormTrial2 = DMAX1(SQRT(SUM(BTrial**2)), 1D-30)
-                dDirectionCosine = DOT_PRODUCT(BZero,BTrial) / (dNormBase2*dNormTrial2)
-                dDirectionDifference = SQRT(SUM((BTrial-BZero)**2)) / dNormBase2
+                dNormTrial2 = DMAX1(SQRT(SUM(dStepTrial**2)), 1D-30)
+                dDirectionCosine = DOT_PRODUCT(dStepZero,dStepTrial) / (dNormBase2*dNormTrial2)
+                dDirectionDifference = SQRT(SUM((dStepTrial-dStepZero)**2)) / dNormBase2
                 if ((dAlphaCandidate > 0D0) .AND. &
                     ((dDirectionCosine < dDirectionCosineMin) .OR. &
                      (dDirectionDifference > dDirectionDifferenceCap))) then
@@ -477,9 +480,34 @@ contains
             nRKMPHessianFullAlphaCount = nRKMPHessianFullAlphaCount + 1
         end if
 
-        deallocate(ABase, ATrial, BBase, BTrial, BZero, IPIVTrial)
+        deallocate(ABase, ATrial, BBase, BTrial, BZero, dStepTrial, dStepZero, IPIVTrial)
 
     end subroutine SolveRKMPAlphaTrust
+
+
+    !> \brief Convert a solved GEM variable vector into the displacement applied by the line search.
+    !!
+    !> \details Element potentials and pure condensed phase amounts are absolute targets, whereas solution-phase
+    !! entries are incremental logarithmic multipliers.  Alpha trust must compare these displacements rather than
+    !! the absolute DGESV output, whose common target values can hide a materially changed Newton direction.
+    subroutine BuildSolvedDisplacement(BSolved, nLocalVar, dStep)
+
+        integer, intent(in)                    :: nLocalVar
+        real(8), dimension(:), intent(in)      :: BSolved
+        real(8), dimension(:), intent(out)     :: dStep
+
+        integer                                :: iLocal, iOffset
+
+        dStep = BSolved
+        dStep(1:nElements) = BSolved(1:nElements) - dElementPotential(1:nElements)
+
+        iOffset = nElements + nSolnPhases
+        do iLocal = 1, nConPhases
+            if (iOffset + iLocal > nLocalVar) exit
+            dStep(iOffset + iLocal) = BSolved(iOffset + iLocal) - dMolesPhase(iLocal)
+        end do
+
+    end subroutine BuildSolvedDisplacement
 
 
     subroutine CheckSolvedUpdate(BLocal, nLocalVar, INFOLocal)

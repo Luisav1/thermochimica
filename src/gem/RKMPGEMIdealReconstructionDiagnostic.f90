@@ -30,6 +30,7 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
     real(8), allocatable, dimension(:)     :: dDirectAep, dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe
     real(8), allocatable, dimension(:,:)   :: dC, dDirectAee, dReconAee
     real(8), allocatable, dimension(:,:)   :: dHloc, dHx, dResponse, dIdealResponse
+    real(8), allocatable, dimension(:,:)   :: dMuRHS, dMuResponse, dIdealMuResponse
     real(8), allocatable, dimension(:,:)   :: dCenteredAee, dIdealCenteredAee, dOuterAee, dNewAee, dDeltaAee
 
     if (.NOT. lDebugRKMPHessianFD) return
@@ -56,6 +57,8 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
                  dDirectBe(nElements), dReconBe(nElements), dNewBe(nElements), dDeltaBe(nElements), &
                  dHloc(nPhaseSpecies,nPhaseSpecies), dHx(nPhaseSpecies,nPhaseSpecies), &
                  dResponse(nPhaseSpecies,nElements), dIdealResponse(nPhaseSpecies,nElements), &
+                 dMuRHS(nPhaseSpecies,1), dMuResponse(nPhaseSpecies,1), &
+                 dIdealMuResponse(nPhaseSpecies,1), &
                  dCenteredAee(nElements,nElements), dIdealCenteredAee(nElements,nElements), &
                  dOuterAee(nElements,nElements), dNewAee(nElements,nElements), dDeltaAee(nElements,nElements))
 
@@ -65,12 +68,13 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
             deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
                        dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
                        dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
-                       dOuterAee, dNewAee, dDeltaAee)
+                       dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
             cycle LOOP_SOLN
         end if
 
         dX  = dLocalMoles / dPhaseMoles
         dMu = dChemicalPotential(iFirst:iLast)
+        dMuRHS(:,1) = dMu
 
         do j = 1, nElements
             do i = 1, nPhaseSpecies
@@ -137,7 +141,16 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
             deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
                        dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
                        dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
-                       dOuterAee, dNewAee, dDeltaAee)
+                       dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
+            cycle LOOP_SOLN
+        end if
+
+        call SolveLocalResponse(nPhaseSpecies, 1, dHx, dMuRHS, dMuResponse, INFO)
+        if (INFO /= 0) then
+            deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
+                       dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
+                       dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
             cycle LOOP_SOLN
         end if
 
@@ -148,7 +161,16 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
             deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
                        dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
                        dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
-                       dOuterAee, dNewAee, dDeltaAee)
+                       dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
+            cycle LOOP_SOLN
+        end if
+
+        call SolveIdealResponse(nPhaseSpecies, 1, dX, dMuRHS, dIdealMuResponse, INFO)
+        if (INFO /= 0) then
+            deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
+                       dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
+                       dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
+                       dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
             cycle LOOP_SOLN
         end if
 
@@ -156,7 +178,10 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
         dIdealCenteredAee = MATMUL(TRANSPOSE(dC), dPhaseMoles * dIdealResponse)
         dNewAee           = dOuterAee + dCenteredAee
         dDeltaAee         = dNewAee - dReconAee
-        dDeltaBe          = MATMUL(dDeltaAee, dElementPotential(1:nElements))
+        ! Re-condense the current local stationarity forcing through each response.  Using deltaA*gamma here
+        ! would agree only after the species chemical-potential residual is already zero.
+        dDeltaBe          = MATMUL(TRANSPOSE(dC), dPhaseMoles * &
+            (dMuResponse(:,1) - dIdealMuResponse(:,1)))
         dNewBe            = dReconBe + dDeltaBe
 
         dMaxAeeDiff = MAXVAL(DABS(dDirectAee - dReconAee))
@@ -195,7 +220,7 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
         deallocate(dX, dLocalMoles, dMu, dC, dDirectAee, dReconAee, dDirectAep, &
                    dReconAep, dDirectBe, dReconBe, dNewBe, dDeltaBe, dHloc, dHx, &
                    dResponse, dIdealResponse, dCenteredAee, dIdealCenteredAee, &
-                   dOuterAee, dNewAee, dDeltaAee)
+                   dMuRHS, dMuResponse, dIdealMuResponse, dOuterAee, dNewAee, dDeltaAee)
 
     end do LOOP_SOLN
 
