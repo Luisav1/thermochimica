@@ -59,12 +59,16 @@ module ModuleGEMSolver
 
     integer                              ::  iterLast,      iterStep, iterRevert, iterGlobal
     integer                              ::  iterLastCon,   iterLastSoln,         iterSwap,   iterLastMiscGapCheck
+    integer                              ::  nRKMPHessianApplyCount
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
 
     real(8)                              ::  dGEMFunctionNorm,    dGEMFunctionNormLast, dMaxSpeciesChange, dMinGibbs
     real(8)                              ::  dRKMPHessianBlendAlpha
+    real(8)                              ::  dRKMPHessianMaxAppliedA, dRKMPHessianMaxAppliedB
+    real(8)                              ::  dRKMPHessianMaxAppliedRatio, dRKMPHessianMaxDeltaA
+    real(8)                              ::  dRKMPHessianMaxDeltaB
     real(8), dimension(:),   allocatable ::  dSumMolFractionSoln, dMolesPhaseLast, dUpdateVar, dDrivingForceSoln
     real(8), dimension(:),   allocatable ::  dPartialExcessGibbs, dPartialExcessGibbsLast
     real(8), dimension(:,:), allocatable ::  dEffStoichSolnPhase

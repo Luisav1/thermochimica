@@ -144,6 +144,12 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar)
             dMaxApplied = dAlpha * dMaxDelta
             dMaxAppliedB = dAlpha * dMaxDeltaB
             dRatio      = dMaxApplied / DMAX1(dMaxA, 1D-30)
+            nRKMPHessianApplyCount = nRKMPHessianApplyCount + 1
+            dRKMPHessianMaxAppliedA = DMAX1(dRKMPHessianMaxAppliedA, dMaxApplied)
+            dRKMPHessianMaxAppliedB = DMAX1(dRKMPHessianMaxAppliedB, dMaxAppliedB)
+            dRKMPHessianMaxAppliedRatio = DMAX1(dRKMPHessianMaxAppliedRatio, dRatio)
+            dRKMPHessianMaxDeltaA = DMAX1(dRKMPHessianMaxDeltaA, dMaxDelta)
+            dRKMPHessianMaxDeltaB = DMAX1(dRKMPHessianMaxDeltaB, dMaxDeltaB)
             nDiagFlip   = 0
             nDiagNegAfter  = 0
             nDiagNegBefore = 0

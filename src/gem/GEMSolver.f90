@@ -143,6 +143,17 @@ subroutine GEMSolver
     ! Report an error if the GEMSolver did not converge but no other errors were encountered:
     if (.NOT.(lConverged).AND.(INFOThermo == 0)) INFOThermo = 12
 
+    if (lDebugRKMPHessianFD) then
+        write(*,'(A,1X,A,1X,L1,1X,A,1X,ES14.6,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,L1,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,I0)') &
+            'RKMP_SOLVER_IMPACT', 'useExact=', lUseRKMPExactHessian, &
+            'alpha=', dRKMPHessianBlendAlpha, 'iterGlobal=', iterGlobal, &
+            'iterLast=', iterLast, 'converged=', lConverged, 'INFOThermo=', INFOThermo, &
+            'nSolnPhases=', nSolnPhases, 'nConPhases=', nConPhases, &
+            'finalNorm=', dGEMFunctionNorm, 'maxAppliedA=', dRKMPHessianMaxAppliedA, &
+            'maxAppliedB=', dRKMPHessianMaxAppliedB, 'maxAppliedRatio=', dRKMPHessianMaxAppliedRatio, &
+            'applyCount=', nRKMPHessianApplyCount
+    end if
+
     return
 
 end subroutine GEMSolver
