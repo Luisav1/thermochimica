@@ -123,7 +123,7 @@ subroutine GEMLineSearch
 
     implicit none
 
-    integer                       :: iterWolfe
+    integer                       :: iterWolfe, nMaxWolfe
     real(8)                       :: dStepLength, dTemp, dWolfeFunctionNormLast
     real(8), dimension(nElements) :: dElementPotentialLast
     real(8), dimension(nSpecies)  :: dMolesSpeciesLast
@@ -137,12 +137,16 @@ subroutine GEMLineSearch
     dGEMFunctionNormLast    = dGEMFunctionNorm
     dPartialExcessGibbsLast = dPartialExcessGibbs
     lCompEverything         = .FALSE.
+    nMaxWolfe               = 5
+    ! A mixed solution/pure assemblage can require additional backtracking while curvature changes both local
+    ! composition response and phase competition.  Keep the historical budget for every default-off solve.
+    if (lUseRKMPExactHessian .AND. nSolnPhases > 0 .AND. nConPhases > 0) nMaxWolfe = 10
 
     ! Initialize the line search method:
     call InitGEMLineSearch(dStepLength,dMolesSpeciesLast,dElementPotentialLast)
 
     ! Commence line search:
-    LOOP_WOLFE: do iterWolfe = 1, 5
+    LOOP_WOLFE: do iterWolfe = 1, nMaxWolfe
 
         ! Compute the fractional change in the functional norm:
         dTemp = dGEMFunctionNorm / dWolfeFunctionNormLast
