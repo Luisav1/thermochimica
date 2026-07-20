@@ -77,8 +77,8 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
 
     LOOP_Param: do iParam = nParamPhase(iSolnIndex-1)+1, nParamPhase(iSolnIndex)
 
-        ! Stage-1 implementation supports binary RKMP terms only.
-        ! Ternary and higher-order cases are intentionally skipped for now.
+        ! Implementation supports binary RKMP terms only.
+        ! Ternary and higher-order cases are intentionally skipped.
         if (iRegularParam(iParam,1) /= 2) cycle LOOP_Param
 
         ! Local species IDs participating in this binary interaction parameter.

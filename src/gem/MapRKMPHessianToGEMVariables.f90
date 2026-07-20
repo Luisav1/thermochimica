@@ -3,28 +3,28 @@
 !> \file    MapRKMPHessianToGEMVariables.f90
 !> \brief   Map plain-RKMP local response curvature into GEMNewton trial systems.
 !
-!> \details This experimental Stage 1D/1E routine converts the validated RKMP local excess Hessian into a
+!> \details This routine converts the validated RKMP local excess Hessian into a
 !! constrained mole-fraction response, subtracts the corresponding ideal-response contribution, and applies the
 !! resulting delta to GEMNewton's element-potential block and residual vector.  The mapper is intentionally
-!! RKMP-only and is used both for accepted solver updates and for Stage 1E alpha-trust trial solves.
+!! RKMP-only and is used both for accepted solver updates and for alpha-trust trial solves.
 !!
 !! Stage 1D supplies the response correction:
 !!   deltaA = A_RKMP_response - A_ideal_response
 !!   deltaB = N C^T (R_RKMP - R_ideal) mu
 !!
-!! Stage 1E supplies an explicit trial alpha and controls whether accepted-run metrics are updated.  Trial calls
+!! This stage supplies an explicit trial alpha and controls whether accepted-run metrics are updated.  Trial calls
 !! use the same thermodynamic correction as accepted calls, but leave global counters untouched so rejected
 !! candidate alphas do not pollute the final audit summary.
 !
-!> \param[in,out] A GEMNewton matrix.  On return, receives alpha-scaled RKMP response deltas in the element block.
-!> \param[in,out] B GEMNewton right-hand side.  On return, receives the matching alpha-scaled RKMP residual delta.
-!> \param[in] nVar Number of GEMNewton unknowns represented by A and B.
-!> \param[in] dAlphaInput Candidate correction-blend alpha selected by trust logic and internally clamped to
-!!                        [0,1].  It scales mapped deltaA and deltaB only after the full RKMP curvature and
-!!                        constrained response have been constructed.
-!> \param[in] lUpdateMetrics If true, update RKMP audit counters and emit detailed debug diagnostics when enabled.
-!> \param[out] lCorrectionOK False when an RKMP mapped correction contains invalid floating-point values.
-!> \param[out] dTrialMaxRatio Maximum alpha-scaled A correction relative to the current element block.
+!> \param[in,out] A              GEMNewton matrix.  On return, receives alpha-scaled RKMP response deltas in the element block.
+!> \param[in,out] B              GEMNewton right-hand side.  On return, receives the matching alpha-scaled RKMP residual delta.
+!> \param[in]     nVar           Number of GEMNewton unknowns represented by A and B.
+!> \param[in]     dAlphaInput.   Candidate correction-blend alpha selected by trust logic and internally clamped to
+!!                               [0,1].  It scales mapped deltaA and deltaB only after the full RKMP curvature and
+!!                               constrained response have been constructed.
+!> \param[in]     lUpdateMetrics If true, update RKMP audit counters and emit detailed debug diagnostics when enabled.
+!> \param[out]    lCorrectionOK  False when an RKMP mapped correction contains invalid floating-point values.
+!> \param[out]    dTrialMaxRatio Maximum alpha-scaled A correction relative to the current element block.
 !
 !-------------------------------------------------------------------------------------------------------------
 
