@@ -27,6 +27,7 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     integer :: i, j, iParam, iStep, ia, ib, iaParam, ibParam, iExponentParam
     integer :: iFirstSpecies, iLastSpecies, nPhaseSpecies
     real(8) :: dAnalytic, dAnalyticParam, dEnergyMinus, dEnergyZero, dEnergyPlus
+    real(8) :: dIdealAnalytic, dIdealEnergyMinus, dIdealEnergyZero, dIdealEnergyPlus, dIdealFD
     real(8) :: dEps, dFD, dFDParam, dN, dRelativeError, dScale
     real(8), allocatable, dimension(:) :: dDirection, dMolesLocal, dMolesMinus, dMolesPlus
 
@@ -78,6 +79,14 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     end do
 
     dEnergyZero = CompSupportedBinaryRKMPExcessEnergy(dMolesLocal)
+    dIdealEnergyZero = CompIdealMixingEnergy(dMolesLocal)
+    dIdealAnalytic = 0D0
+    do i = 1, nPhaseSpecies
+        if (dDirection(i) /= 0D0) then
+            dIdealAnalytic = dIdealAnalytic + dDirection(i)*dDirection(i) / dMolesLocal(i)
+        end if
+    end do
+    dIdealAnalytic = dIdealAnalytic - SUM(dDirection)**2 / dN
 
     do iStep = 1, 5
         dEps = dScale * 10D0**(-iStep)
@@ -91,6 +100,17 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
         write(*,'(A,1X,F12.4,1X,A,1X,I5,1X,A,1X,I5,1X,A,1X,I5,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6)') &
             'RKMP_FD_DEBUG T=', dTemperature, 'k=', iSolnIndex, 'ia=', ia, 'ib=', ib, 'eps=', dEps, &
             'analytic=', dAnalytic, 'fd=', dFD, 'relerr=', dRelativeError
+
+        ! Apply the identical stencil to the established ideal-mixing energy.  This control separates
+        ! finite-difference cancellation at small epsilon from errors specific to the RKMP Hessian.
+        dIdealEnergyMinus = CompIdealMixingEnergy(dMolesMinus)
+        dIdealEnergyPlus = CompIdealMixingEnergy(dMolesPlus)
+        dIdealFD = (dIdealEnergyPlus - 2D0*dIdealEnergyZero + dIdealEnergyMinus) / (dEps*dEps)
+        dRelativeError = DABS(dIdealFD-dIdealAnalytic) / DMAX1(DABS(dIdealAnalytic),1D-30)
+
+        write(*,'(A,1X,F12.4,1X,A,1X,I5,1X,A,1X,I5,1X,A,1X,I5,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6)') &
+            'RKMP_IDEAL_FD_REFERENCE T=', dTemperature, 'k=', iSolnIndex, 'ia=', ia, 'ib=', ib, &
+            'eps=', dEps, 'analytic=', dIdealAnalytic, 'fd=', dIdealFD, 'relerr=', dRelativeError
     end do
 
     ! Per-parameter diagnostic at the middle epsilon scale used above.  This identifies which binary
@@ -125,6 +145,29 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     deallocate(dDirection,dMolesLocal,dMolesMinus,dMolesPlus)
 
 contains
+
+    real(8) function CompIdealMixingEnergy(dMoles)
+
+        implicit none
+
+        real(8), intent(in), dimension(:) :: dMoles
+
+        integer :: iLocal
+        real(8) :: dNLocal
+
+        CompIdealMixingEnergy = 0D0
+        dNLocal = SUM(dMoles)
+        if (dNLocal <= 1D-30) return
+
+        do iLocal = 1, SIZE(dMoles)
+            if (dMoles(iLocal) < 0D0) return
+            if (dMoles(iLocal) > 0D0) then
+                CompIdealMixingEnergy = CompIdealMixingEnergy + &
+                    dMoles(iLocal) * DLOG(dMoles(iLocal)/dNLocal)
+            end if
+        end do
+
+    end function CompIdealMixingEnergy
 
     real(8) function CompSupportedBinaryRKMPExcessEnergy(dMoles)
 

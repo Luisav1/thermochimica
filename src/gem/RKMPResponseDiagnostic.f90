@@ -21,10 +21,11 @@ subroutine RKMPResponseDiagnostic
         end subroutine CompExcessGibbsEnergyRKMP
     end interface
 
-    integer                              :: i, j, k, m, p, nLocalSpecies, iFirstSpecies, iLastSpecies
+    integer                              :: i, j, k, m, p, iStep, nLocalSpecies, iFirstSpecies, iLastSpecies
     integer                              :: INFO
-    real(8)                              :: dTotalMoles, dEps, dNorm, dMaxCurvEx, dMaxCurvIdeal
-    real(8)                              :: dMaxResponse, dMaxFDResponseErr, dMaxCandidateDelta
+    real(8)                              :: dTotalMoles, dEps, dFDScale, dNorm, dMaxCurvEx, dMaxCurvIdeal
+    real(8)                              :: dFDResponseRelative, dMaxResponse, dMaxFDResponseErr
+    real(8)                              :: dMaxCandidateDelta
     real(8), dimension(:), allocatable   :: dX, dXBase, dGammaDir, dDX, dMuPlus, dMuMinus, dMuAnalytic
     real(8), dimension(:), allocatable   :: dMolFractionSave, dPartialExcessSave
     real(8), dimension(:,:), allocatable :: dHloc, dHx, dC, dResponse, dCandidate, dIdealCandidate
@@ -103,30 +104,43 @@ subroutine RKMPResponseDiagnostic
         dNorm = MAXVAL(DABS(dDX))
         if (dNorm > 0D0) dDX = dDX / dNorm
 
-        dEps = 1D-6
+        ! Sweep the established production partial-molar RKMP routine over notebook-style perturbations.
+        ! Reduce the common scale only when a dilute component would otherwise become non-positive.
+        dFDScale = 1D0
         do i = 1, nLocalSpecies
-            if (dDX(i) < 0D0) dEps = DMIN1(dEps, 0.25D0 * dX(i) / DABS(dDX(i)))
+            if (DABS(dDX(i)) > 0D0) then
+                dFDScale = DMIN1(dFDScale, 25D0 * dX(i) / DABS(dDX(i)))
+            end if
         end do
-        dEps = DMAX1(dEps, 1D-10)
 
         dMolFractionSave = dMolFraction(iFirstSpecies:iLastSpecies)
         dPartialExcessSave = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
+        dMuAnalytic = MATMUL(dTotalMoles * dHloc, dDX)
 
-        dMolFraction(iFirstSpecies:iLastSpecies) = dX + dEps * dDX
-        dPartialExcessGibbs(iFirstSpecies:iLastSpecies) = 0D0
-        call CompExcessGibbsEnergyRKMP(m)
-        dMuPlus = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
+        do iStep = 2, 6
+            dEps = dFDScale * 10D0**(-iStep)
 
-        dMolFraction(iFirstSpecies:iLastSpecies) = dX - dEps * dDX
-        dPartialExcessGibbs(iFirstSpecies:iLastSpecies) = 0D0
-        call CompExcessGibbsEnergyRKMP(m)
-        dMuMinus = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
+            dMolFraction(iFirstSpecies:iLastSpecies) = dX + dEps * dDX
+            dPartialExcessGibbs(iFirstSpecies:iLastSpecies) = 0D0
+            call CompExcessGibbsEnergyRKMP(m)
+            dMuPlus = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
+
+            dMolFraction(iFirstSpecies:iLastSpecies) = dX - dEps * dDX
+            dPartialExcessGibbs(iFirstSpecies:iLastSpecies) = 0D0
+            call CompExcessGibbsEnergyRKMP(m)
+            dMuMinus = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
+
+            dMaxFDResponseErr = MAXVAL(DABS(((dMuPlus-dMuMinus)/(2D0*dEps))-dMuAnalytic))
+            dFDResponseRelative = dMaxFDResponseErr / DMAX1(MAXVAL(DABS(dMuAnalytic)),1D-30)
+
+            write(*,'(A,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6)') &
+                'RKMP_PRODUCTION_MU_FD', TRIM(cSolnPhaseName(m)), m, 'eps=', dEps, &
+                'analyticMax=', MAXVAL(DABS(dMuAnalytic)), 'absErr=', dMaxFDResponseErr, &
+                'relerr=', dFDResponseRelative
+        end do
 
         dMolFraction(iFirstSpecies:iLastSpecies) = dMolFractionSave
         dPartialExcessGibbs(iFirstSpecies:iLastSpecies) = dPartialExcessSave
-
-        dMuAnalytic = MATMUL(dTotalMoles * dHloc, dDX)
-        dMaxFDResponseErr = MAXVAL(DABS(((dMuPlus - dMuMinus) / (2D0 * dEps)) - dMuAnalytic))
 
         write(*,'(A,1X,A,1X,I0,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6,1X,A,1X,ES14.6)') &
             'RKMP_RESPONSE_DEBUG', TRIM(cSolnPhaseName(m)), m, &
