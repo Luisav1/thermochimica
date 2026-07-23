@@ -23,6 +23,7 @@ tail -1 test12out.txt
 ./TestThermo14
 ./TestThermo30
 ./TestRKMPHessianVerification
+./TestCEFHessianVerification
 ./TestThermo31
 ./TestThermo32
 ./TestThermo33

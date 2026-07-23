@@ -12,9 +12,9 @@ test/doc/
 # ignore outputs
 *.out
 *.txt
-*.dat
-*.DAT
-*.Dat
+#*.dat
+#*.DAT
+#*.Dat
 *.json
 # ignore all json files except root level ones
 !/*.json
@@ -38,8 +38,8 @@ test/doc/
 # ignore vscode cache
 .vscode/
 # some of these will occasionally require manual override
-data/
-test/
+#data/
+# test/
 python/
 private_tests
 # Ignore dynamic libraries
