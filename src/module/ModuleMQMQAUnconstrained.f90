@@ -20,12 +20,57 @@
 !!          
 !!          The labels G, Q, and B are database-family names. They do not mean gradient,
 !!          heat, or the total Gibbs energy returned by this module.
+!!
+!!          Notation used below:
+!!          - A and B label constituents on the first sublattice; X and Y label
+!!            constituents on the second. Together A-B-X-Y identifies one
+!!            quadruplet species, not a matrix expression.
+!!          - n(p) is the mole amount of quadruplet species p, and N_Q is the sum
+!!            of all quadruplet mole amounts in the phase.
+!!          - A "pair fraction" describes how frequently one first-sublattice
+!!            constituent is paired with one second-sublattice constituent.
+!!          - zeta is fixed model data that changes the statistical weight of
+!!            different pair types.
+!!          - chi and xi are normalized composition coordinates used by the G
+!!            and Q parameter families; they are calculated from quadruplet
+!!            populations and are not additional independent solver variables.
+!!          - The gradient contains first derivatives of energy with respect to
+!!            every n(p). The Hessian contains all corresponding second derivatives.
+!!
+!!          In MQMQAInteractionTerm, the fields named exponent P, Q, and R are
+!!          integer powers from the production parameter definition. They are
+!!          distinct from the G/Q/B family label and from the total N_Q.
+!!
+!!          File map:
+!!          1. Public model data and interaction descriptions
+!!          2. Verification of the private second-order calculus kernel
+!!          3. Public scalar-energy and Hessian entry points
+!!          4. Input, topology, and mathematical-domain checks
+!!          5. Independent ordinary-real scalar evaluator
+!!             - dependent MQMQA composition measures
+!!             - configurational S1/S2/S3 terms
+!!             - G, Q, B, and supported ternary excess terms
+!!          6. Derivative-object evaluator of the same thermodynamic model
+!!          7. Private second-order arithmetic and chain-rule primitives
+!!
+!!          Sections 5 and 6 intentionally implement the energy through separate
+!!          expression paths. Finite differences of the ordinary-real path can
+!!          therefore test the analytic derivatives without differentiating the
+!!          same coded expression that produced them.
 !-------------------------------------------------------------------------------------------------------------
 
 module ModuleMQMQAUnconstrained
 
     implicit none
     private
+
+    !=========================================================================================================
+    ! SECTION 1: PUBLIC MODEL AND INTERACTION DESCRIPTIONS
+    !
+    ! These types describe a local SUBG phase without reading ModuleThermo. They
+    ! are the boundary between a future production-data adapter and the
+    ! disconnected thermodynamic mathematics implemented below.
+    !=========================================================================================================
 
     integer, parameter, public :: MQMQA_TERM_G = 1
     integer, parameter, public :: MQMQA_TERM_Q = 2
@@ -97,6 +142,14 @@ module ModuleMQMQAUnconstrained
     public :: CheckMQMQADerivativeKernel
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 2: SECOND-ORDER CALCULUS KERNEL VERIFICATION
+    !
+    ! Verify the generic differentiation before it is asked to carry
+    ! the much larger MQMQA expression. A failure here is an arithmetic or chain-
+    ! rule failure, not evidence against the thermodynamic model.
+    !=========================================================================================================
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Check every private second-order primitive against analytic and finite-difference controls.
@@ -242,6 +295,15 @@ contains
 
     end function PrimitiveScalar
 
+    !=========================================================================================================
+    ! SECTION 3: PUBLIC THERMODYNAMIC ENTRY POINTS
+    !
+    ! The scalar entry point is the independent numerical reference. The Hessian
+    ! entry point evaluates the same physical model with derivative-carrying
+    ! objects and optionally exposes its energy and gradient for verification.
+    ! Neither entry point reads or changes Thermochimica global state.
+    !=========================================================================================================
+
     !---------------------------------------------------------------------------------------------------------
     !> \brief Evaluate the disconnected SUBG scalar energy using ordinary real arithmetic.
     !> \param[in]  tModel          Generic SUBG topology and model constants.
@@ -361,6 +423,14 @@ contains
         if (PRESENT(dGibbsExcess)) dGibbsExcess = tExcess%dValue
 
     end subroutine CompMQMQAHessianUnconstrained
+
+    !=========================================================================================================
+    ! SECTION 4: INPUT, TOPOLOGY, AND DOMAIN CHECKS
+    !
+    ! The local Hessian exists only for a valid canonical quadruplet topology and
+    ! a strictly positive interior composition. Unsupported production families
+    ! and untraced ternary orientations are rejected here rather than approximated.
+    !=========================================================================================================
 
 
     !---------------------------------------------------------------------------------------------------------
@@ -489,6 +559,14 @@ contains
         end do
 
     end subroutine CheckInputs
+
+    !=========================================================================================================
+    ! SECTION 5: INDEPENDENT ORDINARY-REAL SCALAR EVALUATOR
+    !
+    ! This path constructs the MQMQA state and energy using ordinary real numbers.
+    ! It is deliberately independent of the derivative-object path in Section 6,
+    ! making it suitable as the scalar oracle for finite-difference verification.
+    !=========================================================================================================
 
 
     !---------------------------------------------------------------------------------------------------------
@@ -625,8 +703,9 @@ contains
             dF1(tModel%nSublattice1),dF2(tModel%nSublattice2))
         dSiteAmount1 = 0D0; dSiteAmount2 = 0D0; dEquivalent1 = 0D0; dEquivalent2 = 0D0
         dPairAmount = 0D0; dPairWeightedAmount = 0D0; dF1 = 0D0; dF2 = 0D0
-        ! N_Q carries the overall amount of the phase. Dividing by N_Q produces
-        ! quadruplet fractions that describe composition without changing on scaling.
+        ! N_Q is the sum of all quadruplet mole amounts and therefore carries the
+        ! overall amount of the phase. Dividing each amount by N_Q produces
+        ! composition fractions that remain unchanged if the whole phase is scaled.
         dN = SUM(dMoles)
         dQuadFraction = dMoles/dN
 
@@ -674,6 +753,14 @@ contains
 
     end subroutine AllocateScalarState
 
+    !---------------------------------------------------------------------------------------------------------
+    ! SECTION 5A: SCALAR EXCESS-ENERGY FAMILIES
+    !
+    ! G and Q combine a local composition modifier with a topology-dependent
+    ! extensive amount. B uses its proven N_Q prefactor and weighted-pair
+    ! composition. Supported ternary factors modify only the traced G/Q branches.
+    !---------------------------------------------------------------------------------------------------------
+
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Assemble the nonideal energy contributed by the production interaction families.
@@ -701,7 +788,10 @@ contains
                 ! fractions. Its proven extensive prefactor is the total N_Q.
                 call ScalarBModifier(dPairWeightedFraction,tInteraction(i),dModifier,iInfo)
                 if (iInfo /= 0) return
-                ! Euler homogeneity gives the production direct and zeta-weighted terms from d(N_Q*modifier)/dn.
+                ! Multiplying the composition-only modifier by total quadruplet
+                ! moles N_Q makes this an extensive energy. Differentiating that
+                ! product produces both a direct term and the response of the
+                ! zeta-weighted pair fractions.
                 dExcess = dExcess + dN*dModifier
             else
                 ! G and Q separate into a composition polynomial and a topology
@@ -944,6 +1034,15 @@ contains
 
     end function FindQuadruplet
 
+    !=========================================================================================================
+    ! SECTION 6: ANALYTIC DERIVATIVE-OBJECT EVALUATOR
+    !
+    ! Rebuild every dependent composition measure and every energy block with
+    ! SecondOrderScalar objects. Values, gradients, and Hessians then propagate
+    ! together from independent quadruplet moles through all normalization,
+    ! ordering, and interaction formulas.
+    !=========================================================================================================
+
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Rebuild the complete scalar model with derivative-carrying quantities.
@@ -1119,6 +1218,13 @@ contains
             tInteraction,tExcess,iInfo)
 
     end subroutine EvaluateDerivativeEnergy
+
+    !---------------------------------------------------------------------------------------------------------
+    ! SECTION 6A: DERIVATIVE-CARRYING EXCESS-ENERGY FAMILIES
+    !
+    ! These routines mirror the physical decomposition of Section 5A while using
+    ! second-order objects. They are not called by the independent scalar path.
+    !---------------------------------------------------------------------------------------------------------
 
 
     !---------------------------------------------------------------------------------------------------------
@@ -1346,11 +1452,14 @@ contains
     end subroutine DerivativeOuterAmount
 
 
-    !---------------------------------------------------------------------------------------------------------
-    ! The following primitives are the second-order chain-rule engine. Each
+    !=========================================================================================================
+    ! SECTION 7: PRIVATE SECOND-ORDER ARITHMETIC
+    !
+    ! These primitives are the chain-rule engine used only by Section 6. Each
     ! operation returns the value of an expression together with how that
     ! expression changes under every independent quadruplet-mole perturbation.
-    !---------------------------------------------------------------------------------------------------------
+    ! Their independent verification lives in Section 2.
+    !=========================================================================================================
 
     !> Create a number that has no dependence on any quadruplet mole.
     function ConstantSO(dValue,n) result(tResult)

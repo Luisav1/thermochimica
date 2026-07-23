@@ -7,6 +7,14 @@
 !!          configurational mixing, the G and Q binary parameter families, all three
 !!          supported ternary-group branches, and the B weighted-pair family. Pass
 !!          --report for the complete numerical evidence.
+!!
+!!          Verification map:
+!!          1. Check the generic second-order calculus kernel.
+!!          2. Build one complete positive synthetic SUBG topology.
+!!          3. Define isolated G, Q, ternary, and B interaction cases.
+!!          4. Apply the scalar/gradient/Hessian verification ladder to each case.
+!!          5. Check the independently derived extensive B identity.
+!!          6. Confirm unsupported and boundary inputs fail explicitly.
 !-------------------------------------------------------------------------------------------------------------
 
 program TestMQMQAHessianVerification
@@ -71,6 +79,14 @@ program TestMQMQAHessianVerification
     end if
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 1: CONTROLLED MODEL AND INTERACTION FIXTURES
+    !
+    ! These routines construct a complete, nonuniform interior state and isolate
+    ! each supported interaction branch. They provide controlled mathematical
+    ! coverage; they do not decode a production Thermochimica SUBG phase.
+    !=========================================================================================================
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Build a positive interior state containing every canonical quadruplet.
@@ -155,13 +171,23 @@ contains
 
     end subroutine SetGQTerm
 
+    !=========================================================================================================
+    ! SECTION 2: ENERGY, GRADIENT, AND HESSIAN VERIFICATION LADDER
+    !
+    ! Each case first compares the two independent energy paths, then checks the
+    ! derivative path using finite differences and extensive-energy identities.
+    !=========================================================================================================
+
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Apply the complete verification ladder to one selected energy model.
     !>
     !> \details The independent scalar and derivative paths must first agree in
-    !!          value. Finite differences then check the gradient, Hessian-vector
-    !!          product, and directional curvature. Symmetry, homogeneity, and
+    !!          value. Finite differences then check the gradient. Multiplying the
+    !!          Hessian by a chosen mole-perturbation direction predicts the
+    !!          corresponding change in every gradient component; directional
+    !!          curvature predicts the scalar energy bending along that direction.
+    !!          Symmetry, homogeneity, and
     !!          extensivity test structural properties that finite differences alone
     !!          would not establish.
     !---------------------------------------------------------------------------------------------------------
@@ -204,8 +230,11 @@ contains
         lCasePass=lCasePass.AND.(dScaleError<=1D-12)
         lCasePass=lCasePass.AND.ALL(IEEE_IS_FINITE(dHessian)).AND.ALL(IEEE_IS_FINITE(dGradient))
 
-        ! These are exact structural expectations for a smooth extensive scalar:
-        ! mixed derivatives commute, and uniform phase scaling has zero curvature.
+        ! These are exact structural expectations for a smooth extensive energy.
+        ! Symmetry means differentiating first with respect to species p and then
+        ! q gives the same result in the opposite order. Homogeneity means scaling
+        ! every quadruplet amount changes phase amount but not composition, so the
+        ! Hessian applied to the current mole vector should be zero.
         dSym=FrobeniusNorm(dHessian-TRANSPOSE(dHessian))/MAX(1D0,FrobeniusNorm(dHessian))
         dNormH=MatrixTwoNorm(dHessian)
         dNormN=SQRT(DOT_PRODUCT(dState,dState))
@@ -213,7 +242,9 @@ contains
             MAX(1D0,dNormH*dNormN)
         lCasePass=lCasePass.AND.(dSym<=1D-12).AND.(dHom<=1D-10)
 
-        ! A mixed direction changes many quadruplets together. It exercises
+        ! A direction is a vector assigning a simultaneous mole perturbation to
+        ! every quadruplet species. This mixed direction changes many quadruplets
+        ! together and exercises
         ! off-diagonal Hessian entries that basis-only checks could miss.
         do i=1,n
             dDirection(i)=(-1D0)**i*(0.3D0+0.07D0*MOD(i,5))
@@ -254,12 +285,17 @@ contains
         end do
         lCasePass=lCasePass.AND.(dGradientError<=1D-7)
 
-        ! Differencing analytic gradients gives an independent H*v check and is
-        ! numerically better conditioned than taking a second energy difference.
+        ! Multiplying H by direction v predicts the change of the complete
+        ! gradient under that simultaneous mole perturbation. Finite-differencing
+        ! analytic gradients checks this prediction and is numerically better
+        ! conditioned than taking a second energy difference.
         dH=1D-5*dHBase
         dPlus=dState+dH*dDirection; dMinus=dState-dH*dDirection
         call CompMQMQAHessianUnconstrained(tData,dPlus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradPlus)
         call CompMQMQAHessianUnconstrained(tData,dMinus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradMinus)
+        ! Moving the state along dDirection changes each chemical potential.
+        ! Multiplying the analytic Hessian by that mole direction predicts the
+        ! complete vector of those first-order changes.
         dHv=MATMUL(dHessian,dDirection)
         dHvError=0D0
         do i=1,n
@@ -268,8 +304,9 @@ contains
         end do
         lCasePass=lCasePass.AND.(dHvError<=1D-7)
 
-        ! Scaling every quadruplet amount must scale G by the same factor without
-        ! changing composition. This is the scalar form of Euler homogeneity.
+        ! Scaling every quadruplet amount by the same factor changes only the
+        ! amount of phase, not its composition. An extensive Gibbs energy must
+        ! therefore scale by that same factor.
         dExtError=0D0
         do j=1,2
             if (j==1) then; dTmp3=0.5D0; else; dTmp3=2D0; end if
@@ -310,11 +347,20 @@ contains
 
     end subroutine ScalarValue
 
+    !=========================================================================================================
+    ! SECTION 3: MODEL-SPECIFIC IDENTITIES AND EXPECTED FAILURES
+    !
+    ! These checks cover requirements that a generic finite-difference sweep
+    ! cannot establish by itself: the production-derived B prefactor and explicit
+    ! rejection of unsupported or mathematically singular inputs.
+    !=========================================================================================================
+
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Verify why the B-family extensive scalar is N_Q times its local modifier.
+    !> \brief Verify why B-family energy equals total quadruplet moles times its composition-only local modifier.
     !>
-    !> \details This check independently differentiates the weighted-pair formula
+    !> \details N_Q denotes the sum of all quadruplet mole amounts. This check
+    !!          independently differentiates the weighted-pair formula
     !!          in the same direct-plus-zeta structure used by production chemical
     !!          potentials. Agreement rules out choosing N_Q merely because it
     !!          makes the standalone finite differences self-consistent.
@@ -342,8 +388,11 @@ contains
         ! Reconstruct the unnormalized zeta-weighted pair amounts. Their derivatives
         ! with respect to each quadruplet are simple incidence/zeta factors.
         dWeighted=0D0
-        ! Product and quotient differentiation of N_Q*Delta g_B produces a direct
-        ! Delta g_B term plus the response of every weighted pair amount.
+        ! The B energy is total quadruplet moles N_Q multiplied by Delta g_B,
+        ! a local modifier determined only by normalized weighted-pair
+        ! composition. Differentiating this product produces one direct
+        ! modifier contribution and additional contributions from how every
+        ! weighted-pair amount changes.
         do q=1,n
             a=tData%iQuadruplet(q,1); b=tData%iQuadruplet(q,2)
             x=tData%iQuadruplet(q,3); y=tData%iQuadruplet(q,4)
@@ -413,6 +462,13 @@ contains
         if (lVerbose) write(*,'(/,A)') 'failure checks: R rejected and boundary state rejected'
 
     end subroutine VerifyFailures
+
+    !=========================================================================================================
+    ! SECTION 4: SCALE-NORMALIZED NUMERICAL HELPERS
+    !
+    ! Centralize norms and convergence-trend checks so every thermodynamic case
+    ! is judged using the same scale-aware criteria.
+    !=========================================================================================================
 
 
     real(8) function NormalizedDifference(dA,dB)

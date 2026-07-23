@@ -1,6 +1,23 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    DebugRKMPMappedHessianFiniteDifference.f90
-!> \brief   Validate mapped RKMP composition curvature by finite differences.
+!> \brief   Verify mapped RKMP composition curvature by finite differences.
+!>
+!> \details J maps an element-coordinate perturbation into a
+!!          composition-preserving species-mole perturbation. Choose one
+!!          element-coordinate vector u and combine the columns of J to produce the
+!!          corresponding species direction v=J*u.
+!!
+!!          Multiplying Kmap by u predicts the projected curvature along that
+!!          element direction; the scalar quantity u^T*Kmap*u is the energy
+!!          bending predicted along v. The diagnostic compares that prediction
+!!          with direct scalar-energy finite differences after perturbing the
+!!          species moles along v.
+!!
+!!          Agreement proves that the projection and its composition-preserving
+!!          direction are mathematically consistent. It does not prove that Kmap
+!!          is the reduced matrix required by GEMNewton; production integration
+!!          instead uses constrained local response condensation in
+!!          MapRKMPHessianToGEMVariables.
 !-------------------------------------------------------------------------------------------------------------
 
 subroutine DebugRKMPMappedHessianFiniteDifference(iSolnIndex, dJ, dKmap, nLocalSpecies)
@@ -24,6 +41,8 @@ subroutine DebugRKMPMappedHessianFiniteDifference(iSolnIndex, dJ, dKmap, nLocalS
     iFirstSpecies = nSpeciesPhase(iSolnIndex-1) + 1
     dMoles0       = dMolesSpecies(iFirstSpecies:nSpeciesPhase(iSolnIndex))
 
+    ! Construct a deterministic element-space probe and map it into a local
+    ! species-mole direction. The mapped direction should preserve phase amount.
     dU = 0D0
     do i = 1, nElements
         dU(i) = 1D0 / DFLOAT(i)

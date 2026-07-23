@@ -1,11 +1,19 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    RKMPDiagnosticUtilities.f90
-!> \brief   Diagnostic-only RKMP excess-energy curvature utilities.
+!> \brief   Independent scalar RKMP excess-energy evaluator for diagnostics.
 !>
-!> These routines intentionally do not modify the GEM Newton matrix.  They provide
-!> a local binary-RKMP excess Gibbs energy evaluator, a finite-difference local
-!> species-space Hessian, and a mapped finite-difference check for projected
-!> composition directions.
+!> \details This file evaluates the supported extensive binary RKMP excess energy
+!!          directly from a supplied local mole vector. It is deliberately
+!!          independent of the analytic Hessian expression, allowing finite
+!!          differences to test CompExcessGibbsEnergyRKMP_unconstrained.
+!!
+!!          For each binary parameter, total phase moles N convert supplied
+!!          species moles into mole fractions x1 and x2. The scalar contribution
+!!          is N times the database coefficient, the binary mixing factor x1*x2,
+!!          and the requested power of the composition contrast x1-x2.
+!!
+!!          It reads production parameter definitions but does not change
+!!          Thermochimica state, GEMNewton matrices, or the phase assemblage.
 !-------------------------------------------------------------------------------------------------------------
 
 subroutine CompRKMPBinaryExcessGibbsFromMoles(iSolnIndex, nLocalSpecies, dLocalMoles, dGex)
@@ -29,6 +37,10 @@ subroutine CompRKMPBinaryExcessGibbsFromMoles(iSolnIndex, nLocalSpecies, dLocalM
     dTotalMoles = SUM(dLocalMoles(1:nLocalSpecies))
     if (dTotalMoles <= 0D0) return
 
+    ! Reconstruct the scalar excess energy whose second derivatives with respect
+    ! to the supplied species moles define the local Hessian Hloc.
+    ! Keeping this expression outside the Hessian routine reduces common-mode
+    ! verification risk.
     do iParam = nParamPhase(iSolnIndex-1)+1, nParamPhase(iSolnIndex)
         ! Stage-1 diagnostics are restricted to binary RKMP excess terms.  Higher-order
         ! Muggiano and RKMPM magnetic curvature terms are intentionally skipped here.

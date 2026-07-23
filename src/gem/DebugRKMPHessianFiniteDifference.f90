@@ -1,18 +1,22 @@
 
-    !---------------------------------------------------------------------------------------------------------
-    ! Temporary RKMP finite-difference diagnostic.
-    !
-    ! Select the first supported binary RKMP interaction in this phase and define a composition-changing
-    ! direction v with +1 for species ia and -1 for species ib.  Compare the analytic directional curvature
-    !
-    !     v^T Hloc v
-    !
-    ! against a central finite difference of the supported binary RKMP excess-energy expression:
-    !
-    !     (Gex(n + eps*v) - 2*Gex(n) + Gex(n - eps*v)) / eps^2
-    !
-    ! This helper is diagnostic-only.  It does not modify thermodynamic state or solver matrices.
-    !---------------------------------------------------------------------------------------------------------
+!-------------------------------------------------------------------------------------------------------------
+!> \file    DebugRKMPHessianFiniteDifference.f90
+!> \brief   Embedded finite-difference audit of the local RKMP mole Hessian.
+!>
+!> \details Select the first supported binary interaction and construct direction
+!!          v by adding moles to its first species while removing the same amount
+!!          from its second species. This preserves total phase moles. The
+!!          quadratic form v^T*Hloc*v predicts the scalar energy curvature along
+!!          that direction and is compared with scalar-energy second differences. An
+!!          ideal-mixing control is evaluated with the same step sizes so
+!!          truncation and roundoff behavior can be distinguished from errors in
+!!          the RKMP formula. Per-parameter records localize any aggregate
+!!          mismatch to an individual production interaction.
+!!
+!!          This is the first layer of the RKMP diagnostic ladder. It verifies
+!!          local excess curvature only; it does not verify constrained response,
+!!          GEM mapping, alpha trust, or nonlinear convergence.
+!-------------------------------------------------------------------------------------------------------------
 
 subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
 
@@ -31,6 +35,9 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     real(8) :: dEps, dFD, dFDParam, dN, dRelativeError, dScale
     real(8), allocatable, dimension(:) :: dDirection, dMolesLocal, dMolesMinus, dMolesPlus
 
+    !=========================================================================================================
+    ! SECTION 1: SELECT A PHYSICAL COMPOSITION DIRECTION
+    !=========================================================================================================
     iFirstSpecies = nSpeciesPhase(iSolnIndex-1) + 1
     iLastSpecies  = nSpeciesPhase(iSolnIndex)
     nPhaseSpecies = iLastSpecies - iFirstSpecies + 1
@@ -88,6 +95,9 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     end do
     dIdealAnalytic = dIdealAnalytic - SUM(dDirection)**2 / dN
 
+    !=========================================================================================================
+    ! SECTION 2: AGGREGATE RKMP AND IDEAL FINITE-DIFFERENCE SWEEPS
+    !=========================================================================================================
     do iStep = 1, 5
         dEps = dScale * 10D0**(-iStep)
         dMolesMinus = dMolesLocal - dEps*dDirection
@@ -113,6 +123,12 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
             'eps=', dEps, 'analytic=', dIdealAnalytic, 'fd=', dIdealFD, 'relerr=', dRelativeError
     end do
 
+    !=========================================================================================================
+    ! SECTION 3: PER-PARAMETER LOCALIZATION
+    !
+    ! The middle epsilon avoids the most cancellation-prone end of the sweep and
+    ! identifies which binary term contributes to an aggregate mismatch.
+    !=========================================================================================================
     ! Per-parameter diagnostic at the middle epsilon scale used above.  This identifies which binary
     ! interaction term contributes most to any aggregate analytic/finite-difference mismatch.
     dEps = dScale * 1D-3
@@ -145,6 +161,10 @@ subroutine DebugRKMPHessianFiniteDifference(iSolnIndex,dHess)
     deallocate(dDirection,dMolesLocal,dMolesMinus,dMolesPlus)
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 4: INDEPENDENT SCALAR AND ANALYTIC CONTROLS
+    !=========================================================================================================
 
     real(8) function CompIdealMixingEnergy(dMoles)
 

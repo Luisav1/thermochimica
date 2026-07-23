@@ -3,8 +3,26 @@
 !> \brief   Thermochimica-native verification of the disconnected nonmagnetic plain-SUBL CEF Hessian.
 !>
 !> \details The test checks standalone scalar-energy derivatives, production parameter decoding, and finite
-!!          differences of Thermochimica's established SUBL partial molars.  It does not connect the CEF
+!!          differences of the established Thermochimica SUBL partial molars.  It does not connect the CEF
 !!          Hessian to GEMNewton.  Pass --report to print the full numerical evidence.
+!!
+!!          Verification map:
+!!          1. Run real Thermochimica SUBL calculations and retain controlled and converged states.
+!!          2. Decode production occupancy and interaction arrays into the generic CEF interface.
+!!          3. Prove each decoded scalar interaction matches its production expression.
+!!          4. Compare analytic directional curvature with three- and five-point energy differences.
+!!          5. Perturb the endmember mole vector in a composition-changing
+!!             direction v. Multiplying the Hessian H by v predicts how every
+!!             partial molar changes; compare that prediction with finite
+!!             differences of established production partial molars.
+!!          6. Check matrix symmetry and degree-one extensivity, including the
+!!             requirement that uniform phase scaling leaves composition and
+!!             partial molars unchanged. Also check precision, branch coverage,
+!!             and admissible-state handling.
+!!
+!!          This is Thermochimica-native local verification because it parses
+!!          production databases and calls established SUBL thermodynamics. It
+!!          remains disconnected from GEMNewton and does not constrain phases.
 !-------------------------------------------------------------------------------------------------------------
 
 program TestCEFHessianVerification
@@ -73,6 +91,16 @@ program TestCEFHessianVerification
     end if
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 1: PRODUCTION CALCULATIONS AND VERIFICATION STATES
+    !
+    ! ALABANDITE exercises existing binary and ternary SUBL parameters.
+    ! CEFVerification.dat supplies the coupled two-sublattice interaction family
+    ! that was not otherwise available in a compact admissible regression state.
+    ! Each case checks both a controlled interior composition and, when active,
+    ! the composition returned by the ordinary Thermochimica calculation.
+    !=========================================================================================================
 
     subroutine RunAlabanditeCases(lAllPass,lAnyConverged,nBinary,nTernary,nCoupled,lVerbose)
 
@@ -159,6 +187,13 @@ contains
 
     end subroutine RunCoupledCases
 
+    !=========================================================================================================
+    ! SECTION 2: COMPLETE CHECK OF ONE PLAIN-SUBL PHASE STATE
+    !
+    ! This routine joins the three evidence layers: generic standalone
+    ! mathematics, exact production-parameter decoding, and finite differences
+    ! of established Thermochimica partial molars.
+    !=========================================================================================================
 
     subroutine VerifyPhaseState(iPhase,dMoles,cLabel,lConverged,lAllPass,lAnyConverged, &
         nBinary,nTernary,nCoupled,lVerbose)
@@ -271,7 +306,28 @@ contains
 
     end subroutine VerifyPhaseState
 
+    !=========================================================================================================
+    ! SECTION 3: PRODUCTION-SUBL TO GENERIC-CEF DECODER
+    !
+    ! Thermochimica stores constituent identities and interaction families in
+    ! packed production arrays. This adapter converts them into occupancy,
+    ! multiplicity, reference-energy, and generic excess-interaction objects
+    ! understood by
+    ! ModuleCEFUnconstrained. It belongs in the test because the CEF module itself
+    ! deliberately has no dependency on ModuleThermo.
+    !=========================================================================================================
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Decode one production plain-SUBL phase and prove scalar term identities.
+    !>
+    !> \details Binary, ternary, and coupled interactions are translated into a
+    !!          common representation: a product P of selected site fractions
+    !!          multiplied by an interaction polynomial L evaluated at the local
+    !!          composition coordinate eta. Each translated term is evaluated
+    !!          immediately and compared with the exact production-family scalar
+    !!          expression, preventing a self-consistent but incorrect decoder
+    !!          from passing the later standalone finite-difference checks.
+    !---------------------------------------------------------------------------------------------------------
     subroutine DecodeProductionPhase(iPhase,dMoles,iOccupancy,iSiteSublattice,dMultiplicity,dReference, &
         tInteraction,dY,dDecoderError,nBinary,nTernary,nCoupled,iInfo)
 
@@ -388,7 +444,21 @@ contains
 
     end subroutine DecodeProductionPhase
 
+    !=========================================================================================================
+    ! SECTION 4: DIRECTIONAL FINITE DIFFERENCES AND PRODUCTION ORACLE
+    !
+    ! A direction is composition-preserving here when its entries sum to zero:
+    ! moles are transferred among endmembers without changing total phase amount.
+    ! Such endmember-mole directions test the standalone
+    ! energy Hessian. The same perturbations are sent through the established
+    ! production SUBL routine. Multiplying H by the direction predicts how every
+    ! partial molar changes, providing an independent comparison at the identical
+    ! imposed state.
+    !=========================================================================================================
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Verify one composition-preserving mole-transfer direction using scalar energy and production partial molars.
+    !---------------------------------------------------------------------------------------------------------
     subroutine VerifyDirection(iPhase,dMoles,dDirection,iOccupancy,iSiteSublattice,dMultiplicity, &
         dReference,tInteraction,dH,dSteps,dErr3,dErr5,dErrMu,lAllPass)
 
@@ -465,6 +535,14 @@ contains
     end subroutine EvaluateProduction
 
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Evaluate established SUBL thermodynamics at a temporarily imposed local composition.
+    !>
+    !> \details Thermochimica global arrays are saved, updated only long enough to
+    !!          call CompExcessGibbsEnergySUBL, and then fully restored. This lets
+    !!          the production routine act as an independent numerical oracle
+    !!          without changing the surrounding converged calculation.
+    !---------------------------------------------------------------------------------------------------------
     subroutine EvaluateProductionVector(iPhase,dMoles,dMu,dReferenceIdeal,dExcess,iInfo)
 
         integer, intent(in) :: iPhase
@@ -507,6 +585,13 @@ contains
 
     end subroutine EvaluateProductionVector
 
+    !=========================================================================================================
+    ! SECTION 5: DECODER, DIRECTION, AND PHASE-STATE HELPERS
+    !
+    ! These routines translate packed constituent indices, build the linear
+    ! binary and ternary coordinates used by the generic interaction object,
+    ! construct tangent directions, and query the production phase assemblage.
+    !=========================================================================================================
 
     subroutine ComputeSiteFractions(dMoles,iOccupancy,nSite,dY)
 
@@ -635,6 +720,12 @@ contains
 
     end function PhaseIsActive
 
+    !=========================================================================================================
+    ! SECTION 6: SCALE-NORMALIZED NUMERICAL HELPERS
+    !
+    ! Shared norms and errors keep scalar, vector, symmetry, and homogeneity
+    ! checks meaningful across phases whose thermodynamic scales differ.
+    !=========================================================================================================
 
     real(8) function ScaledError(dActual,dExpected)
 

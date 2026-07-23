@@ -5,6 +5,27 @@
 !> \details Reproduce the TestThermo30 equilibrium, then compare the production analytic RKMP Hessian with
 !!          scalar-energy and established partial-molar finite differences at the converged phase state.
 !!          Pass --report to print the precision and convergence tables used for numerical evidence.
+!!
+!!          Verification map:
+!!          1. Run the ordinary TestThermo30 thermodynamic calculation with the
+!!             curvature-enabled solver behavior left at its default-off setting.
+!!          2. Identify the converged active plain-RKMP phase and evaluate Hloc.
+!!          3. Check double precision, finite values, symmetry, and the
+!!             extensivity identity: uniformly scaling every species amount
+!!             changes phase amount but not composition, so Hloc applied to the
+!!             current mole vector should be zero.
+!!          4. Transfer moles between two interacting species along direction v.
+!!             Compare the energy curvature predicted by Hloc along that
+!!             direction with three- and five-point scalar-energy differences.
+!!          5. Apply the same stencils to ideal mixing as a truncation/roundoff
+!!             control with known convergence order.
+!!          6. For each independent composition direction, use Hloc to predict
+!!             how all excess partial molars change, then compare with finite
+!!             differences of the established production RKMP routine.
+!!
+!!          This test verifies the local production-linked Hessian. Solver
+!!          response mapping and nonlinear hardening are covered separately by
+!!          diagnostics and the complete regression suite.
 !-------------------------------------------------------------------------------------------------------------
 
 program TestRKMPHessianVerification
@@ -68,6 +89,9 @@ program TestRKMPHessianVerification
     lPass = lPass .AND. (nBinaryDigits >= 53)
     lPass = lPass .AND. (dEpsilonMachine <= 3D-16)
 
+    !=========================================================================================================
+    ! SECTION 1: CONVERGED THERMOCHIMICA RKMP STATE
+    !=========================================================================================================
     cInputUnitTemperature = 'K'
     cInputUnitPressure = 'atm'
     cInputUnitMass = 'moles'
@@ -126,6 +150,14 @@ program TestRKMPHessianVerification
         dMoles0 = dMolesSpecies(iFirstSpecies:iLastSpecies)
         dTotalMoles = SUM(dMoles0)
         dX = dMoles0 / dTotalMoles
+        !=====================================================================================================
+        ! SECTION 2: STRUCTURAL HESSIAN IDENTITIES
+        !
+        ! Symmetry checks that changing species i then j gives the same mixed
+        ! derivative as changing j then i. Extensivity means uniformly scaling
+        ! every species amount changes phase amount but not composition; Hloc
+        ! applied to the current mole vector should therefore be zero.
+        !=====================================================================================================
         call CompExcessGibbsEnergyRKMP_unconstrained(iPhaseIndex,dHessian)
 
         lPass = lPass .AND. ALL(IEEE_IS_FINITE(dHessian))
@@ -139,8 +171,12 @@ program TestRKMPHessianVerification
         dMolFractionSave = dMolFraction(iFirstSpecies:iLastSpecies)
         dPartialExcessSave = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
 
-        ! Use the actual binary interaction pair for scalar-energy differences.  Both species have substantial
+        !=====================================================================================================
+        ! SECTION 3: SCALAR-ENERGY DIRECTIONAL CURVATURE
+        !
+        ! Use the actual binary interaction pair for scalar-energy differences. Both species have substantial
         ! phase amounts in TestThermo30, leaving a visible truncation region before roundoff dominates.
+        !=====================================================================================================
         dDirection = 0D0
         dDirection(iEnergyA) = 1D0
         dDirection(iEnergyB) = -1D0
@@ -187,8 +223,14 @@ program TestRKMPHessianVerification
         lPass = lPass .AND. (dOrder3 >= 1.5D0) .AND. (dOrder3 <= 2.5D0)
         lPass = lPass .AND. (dOrder5 >= 3D0) .AND. (dOrder5 <= 5D0)
 
-        ! The production partial-molar comparison is numerically stable enough to cover the full tangent basis,
-        ! including directions involving trace species whose scalar-energy differences are cancellation-limited.
+        !=====================================================================================================
+        ! SECTION 4: PRODUCTION PARTIAL-MOLAR DERIVATIVE ORACLE
+        !
+        ! The production partial-molar comparison is numerically stable enough
+        ! to cover a complete set of independent composition-changing
+        ! directions, including transfers involving trace species whose scalar
+        ! energy differences are limited by cancellation.
+        !=====================================================================================================
         do iDirection = 1, nDirections
             dDirection = 0D0
             dDirection(iDirection) = 1D0
@@ -245,6 +287,10 @@ program TestRKMPHessianVerification
     end if
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 5: NUMERICAL CONTROLS AND REPORTING
+    !=========================================================================================================
 
     real(8) function CompIdealMixingEnergy(dMoles)
         real(8), intent(in), dimension(:) :: dMoles

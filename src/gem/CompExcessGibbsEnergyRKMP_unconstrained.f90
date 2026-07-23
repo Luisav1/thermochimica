@@ -1,30 +1,49 @@
-    !---------------------------------------------------------------------------------------------------------
-    !
-    ! Purpose:
-    ! --------
-    ! Compute an unconstrained local Hessian for RKMP excess Gibbs energy terms in a single solution phase.
-    !
-    ! Scope / current limitations:
-    !   * This routine currently handles binary RKMP parameters only (iRegularParam(:,1) == 2).
-    !   * The contribution computed here is EXCESS-only curvature for staged integration.
-    !   * Magnetic RKMPM second-order terms are not included here.
-    !
-    ! Inputs:
-    !   iSolnIndex   Absolute solution-phase index.
-    !
-    ! Output:
-    !   dHess(:,:)   Local phase Hessian in phase-species coordinates (1:nPhaseSpecies,1:nPhaseSpecies).
-    !                The caller must provide sufficient storage.
-    !
-    ! Notation (matching derivation variables):
-    !   dN      = total moles in this solution phase
-    !   dB      = n_i * n_j
-    !   dC      = n_i - n_j
-    !   dA      = dB / dN
-    !   dDelta  = dC / dN
-    !   dL0,dL1,dL2 = L(Delta), L'(Delta), L''(Delta) for RK polynomial exponent
-    !
-    !---------------------------------------------------------------------------------------------------------
+!-------------------------------------------------------------------------------------------------------------
+!> \file    CompExcessGibbsEnergyRKMP_unconstrained.f90
+!> \brief   Compute the local mole-space Hessian of supported plain-RKMP excess energy.
+!>
+!> \details This routine differentiates the extensive binary RKMP excess energy
+!!          with respect to the species mole amounts of one production phase:
+!!
+!!              Hloc(i,j) = d2 Gex / (d n_i d n_j).
+!!
+!!          It reads the converged or current phase state from ModuleThermo. The
+!!          result is excess-only local curvature: it does not include ideal
+!!          mixing, preserve mole-fraction normalization during a composition
+!!          response solve, map to element potentials, or modify
+!!          GEMNewton. Those responsibilities belong to
+!!          MapRKMPHessianToGEMVariables.
+!!
+!!          Conceptual pipeline:
+!!          1. Select one active plain-RKMP phase and its species moles.
+!!          2. For each supported binary parameter, write its extensive energy as
+!!                G_lambda = Lambda * A(n) * L(Delta(n)),
+!!             where Lambda is the database interaction coefficient, A is the
+!!             amount factor n_a*n_b/N, Delta is the mole-fraction difference
+!!             (n_a-n_b)/N, and L raises that difference to the parameter order.
+!!          3. Apply the product and chain rules to A and Delta for every pair of
+!!             local species-mole directions.
+!!          4. Sum parameter contributions into the local Hessian.
+!!
+!!          Notation used below:
+!!          - i and j label the local species whose mole amounts are being
+!!            differentiated.
+!!          - a and b label the two species named by one binary RKMP parameter.
+!!          - n_i is the mole amount of local species i and N is total phase moles.
+!!          - x_i=n_i/N is the species mole fraction.
+!!          - Gex is the extensive excess Gibbs energy of this phase.
+!!          - Hloc(i,j) measures how the excess chemical potential of species i
+!!            changes when the mole amount of species j is perturbed.
+!!          - A and Delta are temporary derivation symbols, not the GEMNewton
+!!            coefficient matrix A or a solver update.
+!!
+!!          Scope is intentionally limited to nonmagnetic binary plain-RKMP
+!!          parameters. Ternary, higher-component Muggiano, and RKMPM magnetic
+!!          curvature are not implemented here.
+!>
+!> \param[in]  iSolnIndex Absolute production solution-phase index.
+!> \param[out] dHess      Excess Hessian in local phase-species mole coordinates.
+!-------------------------------------------------------------------------------------------------------------
     
 subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
 
@@ -43,6 +62,13 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
     real(8) :: dDelta_ai, dDelta_aj, dDelta_bi, dDelta_bj
     real(8) :: dBa, dBb, dBab, dCa, dCb, dCab
     real(8) :: dAa, dAb, dAab, dDa, dDb, dDab
+
+    !=========================================================================================================
+    ! SECTION 1: PHASE DOMAIN AND LOCAL STATE
+    !
+    ! This is a production-linked local routine: phase topology, parameters, and
+    ! species moles are obtained through the supplied ModuleThermo phase index.
+    !=========================================================================================================
 
     ! Return if phase type does not match RKMP model:
     if (.NOT. (cSolnPhaseType(iSolnIndex) == 'RKMP')) then
@@ -75,6 +101,15 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
     ! dN appears in multiple denominators below. Clamp to avoid inf/NaN for tiny phases.
     dN = DMAX1(dN,dEpsN)
 
+    !=========================================================================================================
+    ! SECTION 2: BINARY RKMP PARAMETER CURVATURE
+    !
+    ! Each parameter contributes Lambda*A*L(Delta). Compact intermediates keep
+    ! the implementation close to the analytic derivation while still allowing
+    ! derivatives with respect to every local species, including species that
+    ! enter only through the total phase amount N.
+    !=========================================================================================================
+
     LOOP_Param: do iParam = nParamPhase(iSolnIndex-1)+1, nParamPhase(iSolnIndex)
 
         ! Implementation supports binary RKMP terms only.
@@ -87,21 +122,26 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
 
         if ((ia < 1) .OR. (ia > nPhaseSpecies) .OR. (ib < 1) .OR. (ib > nPhaseSpecies)) cycle LOOP_Param
 
-        ! Polynomial exponent for this parameter's Redlich-Kister term.
+        ! Polynomial exponent for the Redlich-Kister term of this parameter.
         iExponent = iRegularParam(iParam,4)
         if (iExponent < 0) cycle LOOP_Param
 
         dNi = dMolesSpecies(iFirstSpecies + ia - 1)
         dNj = dMolesSpecies(iFirstSpecies + ib - 1)
 
-        ! Build compact intermediates once per parameter and reuse in all (i,j) entries.
+        ! Separate the amount and composition parts of this binary interaction.
+        ! B is the product of the two participating species amounts. C is their
+        ! difference. Dividing each by total phase moles N gives the extensive
+        ! amount factor A=B/N and the dimensionless composition contrast
+        ! Delta=C/N used by the Redlich-Kister polynomial.
         dB     = dNi * dNj
         dC     = dNi - dNj
         dA     = dB / dN
         dDelta = dC / dN
 
-        ! Evaluate L(Delta), L'(Delta), L''(Delta) once; reused in every Hessian entry.
-        ! Similar to RKMP excess Gibbs energy contribution, but with derivatives of L(Delta) included according to chain rule.
+        ! Evaluate the interaction polynomial L and its first two derivatives
+        ! with respect to the composition contrast Delta. These values are
+        ! reused when differentiating with respect to every species-mole pair.
         dL0 = dDelta**iExponent
         if (iExponent == 0) then
             dL1 = 0D0
@@ -118,11 +158,15 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
             end if
         end if
 
+        ! Expand the second derivative into every local (i,j) mole direction.
+        ! Species outside the binary pair still affect A and Delta through N.
         do i = 1, nPhaseSpecies
             do j = 1, nPhaseSpecies
 
-                ! Kronecker-delta flags capture whether loop indices i/j match parameter species ia/ib.
-                ! This is how partial derivatives are expanded without branch-heavy symbolic code.
+                ! These zero-or-one flags record whether derivative direction i
+                ! or j changes either species named by this binary parameter.
+                ! They let the same formulas cover participating species and
+                ! all other species, which still affect the term through N.
                 dDelta_ai = 0D0
                 dDelta_aj = 0D0
                 dDelta_bi = 0D0
@@ -132,8 +176,11 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
                 if (j == ia) dDelta_bi = 1D0
                 if (j == ib) dDelta_bj = 1D0
 
-                ! First/second derivatives of compact terms B, C, A, Delta w.r.t local species moles.
-                ! These derivatives are the building blocks of the final Hessian expression.
+                ! Differentiate the amount product B and amount difference C
+                ! first, then propagate those changes through A=B/N and
+                ! Delta=C/N. Suffix a means differentiation in species direction
+                ! i, suffix b means direction j, and suffix ab means the mixed
+                ! second derivative in directions i and j.
                 dBa  = dDelta_ai*dNj + dDelta_aj*dNi
                 dBb  = dDelta_bi*dNj + dDelta_bj*dNi
                 dBab = dDelta_ai*dDelta_bj + dDelta_aj*dDelta_bi
@@ -146,14 +193,15 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
                 dAb  = dBb/dN - dB/(dN*dN)
                 dAab = dBab/dN - dBa/(dN*dN) - dBb/(dN*dN) + 2D0*dB/(dN*dN*dN)
 
-                ! The delta derivatives
+                ! Derivatives of the dimensionless composition contrast Delta.
                 dDa  = dCa/dN - dC/(dN*dN)
                 dDb  = dCb/dN - dC/(dN*dN)
                 dDab = dCab/dN - dCa/(dN*dN) - dCb/(dN*dN) + 2D0*dC/(dN*dN*dN)
 
-                ! Add this parameter's contribution to Hessian entry (i,j).
-                ! Expression follows chain-rule expansion of the RKMP excess term.
-                ! Multiplying by dExcessGibbsParam(iParam) applies the parameter value's specific contribution to the final contribution.
+                ! Combine curvature of the amount factor and composition
+                ! polynomial by the second-order product and chain rules.
+                ! The database coefficient then gives the contribution of this parameter
+                ! contribution to Hessian entry (i,j).
                 dHij = dExcessGibbsParam(iParam) * ( dAab*dL0 + (dAa*dDb + dAb*dDa + dA*dDab)*dL1 + dA*dDa*dDb*dL2 )
 
                 dHess(i,j) = dHess(i,j) + dHij
@@ -163,8 +211,13 @@ subroutine CompExcessGibbsEnergyRKMP_unconstrained(iSolnIndex,dHess)
 
     end do LOOP_Param
 
-    ! Numerical guard: theoretical Hessian is symmetric, but roundoff/order of operations can introduce
-    ! tiny asymmetry. Average upper/lower entries so downstream linear algebra sees a symmetric matrix.
+    !=========================================================================================================
+    ! SECTION 3: NUMERICAL SYMMETRY
+    !
+    ! Equality of mixed derivatives makes the theoretical Hessian symmetric.
+    ! Average only roundoff-level evaluation-order differences before the matrix
+    ! enters diagnostic or local-response linear algebra.
+    !=========================================================================================================
     do i = 1, nPhaseSpecies
         do j = i + 1, nPhaseSpecies
             dSym = 0.5D0 * (dHess(i,j) + dHess(j,i))

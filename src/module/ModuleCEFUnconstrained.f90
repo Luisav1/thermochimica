@@ -1,10 +1,42 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    ModuleCEFUnconstrained.f90
-!> \brief   Disconnected mole-space Hessian for Thermochimica's nonmagnetic plain-SUBL CEF forms.
+!> \brief   Disconnected mole-space Hessian for the nonmagnetic plain-SUBL CEF forms in Thermochimica.
 !>
 !> \details This module evaluates a general CEF energy expressed through endmember reference terms,
 !!          ideal sublattice mixing, and excess terms of the form P(y)L(c+q.y).  It depends only on generic
 !!          arrays and does not access Thermochimica state, constrain a phase assemblage, or modify GEMNewton.
+!!
+!!          Conceptual pipeline:
+!!          1. Endmember moles define the total phase amount and endmember fractions.
+!!          2. Endmember occupancy maps those fractions to constituent site fractions y.
+!!          3. Reference, ideal-mixing, and excess energies are evaluated in site-fraction space.
+!!          4. Their site-space curvature B is contracted through the composition map D:
+!!                H = transpose(D) B D / n.
+!!          5. H is the unconstrained Hessian with respect to endmember moles. It is not a
+!!             GEMNewton matrix contribution and does not constrain the phase assemblage.
+!!
+!!          Notation used below:
+!!          - i labels an endmember, meaning one allowed constituent combination
+!!            spanning all sublattices.
+!!          - u labels one constituent on one sublattice after all sublattice
+!!            constituent lists have been flattened into a single array.
+!!          - y(u) is the fraction of sublattice sites occupied by constituent u.
+!!          - n is the total number of endmember moles in the phase.
+!!          - B is curvature with respect to site fractions y.
+!!          - D(u,i) records how site fraction u responds when endmember i is
+!!            perturbed, including the change in total phase moles.
+!!          - H is the final curvature with respect to endmember mole amounts.
+!!          - transpose(D) maps a site-space response back to endmember space.
+!!
+!!          In an excess term P(y)L(eta), P is a product of selected site
+!!          fractions, eta is one local composition coordinate, and L is the
+!!          interaction polynomial evaluated at that coordinate.
+!!
+!!          File map:
+!!          1. Generic interaction description and public interface
+!!          2. Public scalar-energy and mole-space Hessian evaluators
+!!          3. Input checks and endmember-to-site composition mapping
+!!          4. Generic site-space interaction and polynomial calculus
 !-------------------------------------------------------------------------------------------------------------
 
 module ModuleCEFUnconstrained
@@ -12,7 +44,20 @@ module ModuleCEFUnconstrained
     implicit none
     private
 
-    !> One excess term phi(y) = product(y(u)**nu(u)) * L(c + dot_product(q,y)).
+    !=========================================================================================================
+    ! SECTION 1: GENERIC CEF INTERACTION DESCRIPTION AND PUBLIC INTERFACE
+    !
+    ! The module consumes model-neutral arrays. The production SUBL decoder lives
+    ! in the verification test so this thermodynamic core remains disconnected
+    ! from ModuleThermo and reusable for controlled mathematical checks.
+    !=========================================================================================================
+
+    !> One generic excess interaction written as an occupancy product times a polynomial.
+    !>
+    !> For each site constituent u, nu(u) is its power in the occupancy product.
+    !> The coefficients q(u) and constant c combine all site fractions into the
+    !> scalar composition coordinate eta=c+sum(q(u)*y(u)). The stored polynomial
+    !> coefficients then define L(eta).
     type, public :: CEFInteractionTerm
         real(8) :: dArgumentConstant = 0D0
         real(8), allocatable :: dExponent(:)
@@ -25,6 +70,14 @@ module ModuleCEFUnconstrained
     public :: CompCEFInteractionValue
 
 contains
+
+    !=========================================================================================================
+    ! SECTION 2: PUBLIC ENERGY AND HESSIAN EVALUATORS
+    !
+    ! The scalar routine evaluates the extensive reference, ideal, and excess
+    ! energy blocks. The Hessian routine differentiates those blocks in
+    ! site-fraction space and maps their curvature back to endmember-mole space.
+    !=========================================================================================================
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Evaluate the extensive disconnected CEF Gibbs energy.
@@ -65,6 +118,9 @@ contains
             dReferenceEnergy,tInteraction,dSiteFraction,dN,iInfo)
         if (iInfo /= 0) return
 
+        ! A reference endmember represents one simultaneous constituent choice
+        ! on every sublattice. Its probability is therefore the product of the
+        ! corresponding site fractions.
         do i = 1, SIZE(dMoles)
             dMonomial = 1D0
             do s = 1, SIZE(dSublatticeMultiplicity)
@@ -73,12 +129,16 @@ contains
             dGibbsReference = dGibbsReference + dReferenceEnergy(i)*dMonomial
         end do
 
+        ! Ideal CEF mixing occurs independently on each sublattice. Multiplicity
+        ! scales the contribution by the number of sites of that sublattice.
         do u = 1, SIZE(dSiteFraction)
             s = iSiteSublattice(u)
             dGibbsIdeal = dGibbsIdeal + dIdealScale*dSublatticeMultiplicity(s)* &
                 dSiteFraction(u)*DLOG(dSiteFraction(u))
         end do
 
+        ! Each decoded excess term is an occupancy prefactor P(y) multiplied by
+        ! a polynomial in one linear local-composition coordinate eta.
         do i = 1, SIZE(tInteraction)
             dGibbsExcess = dGibbsExcess + CompCEFInteractionValue(dSiteFraction,tInteraction(i))
         end do
@@ -94,9 +154,14 @@ contains
     !---------------------------------------------------------------------------------------------------------
     !> \brief Compute the unconstrained endmember-mole Hessian of the disconnected CEF energy.
     !>
-    !> \details The site-space block B is contracted as H = D^T B D / n, where
-    !!          D(u,i) = delta(i occupies u) - y(u).  Optional outputs expose the reference, ideal, and excess
-    !!          Hessian blocks for diagnostic comparisons without adding an analytic first-derivative API.
+    !> \details B first describes curvature between pairs of constituent site
+    !!          fractions. D maps a perturbation of endmember i into the resulting
+    !!          changes of every site fraction u. The contraction
+    !!          H=transpose(D)*B*D/n therefore expresses that same curvature in
+    !!          endmember-mole coordinates. In
+    !!          D(u,i)=occupancy_indicator(u,i)-y(u), the indicator is one when
+    !!          endmember i contains constituent u and zero otherwise. Optional
+    !!          outputs expose the separate reference, ideal, and excess blocks.
     !>
     !> \param[in]  dMoles Endmember mole amounts.
     !> \param[in]  iOccupancy Site-variable index occupied by each (sublattice,endmember) pair.
@@ -171,7 +236,9 @@ contains
         dBIdeal = 0D0
         dBExcess = 0D0
 
-        ! Each reference endmember is a product containing its one constituent from every sublattice.
+        ! Differentiate the endmember probability products in site space. The
+        ! reference block is generally curved in y even though the final
+        ! extensive reference energy is linear in independent endmember moles.
         do i = 1, SIZE(dMoles)
             dExponent = 0D0
             do s = 1, SIZE(dSublatticeMultiplicity)
@@ -180,6 +247,8 @@ contains
             call AddMonomialHessian(dSiteFraction,dExponent,dReferenceEnergy(i),dBReference)
         end do
 
+        ! The second derivative of y*log(y) is 1/y, so ideal site-space
+        ! curvature is diagonal before the endmember-composition contraction.
         do u = 1, SIZE(dSiteFraction)
             s = iSiteSublattice(u)
             dBIdeal(u,u) = dIdealScale*dSublatticeMultiplicity(s)/dSiteFraction(u)
@@ -189,6 +258,10 @@ contains
             call AddInteractionHessian(dSiteFraction,tInteraction(i),dBExcess)
         end do
 
+        ! D describes how every site fraction changes when one endmember mole is
+        ! perturbed. Here u labels a site constituent and i labels an endmember.
+        ! Start with -y(u), which accounts for dilution as total phase moles
+        ! increase, then add one when endmember i actually contains constituent u.
         do i = 1, SIZE(dMoles)
             do u = 1, SIZE(dSiteFraction)
                 dD(u,i) = -dSiteFraction(u)
@@ -198,6 +271,8 @@ contains
             end do
         end do
 
+        ! Contract site-space curvature into endmember-mole space. Division by
+        ! total phase moles follows from differentiating normalized fractions.
         dHReference = MATMUL(TRANSPOSE(dD),MATMUL(dBReference,dD))/dN
         dHIdeal = MATMUL(TRANSPOSE(dD),MATMUL(dBIdeal,dD))/dN
         dHExcess = MATMUL(TRANSPOSE(dD),MATMUL(dBExcess,dD))/dN
@@ -217,6 +292,22 @@ contains
 
     end subroutine CompCEFHessianUnconstrained
 
+    !=========================================================================================================
+    ! SECTION 3: INPUT CHECKS AND ENDMEMBER-TO-SITE COMPOSITION MAPPING
+    !
+    ! CEF logarithms and 1/y curvature require a strictly positive interior
+    ! state. Invalid topology and boundary compositions are rejected explicitly;
+    ! the module never clips or silently renormalizes the supplied state.
+    !=========================================================================================================
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Verify the generic CEF topology and construct constituent site fractions.
+    !>
+    !> \details Endmember mole fractions are projected through iOccupancy. Each
+    !!          endmember contributes its fraction to exactly one constituent on
+    !!          every sublattice, producing the local variables used by all energy
+    !!          and curvature formulas.
+    !---------------------------------------------------------------------------------------------------------
 
     subroutine CheckCEFInputs(dMoles,iOccupancy,iSiteSublattice,dSublatticeMultiplicity, &
         dReferenceEnergy,tInteraction,dSiteFraction,dN,iInfo)
@@ -308,6 +399,14 @@ contains
 
     end subroutine CheckCEFInputs
 
+    !=========================================================================================================
+    ! SECTION 4: GENERIC SITE-SPACE INTERACTION CALCULUS
+    !
+    ! Production binary, ternary, and coupled SUBL parameters are decoded into
+    ! the common form phi(y) = P(y)L(eta), eta = c + q.y. These helpers evaluate
+    ! that form and its site-space curvature without knowing the production
+    ! parameter family from which it came.
+    !=========================================================================================================
 
     !> \brief Evaluate one generic P(y)L(eta) term for decoder identity checks.
     real(8) function CompCEFInteractionValue(dY,tTerm)
@@ -323,6 +422,13 @@ contains
     end function CompCEFInteractionValue
 
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Add the site-space Hessian of a pure occupancy monomial.
+    !>
+    !> \details Reference endmember probabilities and excess prefactors are
+    !!          products of site fractions. This helper supplies the curvature of
+    !!          such a product before the D contraction into mole space.
+    !---------------------------------------------------------------------------------------------------------
     subroutine AddMonomialHessian(dY,dExponent,dCoefficient,dB)
 
         real(8), intent(in) :: dY(:), dExponent(:), dCoefficient
@@ -342,6 +448,13 @@ contains
     end subroutine AddMonomialHessian
 
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Add the site-space Hessian of one P(y)L(c+q.y) excess term.
+    !>
+    !> \details The four contributions are the curvature of P, two cross terms
+    !!          coupling the gradients of P and L, and the curvature of L along
+    !!          its linear composition coordinate.
+    !---------------------------------------------------------------------------------------------------------
     subroutine AddInteractionHessian(dY,tTerm,dB)
 
         real(8), intent(in) :: dY(:)
@@ -369,6 +482,13 @@ contains
     end subroutine AddInteractionHessian
 
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Evaluate an interaction polynomial and its first two eta derivatives.
+    !>
+    !> \details Coefficients are stored in ascending power order. Horner-style
+    !!          evaluation keeps the value and derivative calculations compact
+    !!          without duplicating a production interaction formula.
+    !---------------------------------------------------------------------------------------------------------
     subroutine CompPolynomial(dCoefficient,dEta,dValue,dFirst,dSecond)
 
         real(8), intent(in) :: dCoefficient(:), dEta

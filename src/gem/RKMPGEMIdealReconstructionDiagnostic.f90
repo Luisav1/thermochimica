@@ -1,5 +1,31 @@
 !> \file    RKMPGEMIdealReconstructionDiagnostic.f90
-!> \brief   Diagnostic-only reconstruction of GEMNewton's ideal RKMP phase contribution.
+!> \brief   Diagnostic-only reconstruction of the ideal RKMP phase contribution in GEMNewton.
+!>
+!> \details This diagnostic is the bridge between local phase mathematics and
+!!          the reduced GEMNewton system. It first reconstructs the existing
+!!          ideal/simple contribution to the element-element matrix block,
+!!          element-phase coupling, and right-hand side directly from local
+!!          phase quantities. Exact reconstruction establishes the variable
+!!          conventions and signs used by GEM.
+!!
+!!          It then replaces only the local ideal response with ideal-plus-RKMP
+!!          response and reports the complete candidate matrix change deltaA and
+!!          residual change deltaB. This demonstrated why merely projecting local
+!!          curvature along selected element directions was insufficient: both
+!!          the matrix and current residual must be rebuilt from the same relaxed
+!!          local composition response.
+!!
+!!          No values in the supplied A or B are modified.
+!!
+!!          Notation used below:
+!!          - Aee is the element-potential by element-potential matrix block.
+!!          - Aep couples an element potential to the amount of this phase.
+!!          - Be and Bp are the corresponding element and phase residual entries.
+!!          - N is total phase moles, x is the local species mole-fraction
+!!            vector, C(i,e) is the amount of element e in species i, and mu is
+!!            the local chemical-potential vector.
+!!          - A "reconstructed" quantity is rebuilt from these local phase
+!!            objects and then compared with the existing GEMNewton expression.
 
 subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
 
@@ -36,6 +62,9 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
     if (.NOT. lDebugRKMPHessianFD) return
     if (nSolnPhases <= 0) return
 
+    !=========================================================================================================
+    ! SECTION 1: RECONSTRUCT GEMNEWTON'S EXISTING IDEAL PHASE CONTRIBUTION
+    !=========================================================================================================
     LOOP_SOLN: do iSolnPhases = 1, nSolnPhases
 
         iAssemblageSlot = nElements - iSolnPhases + 1
@@ -104,7 +133,10 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
             dBpRecon = dBpRecon + dLocalMoles(l) * dMu(l)
         end do
 
-        ! Same contribution reconstructed from local ideal-condensed quantities: N, x, C, and mu.
+        ! Reconstruct the same contribution after representing species amounts
+        ! as total phase moles N times local mole fractions x. C carries
+        ! species-to-element stoichiometry and mu carries the current
+        ! chemical-potential forcing.
         do j = 1, nElements
             dCbar = 0D0
             do l = 1, nPhaseSpecies
@@ -128,6 +160,13 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
             end do
         end do
 
+        !=====================================================================================================
+        ! SECTION 2: SUBSTITUTE THE CORRECTED LOCAL RESPONSE
+        !
+        ! Preserve the GEM variable conventions and the terms caused by changing
+        ! total phase amount. Replace only the local composition response that
+        ! has been mathematically eliminated from the reduced GEM system.
+        !=====================================================================================================
         call CompExcessGibbsEnergyRKMP_unconstrained(k, dHloc)
         dHx = dPhaseMoles * dHloc
         do i = 1, nPhaseSpecies
@@ -178,8 +217,10 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
         dIdealCenteredAee = MATMUL(TRANSPOSE(dC), dPhaseMoles * dIdealResponse)
         dNewAee           = dOuterAee + dCenteredAee
         dDeltaAee         = dNewAee - dReconAee
-        ! Re-condense the current local stationarity forcing through each response.  Using deltaA*gamma here
-        ! would agree only after the species chemical-potential residual is already zero.
+        ! Re-condense the current species chemical-potential imbalance through
+        ! each local response. Inferring the residual change only from the matrix
+        ! change and current element potentials would be valid only after local
+        ! species stationarity had already been reached.
         dDeltaBe          = MATMUL(TRANSPOSE(dC), dPhaseMoles * &
             (dMuResponse(:,1) - dIdealMuResponse(:,1)))
         dNewBe            = dReconBe + dDeltaBe
@@ -226,6 +267,9 @@ subroutine RKMPGEMIdealReconstructionDiagnostic(A, B, nVar)
 
 contains
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Solve a normalized local composition response for reconstruction.
+    !---------------------------------------------------------------------------------------------------------
     subroutine SolveLocalResponse(nSpecies, nElem, dHxLocal, dCLocal, dResp, INFO)
 
         integer, intent(in)                    :: nSpecies, nElem
@@ -262,6 +306,9 @@ contains
 
     end subroutine SolveLocalResponse
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Build the ideal curvature and solve the matching normalized response.
+    !---------------------------------------------------------------------------------------------------------
     subroutine SolveIdealResponse(nSpecies, nElem, dXLocal, dCLocal, dResp, INFO)
 
         integer, intent(in)                    :: nSpecies, nElem

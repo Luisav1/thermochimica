@@ -3,18 +3,54 @@
 !> \file    MapRKMPHessianToGEMVariables.f90
 !> \brief   Map plain-RKMP local response curvature into GEMNewton trial systems.
 !
-!> \details This routine converts the validated RKMP local excess Hessian into a
+!> \details This routine converts the verified RKMP local excess Hessian into a
 !! constrained mole-fraction response, subtracts the corresponding ideal-response contribution, and applies the
-!! resulting delta to GEMNewton's element-potential block and residual vector.  The mapper is intentionally
+!! resulting delta to the GEMNewton element-potential block and residual vector.  The mapper is intentionally
 !! RKMP-only and is used both for accepted solver updates and for alpha-trust trial solves.
 !!
-!! Stage 1D supplies the response correction:
-!!   deltaA = A_RKMP_response - A_ideal_response
-!!   deltaB = N C^T (R_RKMP - R_ideal) mu
+!! "Condensing" a phase means solving for its local composition response and
+!! then eliminating those local composition variables, leaving contributions
+!! expressed only in the global GEM unknowns. The response correction has two
+!! matching pieces. deltaA changes how
+!! element-potential perturbations affect the element-balance equations. deltaB
+!! changes the current residual using the same corrected local response:
+!!   deltaA = corrected condensed matrix - ideal condensed matrix
+!!   deltaB = corrected condensed residual - ideal condensed residual.
 !!
 !! This stage supplies an explicit trial alpha and controls whether accepted-run metrics are updated.  Trial calls
 !! use the same thermodynamic correction as accepted calls, but leave global counters untouched so rejected
 !! candidate alphas do not pollute the final audit summary.
+!!
+!! Conceptual pipeline for each active plain-RKMP phase:
+!!   1. Read local species moles, mole fractions, stoichiometry C, and current
+!!      chemical-potential forcing from the production GEM state. C(i,e) is the
+!!      amount of element e carried by local species i.
+!!   2. Obtain Hloc, which describes excess chemical-potential response to
+!!      species-mole perturbations. At fixed total phase amount N, multiplying
+!!      by N expresses that response per mole-fraction change. Add ideal mixing
+!!      curvature, whose diagonal entry for species i is 1/x_i.
+!!   3. Solve a bordered local equilibrium system for composition response. Its
+!!      entries dx_i are infinitesimal mole-fraction changes, and they must sum
+!!      to zero because all mole fractions remain normalized to one.
+!!   4. Repeat the same condensation with ideal curvature alone.
+!!   5. Apply only the difference between corrected and ideal responses:
+!!         deltaA = A_response(corrected) - A_response(ideal)
+!!         deltaB = B_response(corrected) - B_response(ideal).
+!!
+!! The subtraction does not remove RKMP curvature algebraically. It prevents
+!! double-counting the ideal response already represented by GEMNewton. This
+!! response condensation replaced an earlier diagnostic projection. That
+!! projection correctly measured local curvature along selected element-driven
+!! composition directions, but it did not solve how phase composition relaxes
+!! under those perturbations and was not the reduced matrix required by GEMNewton.
+!!
+!! Additional notation:
+!!   - A is the GEMNewton coefficient matrix and B is its right-hand-side residual.
+!!   - Hloc is the local excess Hessian with respect to species moles.
+!!   - A "response" is the solved composition change produced by a specified
+!!     element-potential or chemical-potential perturbation.
+!!   - alpha controls how much of a complete candidate correction is trusted in
+!!     this nonlinear iteration; it does not weaken the derivative itself.
 !
 !> \param[in,out] A              GEMNewton matrix.  On return, receives alpha-scaled RKMP response deltas in the element block.
 !> \param[in,out] B              GEMNewton right-hand side.  On return, receives the matching alpha-scaled RKMP residual delta.
@@ -73,6 +109,14 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
     dAlpha = dAlphaInput
     dAlpha = DMAX1(0D0, DMIN1(1D0, dAlpha))
 
+    !=========================================================================================================
+    ! SECTION 1: BUILD ONE CORRECTION FROM EACH ACTIVE PLAIN-RKMP PHASE
+    !
+    ! Only phases in the current assemblage contribute. RKMPM and other solution
+    ! models are skipped because their missing curvature terms would make this
+    ! response model thermodynamically incomplete.
+    !=========================================================================================================
+
     LOOP_SOLN: do iSolnPhases = 1, nSolnPhases
 
         k = -iAssemblage(nElements - iSolnPhases + 1)
@@ -113,6 +157,14 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             end do
         end do
 
+        !---------------------------------------------------------------------------------------------
+        ! SECTION 1A: CORRECTED CONSTRAINED LOCAL RESPONSE
+        !
+        ! Hloc describes excess chemical-potential response to species-mole
+        ! changes. Holding total phase amount fixed converts a mole-fraction
+        ! change dx into a mole change N*dx. The diagonal 1/x_i terms add the
+        ! corresponding ideal-mixing response for each species.
+        !---------------------------------------------------------------------------------------------
         call CompExcessGibbsEnergyRKMP_unconstrained(k,dHloc)
         if (INFOThermo /= 0) then
             deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
@@ -150,6 +202,13 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             cycle LOOP_SOLN
         end if
 
+        !---------------------------------------------------------------------------------------------
+        ! SECTION 1B: IDEAL BASELINE AND RESPONSE DELTA
+        !
+        ! GEMNewton already contains an ideal/simple phase response. Reconstruct
+        ! that baseline with the identical constraint and forcing, then retain
+        ! only the change caused by adding RKMP excess curvature.
+        !---------------------------------------------------------------------------------------------
         dCandidate = MATMUL(TRANSPOSE(dC), dTotalMoles * dResponse)
         call ComputeIdealCandidate(nPhaseSpecies, nElements, dX, dC, dMuRHS, dTotalMoles, &
                                    dIdealCandidate, dIdealResponse, dIdealMuResponse, INFO)
@@ -168,6 +227,12 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
         dDeltaB = MATMUL(TRANSPOSE(dC), dTotalMoles * &
             (dMuResponse(:,1) - dIdealMuResponse(:,1)))
 
+        !---------------------------------------------------------------------------------------------
+        ! SECTION 1C: FINITE-VALUE GUARDS AND AUDIT METRICS
+        !
+        ! Trial corrections are measured but not applied here. SolveRKMPAlphaTrust
+        ! uses these metrics together with the solved update to choose alpha.
+        !---------------------------------------------------------------------------------------------
         lBadDelta = .FALSE.
         do j = 1, nElements
             do i = 1, nElements
@@ -227,6 +292,16 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
     end do LOOP_SOLN
 
+    !=========================================================================================================
+    ! SECTION 2: APPLY THE AGGREGATED TRIAL CORRECTION
+    !
+    ! Alpha controls how much of the complete RKMP correction is used in this
+    ! trial Newton system. This is part of globalization: the safeguards that
+    ! keep a locally derived Newton step useful while the current state may
+    ! still be far from equilibrium. Alpha does not rescale the underlying
+    ! thermodynamic derivative.
+    ! The element block is symmetrized as it is inserted into GEMNewton.
+    !=========================================================================================================
     do j = 1, nElements
         do i = j, nElements
             A(i,j) = A(i,j) + 0.5D0 * dAlpha * (ARKMP(i,j) + ARKMP(j,i))
@@ -238,6 +313,16 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
 contains
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Solve the normalized local composition response to one or more forcing directions.
+    !>
+    !> \details The bordered matrix combines local chemical-potential curvature
+    !!          with one normalization multiplier. Its final row requires the
+    !!          infinitesimal mole-fraction changes to sum to zero, preserving
+    !!          the definition that all mole fractions sum to one. The solve
+    !!          changes composition within one already active phase; it neither
+    !!          fixes nor constrains which phases belong to the global assemblage.
+    !---------------------------------------------------------------------------------------------------------
     subroutine SolveLocalResponse(nSpecies, nElem, dHxLocal, dCLocal, dResp, INFO)
 
         integer, intent(in)                    :: nSpecies, nElem
@@ -274,6 +359,13 @@ contains
 
     end subroutine SolveLocalResponse
 
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Reconstruct the ideal-only local response already represented by GEMNewton.
+    !>
+    !> \details Using the same normalization constraint and forcing as the
+    !!          corrected solve isolates the excess-curvature effect as a
+    !!          response difference rather than as a raw added stiffness.
+    !---------------------------------------------------------------------------------------------------------
     subroutine ComputeIdealCandidate(nSpecies, nElem, dXLocal, dCLocal, dMuLocal, dPhaseMoles, &
                                      dIdeal, dRespIdeal, dMuRespIdeal, INFO)
 

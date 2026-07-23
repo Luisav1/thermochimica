@@ -1,6 +1,24 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    RKMPMappedHessianDiagnostic.f90
 !> \brief   Diagnostic-only projection of RKMP species curvature to GEM element directions.
+!>
+!> \details This historical Stage 1A/1B diagnostic constructs a matrix J whose
+!!          column for element e describes one local species-mole direction
+!!          induced by that element. The phase-average stoichiometry is removed,
+!!          so each direction redistributes species without changing total phase
+!!          moles.
+!!
+!!          The projected matrix Kmap=transpose(J)*Hloc*J measures RKMP curvature
+!!          between pairs of those element-driven directions. Hloc is the local
+!!          species-mole Hessian; multiplying on the right maps an element
+!!          direction into species space, and multiplying by transpose(J) maps
+!!          the resulting response back to element-direction coordinates.
+!!          This established that the local Hessian projection was mathematically
+!!          and numerically consistent.
+!!
+!!          Kmap is diagnostic curvature, not the production GEM correction.
+!!          Directly adding it to GEMNewton was rejected because GEM requires the
+!!          constrained phase response and matching right-hand-side condensation.
 !-------------------------------------------------------------------------------------------------------------
 
 subroutine RKMPMappedHessianDiagnostic
@@ -40,7 +58,8 @@ subroutine RKMPMappedHessianDiagnostic
             cycle
         end if
 
-        ! Stage 1A: composition-preserving GEM-element-to-species directions.
+        ! Stage 1A: subtract the phase-average stoichiometry so every column of J
+        ! changes composition while preserving the total phase amount.
         do j = 1, nElements
             dCbar = 0D0
             do i = 1, nLocalSpecies
@@ -57,7 +76,8 @@ subroutine RKMPMappedHessianDiagnostic
 
         call CompExcessGibbsEnergyRKMP_unconstrained(m, dHloc)
 
-        ! Stage 1B: Kmap = J^T Hloc J.
+        ! Stage 1B: project local species curvature between every pair of those
+        ! element-driven composition directions.
         dKmap = 0D0
         do j = 1, nElements
             do i = 1, nElements
