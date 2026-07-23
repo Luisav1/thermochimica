@@ -237,7 +237,7 @@ subroutine GEMNewton(INFO)
             end do LOOP_SUB
         end if
 
-        ! Optionally validate mapped RKMP second-order terms without changing the Newton matrix:
+        ! Optionally verify mapped RKMP second-order terms without changing the Newton matrix:
         if (lDebugRKMPHessianFD) then
             call RKMPMappedHessianDiagnostic
             call RKMPResponseDiagnostic
@@ -246,6 +246,8 @@ subroutine GEMNewton(INFO)
 
         ! Call the linear equation solver:
         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
+        
+            ! The system is not purely elemental, so use the RKMP Hessian if it is active and enabled.
             if (lUseRKMPExactHessian .AND. lRKMPHessianActive) then
                 call SolveRKMPAlphaTrust(A, B, nVar, IPIV, INFO)
             else
@@ -411,6 +413,8 @@ contains
                 BTrial = BBase
                 lCorrectionOK = .TRUE.
                 dTrialRatio = 0D0
+
+                ! Apply the candidate RKMP correction to the GEM matrix and residual, but do not solve for the updated direction.
                 call MapRKMPHessianToGEMVariables(ATrial, BTrial, nLocalVar, dAlphaCandidate, &
                                                    .FALSE., lCorrectionOK, dTrialRatio)
 
@@ -474,6 +478,8 @@ contains
         BIn = BBase
         lCorrectionOK = .TRUE.
         dTrialRatio = 0D0
+
+        ! Finally apply the selected RKMP correction to the GEM matrix and residual, and solve for the updated direction.
         call MapRKMPHessianToGEMVariables(AIn, BIn, nLocalVar, dBestAlpha, .TRUE., lCorrectionOK, dTrialRatio)
         IPIVIn = 0
         call dgesv(nLocalVar, 1, AIn, nLocalVar, IPIVIn, BIn, nLocalVar, INFOOut)

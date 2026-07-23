@@ -182,6 +182,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             dHx(i,i) = dHx(i,i) + 1D0 / dX(i)
         end do
 
+        ! Solve the bordered system for the constrained local response to each element-potential perturbation.
         call SolveLocalResponse(nPhaseSpecies, nElements, dHx, dC, dResponse, INFO)
         if (INFO /= 0) then
             if (lDebugRKMPHessianFD) then
@@ -223,6 +224,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             cycle LOOP_SOLN
         end if
 
+        ! Compute the difference between the corrected and ideal responses. This is the RKMP contribution to the GEMNewton element block and residual.
         dDelta = dCandidate - dIdealCandidate
         dDeltaB = MATMUL(TRANSPOSE(dC), dTotalMoles * &
             (dMuResponse(:,1) - dIdealMuResponse(:,1)))
