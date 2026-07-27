@@ -59,7 +59,7 @@
 !!                               [0,1].  It scales mapped deltaA and deltaB only after the full RKMP curvature and
 !!                               constrained response have been constructed.
 !> \param[in]     lUpdateMetrics If true, update RKMP audit counters and emit detailed debug diagnostics when enabled.
-!> \param[out]    lCorrectionOK  False when an RKMP mapped correction contains invalid floating-point values.
+!> \param[out]    lCorrectionOK  False when any active RKMP phase cannot produce a complete, finite correction.
 !> \param[out]    dTrialMaxRatio Maximum alpha-scaled A correction relative to the current element block.
 !
 !-------------------------------------------------------------------------------------------------------------
@@ -68,6 +68,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleRKMPResponseMapping, ONLY: SolveRKMPConstrainedResponse
     USE ModuleThermoIO, ONLY: INFOThermo
 
     implicit none
@@ -108,6 +109,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
     dAlpha = dAlphaInput
     dAlpha = DMAX1(0D0, DMIN1(1D0, dAlpha))
+    if (dAlpha <= 0D0) return
 
     !=========================================================================================================
     ! SECTION 1: BUILD ONE CORRECTION FROM EACH ACTIVE PLAIN-RKMP PHASE
@@ -167,6 +169,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
         !---------------------------------------------------------------------------------------------
         call CompExcessGibbsEnergyRKMP_unconstrained(k,dHloc)
         if (INFOThermo /= 0) then
+            call RecordMappingFailure(k, RKMP_MAP_HESSIAN_FAILURE)
             deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
                        dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
                        dDelta, dDeltaB)
@@ -183,24 +186,26 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
         end do
 
         ! Solve the bordered system for the constrained local response to each element-potential perturbation.
-        call SolveLocalResponse(nPhaseSpecies, nElements, dHx, dC, dResponse, INFO)
+        call SolveRKMPConstrainedResponse(nPhaseSpecies, nElements, dHx, dC, dResponse, INFO)
         if (INFO /= 0) then
             if (lDebugRKMPHessianFD) then
                 write(*,'(A,1X,A,1X,I0,1X,A,1X,I0)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'response_solve_info=', INFO
             end if
+            call RecordMappingFailure(k, RKMP_MAP_ELEMENT_RESPONSE_FAILURE)
             deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
                        dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
                        dDelta, dDeltaB)
-            cycle LOOP_SOLN
+            return
         end if
 
-        call SolveLocalResponse(nPhaseSpecies, 1, dHx, dMuRHS, dMuResponse, INFO)
+        call SolveRKMPConstrainedResponse(nPhaseSpecies, 1, dHx, dMuRHS, dMuResponse, INFO)
         if (INFO /= 0) then
+            call RecordMappingFailure(k, RKMP_MAP_RESIDUAL_RESPONSE_FAILURE)
             deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
                        dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
                        dDelta, dDeltaB)
-            cycle LOOP_SOLN
+            return
         end if
 
         !---------------------------------------------------------------------------------------------
@@ -218,10 +223,11 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
                 write(*,'(A,1X,A,1X,I0,1X,A,1X,I0)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'ideal_solve_info=', INFO
             end if
+            call RecordMappingFailure(k, RKMP_MAP_IDEAL_RESPONSE_FAILURE)
             deallocate(dX, dLocalMoles, dMu, dC, dHloc, dHx, dResponse, dIdealResponse, &
                        dMuRHS, dMuResponse, dIdealMuResponse, dIdealCandidate, dCandidate, &
                        dDelta, dDeltaB)
-            cycle LOOP_SOLN
+            return
         end if
 
         ! Compute the difference between the corrected and ideal responses. This is the RKMP contribution to the GEMNewton element block and residual.
@@ -242,6 +248,11 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
                     lBadDelta = .TRUE.
                 end if
             end do
+        end do
+        do i = 1, nElements
+            if ((dDeltaB(i) /= dDeltaB(i)) .OR. (DABS(dDeltaB(i)) > 0.5D0 * HUGE(1D0))) then
+                lBadDelta = .TRUE.
+            end if
         end do
 
         if (.NOT. lBadDelta) then
@@ -281,7 +292,7 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
             ARKMP(1:nElements,1:nElements) = ARKMP(1:nElements,1:nElements) + dDelta
             BRKMP(1:nElements) = BRKMP(1:nElements) + dDeltaB
         else
-            lCorrectionOK = .FALSE.
+            call RecordMappingFailure(k, RKMP_MAP_INVALID_CORRECTION)
             if (lDebugRKMPHessianFD .AND. lUpdateMetrics) then
                 write(*,'(A,1X,A,1X,I0,1X,A)') &
                     'RKMP_STAGE1D_MAP_DEBUG', TRIM(cSolnPhaseName(k)), k, 'skipped_bad_delta'
@@ -315,51 +326,16 @@ subroutine MapRKMPHessianToGEMVariables(A,B,nVar,dAlphaInput,lUpdateMetrics,lCor
 
 contains
 
-    !---------------------------------------------------------------------------------------------------------
-    !> \brief Solve the normalized local composition response to one or more forcing directions.
-    !>
-    !> \details The bordered matrix combines local chemical-potential curvature
-    !!          with one normalization multiplier. Its final row requires the
-    !!          infinitesimal mole-fraction changes to sum to zero, preserving
-    !!          the definition that all mole fractions sum to one. The solve
-    !!          changes composition within one already active phase; it neither
-    !!          fixes nor constrains which phases belong to the global assemblage.
-    !---------------------------------------------------------------------------------------------------------
-    subroutine SolveLocalResponse(nSpecies, nElem, dHxLocal, dCLocal, dResp, INFO)
+    !> \brief Invalidate the complete mapper trial and retain phase-specific failure evidence.
+    subroutine RecordMappingFailure(iPhase, iReason)
 
-        integer, intent(in)                    :: nSpecies, nElem
-        integer, intent(out)                   :: INFO
-        real(8), intent(in), dimension(:,:)    :: dHxLocal, dCLocal
-        real(8), intent(out), dimension(:,:)   :: dResp
+        integer, intent(in) :: iPhase, iReason
 
-        integer                                :: ii, jj, nEqn
-        integer, dimension(:), allocatable     :: IPIV
-        real(8), dimension(:,:), allocatable   :: dKKT, dRHS
+        lCorrectionOK = .FALSE.
+        iRKMPHessianLastFailurePhase = iPhase
+        iRKMPHessianLastFailureReason = iReason
 
-        nEqn = nSpecies + 1
-        allocate(dKKT(nEqn,nEqn), dRHS(nEqn,nElem), IPIV(nEqn))
-        dKKT = 0D0
-        dRHS = 0D0
-
-        dKKT(1:nSpecies,1:nSpecies) = dHxLocal(1:nSpecies,1:nSpecies)
-        do ii = 1, nSpecies
-            dKKT(ii,nEqn) = -1D0
-            dKKT(nEqn,ii) = 1D0
-        end do
-        dRHS(1:nSpecies,1:nElem) = dCLocal(1:nSpecies,1:nElem)
-
-        call DGESV(nEqn, nElem, dKKT, nEqn, IPIV, dRHS, nEqn, INFO)
-        if (INFO == 0) then
-            do jj = 1, nElem
-                dResp(1:nSpecies,jj) = dRHS(1:nSpecies,jj)
-            end do
-        else
-            dResp = 0D0
-        end if
-
-        deallocate(dKKT, dRHS, IPIV)
-
-    end subroutine SolveLocalResponse
+    end subroutine RecordMappingFailure
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Reconstruct the ideal-only local response already represented by GEMNewton.
@@ -389,10 +365,10 @@ contains
             dHideal(ii,ii) = 1D0 / dXLocal(ii)
         end do
 
-        call SolveLocalResponse(nSpecies, nElem, dHideal, dCLocal, dRespIdeal, INFO)
+        call SolveRKMPConstrainedResponse(nSpecies, nElem, dHideal, dCLocal, dRespIdeal, INFO)
         if (INFO == 0) then
             dIdeal = MATMUL(TRANSPOSE(dCLocal), dPhaseMoles * dRespIdeal)
-            call SolveLocalResponse(nSpecies, 1, dHideal, dMuLocal, dMuRespIdeal, INFO)
+            call SolveRKMPConstrainedResponse(nSpecies, 1, dHideal, dMuLocal, dMuRespIdeal, INFO)
         else
             dIdeal = 0D0
             dMuRespIdeal = 0D0

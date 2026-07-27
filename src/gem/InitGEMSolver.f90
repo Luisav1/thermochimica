@@ -63,11 +63,12 @@ subroutine InitGEMSolver
 
     implicit none
 
-    integer::                               i, j, k, l
+    integer::                               i, j, k, l, iEnvStatus, iReadStatus
     integer,dimension(nElements)::          iAssemblageLast
     real(8)::                               dTemp, dSum
     real(8),dimension(-1:nSolnPhasesSys)::  dTempVec
     logical::                               lPhasePass, lCompEverything
+    character(len=32)::                     cEnvValue
 
 
     ! Check to see if allocatable arrays have already been allocated:
@@ -167,7 +168,10 @@ subroutine InitGEMSolver
     nRKMPHessianRejectUpdate = 0
     nRKMPHessianRejectNonlinear = 0
     nRKMPHessianRejectDirection = 0
+    nRKMPHessianRejectLocalResponse = 0
     nRKMPHessianFullAlphaCount = 0
+    iRKMPHessianLastFailurePhase = 0
+    iRKMPHessianLastFailureReason = RKMP_MAP_SUCCESS
     nConPhases              = 0
     nSolnPhases             = 0
     iConPhaseLast           = 0
@@ -198,15 +202,36 @@ subroutine InitGEMSolver
     dRKMPHessianUpdateNormRatio = 0D0
     dRKMPHessianDirectionCosine = 1D0
     dRKMPHessianDirectionDifference = 0D0
+    dRKMPHessianMaxSelectedAlpha = 0D0
+    dRKMPHessianAcceptedAlphaHistory = -1D0
     lRKMPHessianNonlinearReady = .FALSE.
     lRKMPHessianActive     = .FALSE.
     lRKMPHessianWasActive  = .FALSE.
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.
-    lUseRKMPExactHessian    = .FALSE.
-    lDebugRKMPHessianFD     = .FALSE.
-    dRKMPHessianBlendAlpha  = 0.10D0
+    if (lRKMPHessianControlsConfigured) then
+        lUseRKMPExactHessian = lRKMPHessianRequestedEnable
+        lDebugRKMPHessianFD = lRKMPHessianRequestedDebug
+        dRKMPHessianBlendAlpha = dRKMPHessianRequestedAlphaMax
+    else
+        lUseRKMPExactHessian = .FALSE.
+        lDebugRKMPHessianFD = .FALSE.
+        dRKMPHessianBlendAlpha = 0.10D0
+        cEnvValue = ''
+        call GET_ENVIRONMENT_VARIABLE('THERMOCHIMICA_RKMP_EXACT', cEnvValue, STATUS=iEnvStatus)
+        if (iEnvStatus == 0) then
+            lUseRKMPExactHessian = (TRIM(cEnvValue) == '1') .OR. (TRIM(cEnvValue) == 'true') .OR. &
+                                   (TRIM(cEnvValue) == 'TRUE')
+        end if
+        cEnvValue = ''
+        call GET_ENVIRONMENT_VARIABLE('THERMOCHIMICA_RKMP_ALPHA_MAX', cEnvValue, STATUS=iEnvStatus)
+        if (iEnvStatus == 0) then
+            read(cEnvValue,*,IOSTAT=iReadStatus) dRKMPHessianBlendAlpha
+            if (iReadStatus /= 0) dRKMPHessianBlendAlpha = 0.10D0
+            dRKMPHessianBlendAlpha = DMAX1(0D0,DMIN1(1D0,dRKMPHessianBlendAlpha))
+        end if
+    end if
 
     ! Regrettably, branching here depending on whether reinit data has been loaded
     IF_ReinitLoaded: if (lReinitLoaded) then

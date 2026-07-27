@@ -149,7 +149,8 @@ subroutine GEMSolver
     ! Report an error if the GEMSolver did not converge but no other errors were encountered:
     if (.NOT.(lConverged).AND.(INFOThermo == 0)) INFOThermo = 12
 
-    if (lDebugRKMPHessianFD .OR. (lUseRKMPExactHessian .AND. lRKMPHessianWasActive)) then
+    if (lDebugRKMPHessianFD .OR. &
+        (lRKMPHessianReportSummary .AND. lUseRKMPExactHessian .AND. lRKMPHessianWasActive)) then
         ! Positional records keep the opt-in summary compact.  Fields follow the corresponding groups in
         ! ModuleGEMSolver: solve state, correction metrics/rejections, then nonlinear trust/direction metrics.
         write(*,*) 'RKMP_SOLVER_IMPACT', lUseRKMPExactHessian, dRKMPHessianBlendAlpha, &
@@ -158,10 +159,11 @@ subroutine GEMSolver
         write(*,*) 'RKMP_SOLVER_CORRECTION', dRKMPHessianMaxAppliedA, dRKMPHessianMaxAppliedB, &
             dRKMPHessianMaxAppliedRatio, dRKMPHessianMaxDeltaA, dRKMPHessianMaxDeltaB, &
             nRKMPHessianApplyCount, nRKMPHessianRejectDGESV, nRKMPHessianRejectBadDelta, &
-            nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate
+            nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate, nRKMPHessianRejectLocalResponse, &
+            iRKMPHessianLastFailurePhase, iRKMPHessianLastFailureReason
         write(*,*) 'RKMP_NONLINEAR_TRUST', lRKMPHessianNonlinearReady, dRKMPHessianDirectionCosine, &
             dRKMPHessianDirectionDifference, nRKMPHessianRejectNonlinear, nRKMPHessianRejectDirection, &
-            nRKMPHessianFullAlphaCount
+            nRKMPHessianFullAlphaCount, dRKMPHessianMaxSelectedAlpha
     end if
 
     return

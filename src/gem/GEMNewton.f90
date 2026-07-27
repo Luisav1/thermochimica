@@ -325,26 +325,18 @@ contains
         real(8), dimension(:,:)                :: AIn
         real(8), dimension(:)                  :: BIn
 
-        integer                                :: iAlpha, iLocal, INFOBase, INFOTrial
+        integer                                :: iAlpha, iLocal, INFOBase, INFOTrial, nAlpha
         integer, dimension(:), allocatable     :: IPIVTrial
         real(8)                                :: dAlphaCandidate, dBestAlpha, dNormBase, dNormTrial
         real(8)                                :: dTrialRatio, dBestUpdateRatio
         real(8)                                :: dCurrentGibbs, dGibbsScale, dDirectionCosine, dDirectionDifference
         real(8)                                :: dNormBase2, dNormTrial2
-        real(8), parameter                     :: dEmergencyRatioCap = 1D6
-        real(8), parameter                     :: dUpdateRatioCap = 1.25D0
-        real(8), parameter                     :: dDirectionCosineMin = 0.90D0
-        real(8), parameter                     :: dDirectionDifferenceCap = 0.50D0
-        real(8), parameter                     :: dLocalNormThreshold = 5D-2
-        real(8), parameter                     :: dProgressAllowance = 1.05D0
-        real(8), parameter                     :: dGibbsActivationTolerance = 1D-6
-        real(8), parameter                     :: dGibbsRetentionTolerance = 1D-4
         real(8), dimension(5)                  :: dAlphaList
         real(8), dimension(:), allocatable     :: BBase, BTrial, BZero, dStepTrial, dStepZero
         real(8), dimension(:,:), allocatable   :: ABase, ATrial
         logical                                :: lCorrectionOK, lAccepted
 
-        dAlphaList = [1D0, 1D-1, 1D-2, 1D-3, 0D0]
+        call BuildAlphaCandidateList(dRKMPHessianBlendAlpha, dAlphaList, nAlpha)
         dBestAlpha = 0D0
         dBestUpdateRatio = 0D0
         dDirectionCosine = 1D0
@@ -386,15 +378,16 @@ contains
         ! after a settled, non-diverging nonlinear step.
         if (.NOT. lRKMPHessianNonlinearReady) then
             lRKMPHessianNonlinearReady = (dMinGibbs < 0.5D0 * 1D200) .AND. &
-                (dGEMFunctionNorm < dLocalNormThreshold) .AND. (iterGlobal - iterLast >= 5) .AND. &
-                (dGEMFunctionNorm <= dProgressAllowance * DMAX1(dGEMFunctionNormLast,1D-30)) .AND. &
-                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dGibbsActivationTolerance)
+                (dGEMFunctionNorm < dRKMPTrustLocalNormThreshold) .AND. (iterGlobal - iterLast >= 5) .AND. &
+                (dGEMFunctionNorm <= dRKMPTrustProgressAllowance * DMAX1(dGEMFunctionNormLast,1D-30)) .AND. &
+                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dRKMPTrustGibbsActivationTolerance)
         else
             ! Retain local trust through small nonlinear oscillations, but return basin control to the ideal
             ! solve if residual or Gibbs behavior leaves the neighborhood where trust was established.
-            lRKMPHessianNonlinearReady = (dGEMFunctionNorm < dProgressAllowance * dLocalNormThreshold) .AND. &
+            lRKMPHessianNonlinearReady = &
+                (dGEMFunctionNorm < dRKMPTrustProgressAllowance * dRKMPTrustLocalNormThreshold) .AND. &
                 (iterGlobal - iterLast >= 5) .AND. &
-                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dGibbsRetentionTolerance)
+                (DABS(dCurrentGibbs - dMinGibbs) / dGibbsScale <= dRKMPTrustGibbsRetentionTolerance)
         end if
 
         if ((dRKMPHessianBlendAlpha <= 0D0) .OR. (.NOT. lRKMPHessianNonlinearReady)) then
@@ -406,7 +399,7 @@ contains
                 nRKMPHessianRejectNonlinear = nRKMPHessianRejectNonlinear + 1
             end if
         else
-            LOOP_ALPHA_TRUST: do iAlpha = 1, 5
+            LOOP_ALPHA_TRUST: do iAlpha = 1, nAlpha
                 dAlphaCandidate = dAlphaList(iAlpha)
 
                 ATrial = ABase
@@ -420,12 +413,13 @@ contains
 
                 if (.NOT. lCorrectionOK) then
                     nRKMPHessianRejectBadDelta = nRKMPHessianRejectBadDelta + 1
+                    nRKMPHessianRejectLocalResponse = nRKMPHessianRejectLocalResponse + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
 
                 ! This cap catches pathological scaling only; ordinary trust is based on nonlinear state and
                 ! solved-direction behavior rather than the entrywise matrix-correction ratio.
-                if (dTrialRatio > dEmergencyRatioCap) then
+                if (dTrialRatio > dRKMPTrustEmergencyRatioCap) then
                     nRKMPHessianRejectRatio = nRKMPHessianRejectRatio + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
@@ -441,7 +435,7 @@ contains
                 call BuildSolvedDisplacement(BTrial, nLocalVar, dStepTrial)
                 dNormTrial = MAXVAL(DABS(dStepTrial))
                 dBestUpdateRatio = dNormTrial / dNormBase
-                if (dBestUpdateRatio > dUpdateRatioCap) then
+                if (dBestUpdateRatio > dRKMPTrustUpdateRatioCap) then
                     nRKMPHessianRejectUpdate = nRKMPHessianRejectUpdate + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
@@ -450,8 +444,8 @@ contains
                 dDirectionCosine = DOT_PRODUCT(dStepZero,dStepTrial) / (dNormBase2*dNormTrial2)
                 dDirectionDifference = SQRT(SUM((dStepTrial-dStepZero)**2)) / dNormBase2
                 if ((dAlphaCandidate > 0D0) .AND. &
-                    ((dDirectionCosine < dDirectionCosineMin) .OR. &
-                     (dDirectionDifference > dDirectionDifferenceCap))) then
+                    ((dDirectionCosine < dRKMPTrustDirectionCosineMin) .OR. &
+                     (dDirectionDifference > dRKMPTrustDirectionDifferenceCap))) then
                     nRKMPHessianRejectDirection = nRKMPHessianRejectDirection + 1
                     cycle LOOP_ALPHA_TRUST
                 end if
@@ -473,6 +467,10 @@ contains
             dRKMPHessianDirectionCosine = dDirectionCosine
             dRKMPHessianDirectionDifference = dDirectionDifference
         end if
+        dRKMPHessianMaxSelectedAlpha = DMAX1(dRKMPHessianMaxSelectedAlpha, dBestAlpha)
+        if ((iterGlobal >= 1) .AND. (iterGlobal <= iterGlobalMax)) then
+            dRKMPHessianAcceptedAlphaHistory(iterGlobal) = dBestAlpha
+        end if
 
         AIn = ABase
         BIn = BBase
@@ -481,6 +479,15 @@ contains
 
         ! Finally apply the selected RKMP correction to the GEM matrix and residual, and solve for the updated direction.
         call MapRKMPHessianToGEMVariables(AIn, BIn, nLocalVar, dBestAlpha, .TRUE., lCorrectionOK, dTrialRatio)
+        if (.NOT. lCorrectionOK) then
+            nRKMPHessianRejectLocalResponse = nRKMPHessianRejectLocalResponse + 1
+            AIn = ABase
+            BIn = BZero
+            IPIVIn = 0
+            INFOOut = 0
+            deallocate(ABase, ATrial, BBase, BTrial, BZero, dStepTrial, dStepZero, IPIVTrial)
+            return
+        end if
         IPIVIn = 0
         call dgesv(nLocalVar, 1, AIn, nLocalVar, IPIVIn, BIn, nLocalVar, INFOOut)
         call CheckSolvedUpdate(BIn, nLocalVar, INFOOut)
@@ -491,6 +498,37 @@ contains
         deallocate(ABase, ATrial, BBase, BTrial, BZero, dStepTrial, dStepZero, IPIVTrial)
 
     end subroutine SolveRKMPAlphaTrust
+
+
+    !> \brief Build descending trust candidates bounded by the requested maximum alpha.
+    subroutine BuildAlphaCandidateList(dAlphaMaxInput, dCandidates, nCandidates)
+
+        real(8), intent(in)                  :: dAlphaMaxInput
+        real(8), dimension(:), intent(out)   :: dCandidates
+        integer, intent(out)                 :: nCandidates
+
+        integer                              :: iCandidate
+        real(8)                              :: dAlphaMax
+        real(8), dimension(4)                :: dStandard
+
+        dStandard = [1D0, 1D-1, 1D-2, 1D-3]
+        dCandidates = 0D0
+        nCandidates = 0
+        dAlphaMax = DMAX1(0D0, DMIN1(1D0, dAlphaMaxInput))
+
+        if (dAlphaMax > 0D0) then
+            nCandidates = 1
+            dCandidates(nCandidates) = dAlphaMax
+            do iCandidate = 1, SIZE(dStandard)
+                if (dStandard(iCandidate) >= dAlphaMax * (1D0 - 1D-12)) cycle
+                nCandidates = nCandidates + 1
+                dCandidates(nCandidates) = dStandard(iCandidate)
+            end do
+        end if
+        nCandidates = nCandidates + 1
+        dCandidates(nCandidates) = 0D0
+
+    end subroutine BuildAlphaCandidateList
 
 
     !> \brief Convert a solved GEM variable vector into the displacement applied by the line search.

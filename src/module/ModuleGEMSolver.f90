@@ -38,6 +38,12 @@
     !!                                    current state had not yet established local nonlinear trust.
     !> \param nRKMPHessianRejectDirection Number of RKMP alpha trials rejected because their solved direction
     !!                                    was insufficiently aligned with the alpha-zero direction.
+    !> \param nRKMPHessianRejectLocalResponse Number of alpha trials rejected because a phase-local constrained
+    !!                                        response or mapped residual could not be constructed.
+    !> \param iRKMPHessianLastFailurePhase Absolute solution-phase index associated with the most recent mapper
+    !!                                     failure, or zero when no failure has occurred.
+    !> \param iRKMPHessianLastFailureReason Machine-readable RKMP mapper failure code.  Public constants below
+    !!                                      distinguish Hessian, response, ideal-baseline, and finite-value errors.
     !> \param nRKMPHessianFullAlphaCount Number of GEM iterations that accepted the undamped RKMP correction.
     !> \param dRKMPHessianBlendAlpha Requested upper blend for the mapped RKMP GEM correction.  Trust logic
     !!                                selects the effective blend; neither value scales the RKMP derivatives or
@@ -93,7 +99,15 @@ module ModuleGEMSolver
     integer                              ::  nRKMPHessianRejectDGESV, nRKMPHessianRejectBadDelta
     integer                              ::  nRKMPHessianRejectRatio, nRKMPHessianRejectUpdate
     integer                              ::  nRKMPHessianRejectNonlinear, nRKMPHessianRejectDirection
+    integer                              ::  nRKMPHessianRejectLocalResponse
     integer                              ::  nRKMPHessianFullAlphaCount
+    integer                              ::  iRKMPHessianLastFailurePhase, iRKMPHessianLastFailureReason
+    integer, parameter                   ::  RKMP_MAP_SUCCESS = 0
+    integer, parameter                   ::  RKMP_MAP_HESSIAN_FAILURE = 1
+    integer, parameter                   ::  RKMP_MAP_ELEMENT_RESPONSE_FAILURE = 2
+    integer, parameter                   ::  RKMP_MAP_RESIDUAL_RESPONSE_FAILURE = 3
+    integer, parameter                   ::  RKMP_MAP_IDEAL_RESPONSE_FAILURE = 4
+    integer, parameter                   ::  RKMP_MAP_INVALID_CORRECTION = 5
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
@@ -105,6 +119,16 @@ module ModuleGEMSolver
     real(8)                              ::  dRKMPHessianMaxDeltaB
     real(8)                              ::  dRKMPHessianSelectedAlpha, dRKMPHessianUpdateNormRatio
     real(8)                              ::  dRKMPHessianDirectionCosine, dRKMPHessianDirectionDifference
+    real(8)                              ::  dRKMPHessianMaxSelectedAlpha
+    real(8), dimension(iterGlobalMax)     ::  dRKMPHessianAcceptedAlphaHistory
+    real(8)                              ::  dRKMPTrustEmergencyRatioCap = 1D6
+    real(8)                              ::  dRKMPTrustUpdateRatioCap = 1.25D0
+    real(8)                              ::  dRKMPTrustDirectionCosineMin = 0.90D0
+    real(8)                              ::  dRKMPTrustDirectionDifferenceCap = 0.50D0
+    real(8)                              ::  dRKMPTrustLocalNormThreshold = 5D-2
+    real(8)                              ::  dRKMPTrustProgressAllowance = 1.05D0
+    real(8)                              ::  dRKMPTrustGibbsActivationTolerance = 1D-6
+    real(8)                              ::  dRKMPTrustGibbsRetentionTolerance = 1D-4
     real(8), dimension(:),   allocatable ::  dSumMolFractionSoln, dMolesPhaseLast, dUpdateVar, dDrivingForceSoln
     real(8), dimension(:),   allocatable ::  dPartialExcessGibbs, dPartialExcessGibbsLast
     real(8), dimension(:,:), allocatable ::  dEffStoichSolnPhase
@@ -112,6 +136,11 @@ module ModuleGEMSolver
     logical                              ::  lDebugMode, lRevertSystem, lConverged
     logical                              ::  lUseRKMPExactHessian, lDebugRKMPHessianFD
     logical                              ::  lRKMPHessianNonlinearReady, lRKMPHessianActive, lRKMPHessianWasActive
+    logical                              ::  lRKMPHessianControlsConfigured = .FALSE.
+    logical                              ::  lRKMPHessianRequestedEnable = .FALSE.
+    logical                              ::  lRKMPHessianRequestedDebug = .FALSE.
+    logical                              ::  lRKMPHessianReportSummary = .FALSE.
+    real(8)                              ::  dRKMPHessianRequestedAlphaMax = 0.10D0
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver
