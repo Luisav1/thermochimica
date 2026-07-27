@@ -24,6 +24,7 @@ tail -1 test12out.txt
 ./TestThermo30
 ./TestRKMPHessianVerification
 ./TestRKMPGEMMappingVerification
+./TestRKMPExactHessianRegression
 ./TestCEFHessianVerification
 ./TestMQMQAHessianVerification
 ./TestMQMQANativeHessianVerification
