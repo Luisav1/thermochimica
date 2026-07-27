@@ -12,6 +12,7 @@ test/doc/
 # ignore outputs
 *.out
 *.txt
+outputs/hessian_verification/
 *.dat
 *.DAT
 *.Dat

@@ -32,6 +32,7 @@ program TestCEFHessianVerification
     USE ModuleThermoIO
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleFiniteDifferenceVerification
 
     implicit none
 
@@ -205,14 +206,20 @@ contains
         logical, intent(inout) :: lAllPass, lAnyConverged
         integer, intent(inout) :: nBinary, nTernary, nCoupled
 
-        integer, parameter :: nSteps = 7
+        integer, parameter :: nSteps = 9
         integer :: iDirection, iInfo, iStep, nDirections, nLocalBinary, nLocalCoupled, nLocalTernary
         integer, allocatable :: iOccupancy(:,:), iSiteSublattice(:)
         real(8) :: dBest3, dBest5, dDecoderError, dG, dGEx, dGId, dGRef, dHomogeneity
         real(8) :: dMinSiteFraction, dProductionEx, dProductionRefIdeal, dSymmetry, dWorstMu
-        real(8), allocatable :: dDirection(:), dErr3(:,:), dErr5(:,:), dErrMu(:,:)
+        real(8), allocatable :: dAbs3(:,:), dAbs5(:,:), dDirection(:), dErr3(:,:), dErr5(:,:), dErrMu(:,:)
+        real(8), allocatable :: dMaxAbsMu(:,:), dMaxScaledMu(:,:), dNormAbsMu(:,:)
+        real(8), allocatable :: dOrder3(:,:), dOrder5(:,:), dOrderMu(:,:)
         real(8), allocatable :: dH(:,:), dHEx(:,:), dHId(:,:), dHRef(:,:), dMultiplicity(:), dReference(:)
-        real(8), allocatable :: dSiteFraction(:), dSteps(:)
+        real(8), allocatable :: dSiteFraction(:), dSteps(:,:)
+        integer, allocatable :: iWorstMu(:,:)
+        logical, allocatable :: lOrder3Available(:,:), lOrder5Available(:,:), lOrderMuAvailable(:,:)
+        logical :: lEnforceScalarOrder
+        type(FDSweepAssessment) :: tAssess3, tAssess5, tAssessMu
         type(CEFInteractionTerm), allocatable :: tInteraction(:)
 
         call DecodeProductionPhase(iPhase,dMoles,iOccupancy,iSiteSublattice,dMultiplicity,dReference, &
@@ -254,13 +261,37 @@ contains
         lAllPass = lAllPass .AND. (ScaledError(dProductionEx,dGEx/SUM(dMoles)) <= 1D-10)
 
         nDirections = SIZE(dMoles)
-        allocate(dDirection(SIZE(dMoles)),dSteps(nSteps),dErr3(nDirections,nSteps), &
-            dErr5(nDirections,nSteps),dErrMu(nDirections,nSteps))
+        allocate(dDirection(SIZE(dMoles)),dSteps(nDirections,nSteps),dAbs3(nDirections,nSteps), &
+            dAbs5(nDirections,nSteps),dErr3(nDirections,nSteps),dErr5(nDirections,nSteps), &
+            dErrMu(nDirections,nSteps),dNormAbsMu(nDirections,nSteps), &
+            dMaxAbsMu(nDirections,nSteps),dMaxScaledMu(nDirections,nSteps), &
+            dOrder3(nDirections,nSteps),dOrder5(nDirections,nSteps),dOrderMu(nDirections,nSteps), &
+            lOrder3Available(nDirections,nSteps),lOrder5Available(nDirections,nSteps), &
+            lOrderMuAvailable(nDirections,nSteps),iWorstMu(nDirections,nSteps))
+        ! Controlled cases are deliberately interior and must demonstrate
+        ! scalar stencil order. A converged state with a site fraction below
+        ! 1E-3 is boundary-adjacent: its scalar second differences are reported
+        ! fully, but only the better-conditioned production partial-molar order
+        ! remains mandatory.
+        lEnforceScalarOrder = (.NOT.lConverged) .OR. (dMinSiteFraction > 1D-3)
         do iDirection = 1, nDirections
             call BuildDirection(iDirection,dDirection)
             call VerifyDirection(iPhase,dMoles,dDirection,iOccupancy,iSiteSublattice,dMultiplicity, &
-                dReference,tInteraction,dH,dSteps,dErr3(iDirection,:),dErr5(iDirection,:), &
-                dErrMu(iDirection,:),lAllPass)
+                dReference,tInteraction,dH,dSteps(iDirection,:),dAbs3(iDirection,:), &
+                dErr3(iDirection,:),dAbs5(iDirection,:),dErr5(iDirection,:), &
+                dNormAbsMu(iDirection,:),dErrMu(iDirection,:),dMaxAbsMu(iDirection,:), &
+                dMaxScaledMu(iDirection,:),iWorstMu(iDirection,:),lAllPass)
+            call AssessFDSweep(dSteps(iDirection,:),dErr3(iDirection,:), &
+                FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-6,tAssess3, &
+                dOrder3(iDirection,:),lOrder3Available(iDirection,:))
+            call AssessFDSweep(dSteps(iDirection,:),dErr5(iDirection,:), &
+                FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-8,tAssess5, &
+                dOrder5(iDirection,:),lOrder5Available(iDirection,:))
+            call AssessFDSweep(dSteps(iDirection,:),dErrMu(iDirection,:), &
+                FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-8,tAssessMu, &
+                dOrderMu(iDirection,:),lOrderMuAvailable(iDirection,:))
+            if (lEnforceScalarOrder) lAllPass = lAllPass .AND. tAssess3%lPassed .AND. tAssess5%lPassed
+            lAllPass = lAllPass .AND. tAssessMu%lPassed
         end do
 
         dBest3 = 0D0
@@ -270,14 +301,11 @@ contains
             dBest3 = DMAX1(dBest3,MINVAL(dErr3(iDirection,:)))
             dBest5 = DMAX1(dBest5,MINVAL(dErr5(iDirection,:)))
             dWorstMu = DMAX1(dWorstMu,MINVAL(dErrMu(iDirection,:)))
-            lAllPass = lAllPass .AND. (MINLOC(dErr3(iDirection,:),1) > 1)
         end do
         ! Scalar-energy thresholds apply to the mandatory controlled interior states.  Converged states can lie
         ! close enough to a composition boundary that energy second differences lose digits; their complete
         ! sweep remains reportable, while the more stable production-partial-molar comparison stays mandatory.
-        if (.NOT.lConverged) then
-            lAllPass = lAllPass .AND. (dBest3 <= 1D-6) .AND. (dBest5 <= 1D-8)
-        end if
+        if (lEnforceScalarOrder) lAllPass = lAllPass .AND. (dBest3 <= 1D-6) .AND. (dBest5 <= 1D-8)
         lAllPass = lAllPass .AND. (dWorstMu <= 1D-8)
         if (lConverged) lAnyConverged = .TRUE.
 
@@ -292,11 +320,32 @@ contains
             write(*,'(A,ES14.6)') 'excess scalar error = ',ScaledError(dProductionEx,dGEx/SUM(dMoles))
             write(*,'(A,ES14.6)') 'symmetry residual = ',dSymmetry
             write(*,'(A,ES14.6)') 'homogeneity residual = ',dHomogeneity
-            write(*,'(A)') 'direction h                 3-point error         5-point error         production-mu error'
+            if (lEnforceScalarOrder) then
+                write(*,'(A)') 'scalar-order enforcement: required (controlled/interior state)'
+            else
+                write(*,'(A,ES14.6)') 'scalar-order enforcement: skipped; boundary-adjacent min(y) = ', &
+                    dMinSiteFraction
+            end if
+            write(*,'(A)') 'scalar curvature: expected orders 3pt=2 and 5pt=4'
+            write(*,'(A)') 'dir h            3pt abs       3pt scaled    3pt order   5pt abs       5pt scaled    5pt order'
             do iDirection = 1, nDirections
                 do iStep = 1, nSteps
-                    write(*,'(I5,4ES22.12)') iDirection,dSteps(iStep),dErr3(iDirection,iStep), &
-                        dErr5(iDirection,iStep),dErrMu(iDirection,iStep)
+                    write(*,'(I3,3ES14.5,2X,A,2ES14.5,2X,A)') iDirection,dSteps(iDirection,iStep), &
+                        dAbs3(iDirection,iStep),dErr3(iDirection,iStep), &
+                        TRIM(OrderLabel(dOrder3(iDirection,iStep),lOrder3Available(iDirection,iStep))), &
+                        dAbs5(iDirection,iStep),dErr5(iDirection,iStep), &
+                        TRIM(OrderLabel(dOrder5(iDirection,iStep),lOrder5Available(iDirection,iStep)))
+                end do
+            end do
+            write(*,'(A)') 'production partial-molar central derivative: expected order=2'
+            write(*,'(A)') 'dir h            norm abs      norm scaled   max abs       max scaled    worst  order'
+            do iDirection = 1, nDirections
+                do iStep = 1, nSteps
+                    write(*,'(I3,5ES14.5,I7,2X,A)') iDirection,dSteps(iDirection,iStep), &
+                        dNormAbsMu(iDirection,iStep),dErrMu(iDirection,iStep), &
+                        dMaxAbsMu(iDirection,iStep),dMaxScaledMu(iDirection,iStep), &
+                        iWorstMu(iDirection,iStep),TRIM(OrderLabel(dOrderMu(iDirection,iStep), &
+                        lOrderMuAvailable(iDirection,iStep)))
                 end do
             end do
             write(*,'(A,ES14.6)') 'worst best 3-point error = ',dBest3
@@ -460,21 +509,26 @@ contains
     !> \brief Verify one composition-preserving mole-transfer direction using scalar energy and production partial molars.
     !---------------------------------------------------------------------------------------------------------
     subroutine VerifyDirection(iPhase,dMoles,dDirection,iOccupancy,iSiteSublattice,dMultiplicity, &
-        dReference,tInteraction,dH,dSteps,dErr3,dErr5,dErrMu,lAllPass)
+        dReference,tInteraction,dH,dSteps,dAbs3,dErr3,dAbs5,dErr5,dNormAbsMu,dErrMu, &
+        dMaxAbsMu,dMaxScaledMu,iWorstMu,lAllPass)
 
         integer, intent(in) :: iPhase, iOccupancy(:,:), iSiteSublattice(:)
         real(8), intent(in) :: dMoles(:), dDirection(:), dMultiplicity(:), dReference(:), dH(:,:)
         type(CEFInteractionTerm), intent(in) :: tInteraction(:)
-        real(8), intent(out) :: dSteps(:), dErr3(:), dErr5(:), dErrMu(:)
+        real(8), intent(out) :: dSteps(:), dAbs3(:), dErr3(:), dAbs5(:), dErr5(:)
+        real(8), intent(out) :: dNormAbsMu(:), dErrMu(:), dMaxAbsMu(:), dMaxScaledMu(:)
+        integer, intent(out) :: iWorstMu(:)
         logical, intent(inout) :: lAllPass
 
         integer :: iInfo, iStep
         real(8) :: dAnalytic, dE0, dEM1, dEM2, dEP1, dEP2, dGEx, dGId, dGRef, dHStep, dScale
-        real(8) :: dDummyEx, dDummyRefIdeal
+        real(8) :: dApprox3, dApprox5, dDummyEx, dDummyRefIdeal
         real(8), allocatable :: dMinus(:), dMinus2(:), dMuMinus(:), dMuPlus(:), dPlus(:), dPlus2(:)
+        real(8), allocatable :: dPrediction(:), dProductionFD(:)
 
         allocate(dMinus(SIZE(dMoles)),dMinus2(SIZE(dMoles)),dPlus(SIZE(dMoles)), &
-            dPlus2(SIZE(dMoles)),dMuMinus(SIZE(dMoles)),dMuPlus(SIZE(dMoles)))
+            dPlus2(SIZE(dMoles)),dMuMinus(SIZE(dMoles)),dMuPlus(SIZE(dMoles)), &
+            dPrediction(SIZE(dMoles)),dProductionFD(SIZE(dMoles)))
         dAnalytic = DOT_PRODUCT(dDirection,MATMUL(dH,dDirection))
         call CompCEFGibbsEnergyUnconstrained(dMoles,iOccupancy,iSiteSublattice,dMultiplicity,dReference, &
             1D0,tInteraction,dE0,dGRef,dGId,dGEx,iInfo)
@@ -488,7 +542,7 @@ contains
         dScale = MINVAL(dMinus)
 
         do iStep = 1, SIZE(dSteps)
-            dHStep = 0.1D0*dScale*3D0**(-(iStep-1))
+            dHStep = 0.2D0*dScale*3D0**(-(iStep-1))
             dSteps(iStep) = dHStep
             dMinus = dMoles-dHStep*dDirection
             dPlus = dMoles+dHStep*dDirection
@@ -506,19 +560,38 @@ contains
             call CompCEFGibbsEnergyUnconstrained(dPlus2,iOccupancy,iSiteSublattice,dMultiplicity,dReference, &
                 1D0,tInteraction,dEP2,dGRef,dGId,dGEx,iInfo)
             lAllPass = lAllPass .AND. (iInfo == 0)
-            dErr3(iStep) = ScaledError((dEP1-2D0*dE0+dEM1)/(dHStep*dHStep),dAnalytic)
-            dErr5(iStep) = ScaledError((-dEP2+16D0*dEP1-30D0*dE0+16D0*dEM1-dEM2)/ &
-                (12D0*dHStep*dHStep),dAnalytic)
+            dApprox3 = (dEP1-2D0*dE0+dEM1)/(dHStep*dHStep)
+            dApprox5 = (-dEP2+16D0*dEP1-30D0*dE0+16D0*dEM1-dEM2)/(12D0*dHStep*dHStep)
+            dAbs3(iStep) = DABS(dApprox3-dAnalytic)
+            dErr3(iStep) = ScaledError(dApprox3,dAnalytic)
+            dAbs5(iStep) = DABS(dApprox5-dAnalytic)
+            dErr5(iStep) = ScaledError(dApprox5,dAnalytic)
 
             call EvaluateProductionVector(iPhase,dMinus,dMuMinus,dDummyRefIdeal,dDummyEx,iInfo)
             lAllPass = lAllPass .AND. (iInfo == 0)
             call EvaluateProductionVector(iPhase,dPlus,dMuPlus,dDummyRefIdeal,dDummyEx,iInfo)
             lAllPass = lAllPass .AND. (iInfo == 0)
-            dErrMu(iStep) = VectorTwoNorm((dMuPlus-dMuMinus)/(2D0*dHStep)-MATMUL(dH,dDirection))/ &
-                DMAX1(1D0,VectorTwoNorm(MATMUL(dH,dDirection)))
+            dProductionFD = (dMuPlus-dMuMinus)/(2D0*dHStep)
+            dPrediction = MATMUL(dH,dDirection)
+            call ComputeVectorErrorMetrics(dProductionFD,dPrediction,dNormAbsMu(iStep),dErrMu(iStep), &
+                dMaxAbsMu(iStep),dMaxScaledMu(iStep),iWorstMu(iStep))
         end do
 
     end subroutine VerifyDirection
+
+
+    character(len=16) function OrderLabel(dOrder,lAvailable)
+
+        real(8), intent(in) :: dOrder
+        logical, intent(in) :: lAvailable
+
+        if (lAvailable) then
+            write(OrderLabel,'(F10.4)') dOrder
+        else
+            OrderLabel = 'N/A'
+        end if
+
+    end function OrderLabel
 
 
     subroutine EvaluateProduction(iPhase,dMoles,dReferenceIdeal,dExcess,iInfo)

@@ -34,6 +34,7 @@ program TestRKMPHessianVerification
     USE ModuleThermoIO
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleFiniteDifferenceVerification
 
     implicit none
 
@@ -54,9 +55,9 @@ program TestRKMPHessianVerification
         end subroutine CompRKMPBinaryExcessGibbsFromMoles
     end interface
 
-    integer, parameter :: nFDSteps = 5
+    integer, parameter :: nFDSteps = 9
     integer :: i, iDirection, iEnergyA, iEnergyB, iFirstSpecies, iLastSpecies, iParam
-    integer :: iPhaseIndex, iReference
+    integer :: iPhaseIndex, iReference, iControlledParam, iExponentSave
     integer :: iSolnSlot, iStep, nDirections, nLocalSpecies
     integer :: nStorageBits, nDecimalPrecision, nBinaryDigits
     real(8) :: dAnalyticEx, dAnalyticIdeal, dEnergy0Ex, dEnergy0Ideal
@@ -64,14 +65,22 @@ program TestRKMPHessianVerification
     real(8) :: dEnergyM1Ideal, dEnergyM2Ideal, dEnergyP1Ideal, dEnergyP2Ideal
     real(8) :: dEpsilonMachine, dFD3, dFD5, dH, dScale, dTotalMoles
     real(8) :: dRadialResidual, dSymmetryResidual, dScaleHessian
-    real(8) :: dOrder3, dOrder5, dWorstMuBest
+    real(8) :: dWorstMuBest
     logical :: lPass, lReport
     character(len=32) :: cArgument
     real(8), allocatable, dimension(:) :: dDirection, dMoles0, dMolesM1, dMolesM2
     real(8), allocatable, dimension(:) :: dMolesP1, dMolesP2, dMuAnalytic, dMuMinus, dMuPlus
     real(8), allocatable, dimension(:) :: dMolFractionSave, dPartialExcessSave, dX
     real(8), allocatable, dimension(:) :: dEnergyStep, dErr3Ex, dErr3Ideal, dErr5Ex, dErr5Ideal
-    real(8), allocatable, dimension(:,:) :: dErrMu, dHessian, dMuStep
+    real(8), allocatable, dimension(:) :: dAbs3Ex, dAbs3Ideal, dAbs5Ex, dAbs5Ideal
+    real(8), allocatable, dimension(:) :: dOrder3Ex, dOrder3Ideal, dOrder5Ex, dOrder5Ideal
+    logical, allocatable, dimension(:) :: lOrder3Ex, lOrder3Ideal, lOrder5Ex, lOrder5Ideal
+    real(8), allocatable, dimension(:,:) :: dErrMu, dHessian, dMuStep, dNormAbsMu
+    real(8), allocatable, dimension(:,:) :: dMaxAbsMu, dMaxScaledMu, dOrderMu
+    real(8), allocatable, dimension(:,:,:) :: dMuFD
+    logical, allocatable, dimension(:,:) :: lOrderMu
+    integer, allocatable, dimension(:,:) :: iWorstMu
+    type(FDSweepAssessment) :: tRKMP3, tRKMP5, tIdeal3, tIdeal5
 
     lPass = .TRUE.
     lReport = .FALSE.
@@ -129,11 +138,13 @@ program TestRKMPHessianVerification
         iReference = nLocalSpecies
         iEnergyA = 0
         iEnergyB = 0
+        iControlledParam = 0
         do iParam = nParamPhase(iPhaseIndex-1)+1, nParamPhase(iPhaseIndex)
             if (iRegularParam(iParam,1) /= 2) cycle
             if (iRegularParam(iParam,4) < 0) cycle
             iEnergyA = iRegularParam(iParam,2)
             iEnergyB = iRegularParam(iParam,3)
+            iControlledParam = iParam
             exit
         end do
         lPass = lPass .AND. (iEnergyA > 0) .AND. (iEnergyB > 0)
@@ -143,9 +154,15 @@ program TestRKMPHessianVerification
             dMuAnalytic(nLocalSpecies), dMuMinus(nLocalSpecies), dMuPlus(nLocalSpecies), &
             dMolFractionSave(nLocalSpecies), dPartialExcessSave(nLocalSpecies), dX(nLocalSpecies), &
             dEnergyStep(nFDSteps), dErr3Ex(nFDSteps), dErr3Ideal(nFDSteps), &
-            dErr5Ex(nFDSteps), dErr5Ideal(nFDSteps), &
+            dErr5Ex(nFDSteps), dErr5Ideal(nFDSteps), dAbs3Ex(nFDSteps), dAbs3Ideal(nFDSteps), &
+            dAbs5Ex(nFDSteps), dAbs5Ideal(nFDSteps), dOrder3Ex(nFDSteps), dOrder3Ideal(nFDSteps), &
+            dOrder5Ex(nFDSteps), dOrder5Ideal(nFDSteps), lOrder3Ex(nFDSteps), &
+            lOrder3Ideal(nFDSteps), lOrder5Ex(nFDSteps), lOrder5Ideal(nFDSteps), &
             dErrMu(nDirections,nFDSteps), dHessian(nLocalSpecies,nLocalSpecies), &
-            dMuStep(nDirections,nFDSteps))
+            dMuStep(nDirections,nFDSteps), dNormAbsMu(nDirections,nFDSteps), &
+            dMaxAbsMu(nDirections,nFDSteps), dMaxScaledMu(nDirections,nFDSteps), &
+            dOrderMu(nDirections,nFDSteps), lOrderMu(nDirections,nFDSteps), &
+            iWorstMu(nDirections,nFDSteps), dMuFD(nDirections,nFDSteps,nLocalSpecies))
 
         dMoles0 = dMolesSpecies(iFirstSpecies:iLastSpecies)
         dTotalMoles = SUM(dMoles0)
@@ -177,6 +194,15 @@ program TestRKMPHessianVerification
         ! Use the actual binary interaction pair for scalar-energy differences. Both species have substantial
         ! phase amounts in TestThermo30, leaving a visible truncation region before roundoff dominates.
         !=====================================================================================================
+        ! TestThermo30 contains only a constant binary interaction, whose
+        ! directional scalar energy is too low-order to display stencil
+        ! truncation. Temporarily exercise the same parsed parameter as an
+        ! exponent-four controlled fixture. Both production-linked analytic and
+        ! independent scalar paths consume this state.
+        iExponentSave = iRegularParam(iControlledParam,4)
+        iRegularParam(iControlledParam,4) = 4
+        call CompExcessGibbsEnergyRKMP_unconstrained(iPhaseIndex,dHessian)
+
         dDirection = 0D0
         dDirection(iEnergyA) = 1D0
         dDirection(iEnergyB) = -1D0
@@ -187,7 +213,7 @@ program TestRKMPHessianVerification
         dEnergy0Ideal = CompIdealMixingEnergy(dMoles0)
 
         do iStep = 1, nFDSteps
-            dH = dScale * 10D0**(-iStep)
+            dH = 0.2D0*dScale * 3D0**(-(iStep-1))
             dEnergyStep(iStep) = dH
             dMolesM1 = dMoles0 - dH*dDirection
             dMolesP1 = dMoles0 + dH*dDirection
@@ -206,31 +232,49 @@ program TestRKMPHessianVerification
             dFD3 = (dEnergyP1Ex-2D0*dEnergy0Ex+dEnergyM1Ex)/(dH*dH)
             dFD5 = (-dEnergyP2Ex+16D0*dEnergyP1Ex-30D0*dEnergy0Ex+ &
                 16D0*dEnergyM1Ex-dEnergyM2Ex)/(12D0*dH*dH)
+            dAbs3Ex(iStep) = DABS(dFD3-dAnalyticEx)
+            dAbs5Ex(iStep) = DABS(dFD5-dAnalyticEx)
             dErr3Ex(iStep) = CompScaledError(dFD3,dAnalyticEx)
             dErr5Ex(iStep) = CompScaledError(dFD5,dAnalyticEx)
 
             dFD3 = (dEnergyP1Ideal-2D0*dEnergy0Ideal+dEnergyM1Ideal)/(dH*dH)
             dFD5 = (-dEnergyP2Ideal+16D0*dEnergyP1Ideal-30D0*dEnergy0Ideal+ &
                 16D0*dEnergyM1Ideal-dEnergyM2Ideal)/(12D0*dH*dH)
+            dAbs3Ideal(iStep) = DABS(dFD3-dAnalyticIdeal)
+            dAbs5Ideal(iStep) = DABS(dFD5-dAnalyticIdeal)
             dErr3Ideal(iStep) = CompScaledError(dFD3,dAnalyticIdeal)
             dErr5Ideal(iStep) = CompScaledError(dFD5,dAnalyticIdeal)
         end do
 
-        lPass = lPass .AND. (MINVAL(dErr3Ex) <= 1D-7)
-        lPass = lPass .AND. (MINVAL(dErr5Ex) <= 1D-9)
-        dOrder3 = CompObservedOrder(dErr3Ideal(1),dErr3Ideal(2),dEnergyStep(1),dEnergyStep(2))
-        dOrder5 = CompObservedOrder(dErr5Ideal(1),dErr5Ideal(2),dEnergyStep(1),dEnergyStep(2))
-        lPass = lPass .AND. (dOrder3 >= 1.5D0) .AND. (dOrder3 <= 2.5D0)
-        lPass = lPass .AND. (dOrder5 >= 3D0) .AND. (dOrder5 <= 5D0)
+        call AssessFDSweep(dEnergyStep,dErr3Ex,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-7, &
+            tRKMP3,dOrder3Ex,lOrder3Ex)
+        call AssessFDSweep(dEnergyStep,dErr5Ex,FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-9, &
+            tRKMP5,dOrder5Ex,lOrder5Ex)
+        call AssessFDSweep(dEnergyStep,dErr3Ideal,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-6, &
+            tIdeal3,dOrder3Ideal,lOrder3Ideal)
+        call AssessFDSweep(dEnergyStep,dErr5Ideal,FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-8, &
+            tIdeal5,dOrder5Ideal,lOrder5Ideal)
+        lPass = lPass .AND. tRKMP3%lPassed .AND. tRKMP5%lPassed
+        lPass = lPass .AND. tIdeal3%lPassed .AND. tIdeal5%lPassed
+
+        ! The order fixture ends here. Restore the parsed TestThermo30 parameter
+        ! and rebuild Hloc so the following production comparison is genuinely
+        ! native to the database rather than another controlled-exponent test.
+        iRegularParam(iControlledParam,4) = iExponentSave
+        call CompExcessGibbsEnergyRKMP_unconstrained(iPhaseIndex,dHessian)
 
         !=====================================================================================================
-        ! SECTION 4: PRODUCTION PARTIAL-MOLAR DERIVATIVE ORACLE
+        ! SECTION 4: NATIVE PRODUCTION PARTIAL-MOLAR DERIVATIVE ORACLE
         !
-        ! The production partial-molar comparison is numerically stable enough
-        ! to cover a complete set of independent composition-changing
-        ! directions, including transfers involving trace species whose scalar
-        ! energy differences are limited by cancellation.
+        ! This section uses the unmodified TestThermo30 database parameter. Its
+        ! low-order RKMP polynomial can make a centered derivative exact up to
+        ! roundoff from the coarsest step onward, so this is an accuracy and
+        ! implementation-consistency check rather than an observed-order test.
+        ! The controlled scalar fixture above supplies the truncation-order
+        ! evidence.
         !=====================================================================================================
+        dOrderMu = 0D0
+        lOrderMu = .FALSE.
         do iDirection = 1, nDirections
             dDirection = 0D0
             dDirection(iDirection) = 1D0
@@ -254,11 +298,21 @@ program TestRKMPHessianVerification
                 call CompExcessGibbsEnergyRKMP(iPhaseIndex)
                 dMuMinus = dPartialExcessGibbs(iFirstSpecies:iLastSpecies)
 
-                dErrMu(iDirection,iStep) = MAXVAL(DABS((dMuPlus-dMuMinus)/(2D0*dH/dTotalMoles)- &
-                    dMuAnalytic)) / DMAX1(1D0,MAXVAL(DABS(dMuAnalytic)))
+                dMuFD(iDirection,iStep,:) = (dMuPlus-dMuMinus)/(2D0*dH/dTotalMoles)
+                call ComputeVectorErrorMetrics(dMuFD(iDirection,iStep,:),dMuAnalytic, &
+                    dNormAbsMu(iDirection,iStep),dErrMu(iDirection,iStep), &
+                    dMaxAbsMu(iDirection,iStep),dMaxScaledMu(iDirection,iStep), &
+                    iWorstMu(iDirection,iStep))
             end do
 
-            lPass = lPass .AND. (MINVAL(dErrMu(iDirection,:)) <= 1D-9)
+            if (VectorTwoNormFD(dMuAnalytic) <= 1D-12) then
+                ! A direction that leaves this binary interaction unchanged has
+                ! an identically zero derivative. Accuracy is meaningful here,
+                ! but an observed order formed from zero/roundoff errors is not.
+                lPass = lPass .AND. ALL(dNormAbsMu(iDirection,:) <= 1D-10)
+            else
+                lPass = lPass .AND. (MINVAL(dErrMu(iDirection,:)) <= 1D-9)
+            end if
         end do
 
         dMolFraction(iFirstSpecies:iLastSpecies) = dMolFractionSave
@@ -273,7 +327,9 @@ program TestRKMPHessianVerification
 
         deallocate(dDirection,dMoles0,dMolesM1,dMolesM2,dMolesP1,dMolesP2,dMuAnalytic, &
             dMuMinus,dMuPlus,dMolFractionSave,dPartialExcessSave,dX,dEnergyStep,dErr3Ex,dErr3Ideal, &
-            dErr5Ex,dErr5Ideal,dErrMu,dHessian,dMuStep)
+            dErr5Ex,dErr5Ideal,dAbs3Ex,dAbs3Ideal,dAbs5Ex,dAbs5Ideal,dOrder3Ex,dOrder3Ideal, &
+            dOrder5Ex,dOrder5Ideal,lOrder3Ex,lOrder3Ideal,lOrder5Ex,lOrder5Ideal,dErrMu,dHessian, &
+            dMuStep,dNormAbsMu,dMaxAbsMu,dMaxScaledMu,dOrderMu,lOrderMu,iWorstMu,dMuFD)
     end if
 
     if (lPass) then
@@ -309,19 +365,17 @@ contains
 
     real(8) function CompScaledError(dApproximate,dExact)
         real(8), intent(in) :: dApproximate, dExact
-        CompScaledError = DABS(dApproximate-dExact) / DMAX1(DABS(dExact),1D-12)
+        CompScaledError = DABS(dApproximate-dExact) / &
+            DMAX1(1D0,DABS(dApproximate),DABS(dExact))
     end function CompScaledError
-
-    real(8) function CompObservedOrder(dErrorCoarse,dErrorFine,dHCoarse,dHFine)
-        real(8), intent(in) :: dErrorCoarse, dErrorFine, dHCoarse, dHFine
-        CompObservedOrder = DLOG(dErrorCoarse/dErrorFine) / DLOG(dHCoarse/dHFine)
-    end function CompObservedOrder
 
     subroutine PrintReport
         integer :: iDirLocal, iStepLocal
-        real(8) :: dOrder3Local, dOrder5Local
 
-        write(*,'(A)') 'RKMP Hessian verification at converged TestThermo30 state'
+        write(*,'(A)') 'RKMP Hessian verification'
+        write(*,'(A)') 'native scope: converged TestThermo30 plain-RKMP topology, parameters, and partial molars'
+        write(*,'(A)') 'order fixture: parsed TestThermo30 binary parameter temporarily evaluated at exponent four'
+        write(*,'(A)') 'excluded: RKMPM magnetism, ternary/Muggiano curvature, GEM response mapping, solver behavior'
         write(*,'(A,I0)') 'storage bits      = ', nStorageBits
         write(*,'(A,I0)') 'decimal precision = ', nDecimalPrecision
         write(*,'(A,I0)') 'binary digits     = ', nBinaryDigits
@@ -329,25 +383,53 @@ contains
         write(*,'(A,ES14.6)') 'symmetry residual = ', dSymmetryResidual
         write(*,'(A,ES14.6)') 'radial residual   = ', dRadialResidual
 
-        write(*,'(/,A,I0,A,I0)') 'energy direction: species ', iEnergyA, ' minus species ', iEnergyB
-        write(*,'(A)') 'h                  RKMP-3pt       RKMP-5pt       ideal-3pt      ideal-5pt'
+        write(*,'(/,A,I0,A,I0)') 'controlled energy direction: species ', iEnergyA, ' minus species ', iEnergyB
+        write(*,'(A)') 'h            RKMP3 abs    RKMP3 scaled order    RKMP5 abs    RKMP5 scaled order'
         do iStepLocal = 1, nFDSteps
-            write(*,'(ES14.6,4(2X,ES14.6))') dEnergyStep(iStepLocal), dErr3Ex(iStepLocal), &
-                dErr5Ex(iStepLocal), dErr3Ideal(iStepLocal), dErr5Ideal(iStepLocal)
+            write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dEnergyStep(iStepLocal), &
+                dAbs3Ex(iStepLocal),dErr3Ex(iStepLocal),TRIM(OrderLabel(dOrder3Ex(iStepLocal), &
+                lOrder3Ex(iStepLocal))),dAbs5Ex(iStepLocal),dErr5Ex(iStepLocal), &
+                TRIM(OrderLabel(dOrder5Ex(iStepLocal),lOrder5Ex(iStepLocal)))
         end do
-        dOrder3Local = CompObservedOrder(dErr3Ideal(1),dErr3Ideal(2),dEnergyStep(1),dEnergyStep(2))
-        dOrder5Local = CompObservedOrder(dErr5Ideal(1),dErr5Ideal(2),dEnergyStep(1),dEnergyStep(2))
-        write(*,'(A,F8.4,A,F8.4)') 'ideal observed orders: 3pt=', dOrder3Local, '  5pt=', dOrder5Local
+        write(*,'(A,L1,A,L1)') 'controlled RKMP order/accuracy: 3pt=',tRKMP3%lPassed, &
+            ' 5pt=',tRKMP5%lPassed
 
-        write(*,'(/,A)') 'production partial-molar RKMP comparison'
+        write(*,'(/,A)') 'ideal-mixing numerical control'
+        write(*,'(A)') 'h            ideal3 abs   ideal3 scaled order    ideal5 abs   ideal5 scaled order'
+        do iStepLocal = 1, nFDSteps
+            write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dEnergyStep(iStepLocal), &
+                dAbs3Ideal(iStepLocal),dErr3Ideal(iStepLocal),TRIM(OrderLabel(dOrder3Ideal(iStepLocal), &
+                lOrder3Ideal(iStepLocal))),dAbs5Ideal(iStepLocal),dErr5Ideal(iStepLocal), &
+                TRIM(OrderLabel(dOrder5Ideal(iStepLocal),lOrder5Ideal(iStepLocal)))
+        end do
+        write(*,'(A,L1,A,L1)') 'ideal order/accuracy: 3pt=',tIdeal3%lPassed,' 5pt=',tIdeal5%lPassed
+
+        write(*,'(/,A)') 'native TestThermo30 production partial-molar RKMP comparison'
+        write(*,'(A)') 'observed order: N/A when the native low-order polynomial begins in the roundoff regime'
         do iDirLocal = 1, nDirections
             write(*,'(/,A,I0,A,I0)') 'direction: species ', iDirLocal, ' minus species ', iReference
-            write(*,'(A)') 'h                  production-mu scaled error'
+            write(*,'(A)') 'h            norm abs      norm scaled   max abs       max scaled    worst  order'
             do iStepLocal = 1, nFDSteps
-                write(*,'(ES14.6,2X,ES14.6)') dMuStep(iDirLocal,iStepLocal), dErrMu(iDirLocal,iStepLocal)
+                write(*,'(ES12.4,4(2X,ES12.4),2X,I5,2X,A8)') dMuStep(iDirLocal,iStepLocal), &
+                    dNormAbsMu(iDirLocal,iStepLocal),dErrMu(iDirLocal,iStepLocal), &
+                    dMaxAbsMu(iDirLocal,iStepLocal),dMaxScaledMu(iDirLocal,iStepLocal), &
+                    iWorstMu(iDirLocal,iStepLocal),TRIM(OrderLabel(dOrderMu(iDirLocal,iStepLocal), &
+                    lOrderMu(iDirLocal,iStepLocal)))
             end do
         end do
         write(*,'(/,A,ES14.6)') 'worst best production-mu error = ', dWorstMuBest
     end subroutine PrintReport
+
+    function OrderLabel(dOrder,lAvailable) result(cLabel)
+        real(8), intent(in) :: dOrder
+        logical, intent(in) :: lAvailable
+        character(len=8) :: cLabel
+
+        if (lAvailable) then
+            write(cLabel,'(F8.4)') dOrder
+        else
+            cLabel = 'N/A'
+        end if
+    end function OrderLabel
 
 end program TestRKMPHessianVerification

@@ -34,6 +34,7 @@ program TestMQMQANativeHessianVerification
     USE ModuleGEMSolver
     USE ModuleMQMQAUnconstrained
     USE ModuleMQMQAProductionAdapter
+    USE ModuleFiniteDifferenceVerification
 
     implicit none
 
@@ -44,7 +45,7 @@ program TestMQMQANativeHessianVerification
     end interface
 
     integer, parameter :: nSteps = 9
-    integer :: i, iDirection, iFirst, iInfo, iLast, iPhaseIndex, iReference
+    integer :: i, iBest, iDirection, iFirst, iInfo, iLast, iPhaseIndex, iReference
     integer :: iSlot, iStep, nDirections, nQuad
     logical :: lPass, lReport
     character(len=32) :: cArgument
@@ -53,7 +54,12 @@ program TestMQMQANativeHessianVerification
     real(8) :: dProductionExcess, dProductionReferenceIdeal, dSymmetry
     real(8) :: dWorstBestMu
     real(8), allocatable :: dDirection(:), dErrMu(:,:), dGradient(:), dHessian(:,:)
-    real(8), allocatable :: dMoles(:), dMuProduction(:), dSteps(:,:)
+    real(8), allocatable :: dFDVector(:,:,:), dMaxAbsMu(:,:), dMaxScaledMu(:,:)
+    real(8), allocatable :: dMoles(:), dMuProduction(:), dNormAbsMu(:,:), dOrders(:,:), dPrediction(:)
+    real(8), allocatable :: dSteps(:,:)
+    integer, allocatable :: iWorstComponent(:,:)
+    logical, allocatable :: lOrderAvailable(:,:)
+    type(FDSweepAssessment) :: tSweep
     type(MQMQAModelData) :: tModel
     type(MQMQAInteractionTerm), allocatable :: tInteraction(:)
 
@@ -153,7 +159,11 @@ program TestMQMQANativeHessianVerification
             !=================================================================================================
             iReference = MAXLOC(dMoles,1)
             nDirections = nQuad-1
-            allocate(dDirection(nQuad),dErrMu(nDirections,nSteps),dSteps(nDirections,nSteps))
+            allocate(dDirection(nQuad),dErrMu(nDirections,nSteps),dSteps(nDirections,nSteps), &
+                dNormAbsMu(nDirections,nSteps),dMaxAbsMu(nDirections,nSteps), &
+                dMaxScaledMu(nDirections,nSteps),dOrders(nDirections,nSteps), &
+                lOrderAvailable(nDirections,nSteps),iWorstComponent(nDirections,nSteps), &
+                dFDVector(nDirections,nSteps,nQuad),dPrediction(nQuad))
             iDirection = 0
             do i = 1, nQuad
                 if (i == iReference) cycle
@@ -162,7 +172,13 @@ program TestMQMQANativeHessianVerification
                 dDirection(i) = 1D0
                 dDirection(iReference) = -1D0
                 call VerifyProductionDirection(iPhaseIndex,dMoles,dDirection,dHessian, &
-                    dSteps(iDirection,:),dErrMu(iDirection,:),lPass)
+                    dSteps(iDirection,:),dNormAbsMu(iDirection,:),dErrMu(iDirection,:), &
+                    dMaxAbsMu(iDirection,:),dMaxScaledMu(iDirection,:), &
+                    iWorstComponent(iDirection,:),dFDVector(iDirection,:,:),lPass)
+                call AssessFDSweep(dSteps(iDirection,:),dErrMu(iDirection,:), &
+                    FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-8,tSweep, &
+                    dOrders(iDirection,:),lOrderAvailable(iDirection,:))
+                lPass = lPass .AND. tSweep%lPassed
             end do
 
             dWorstBestMu = 0D0
@@ -173,6 +189,8 @@ program TestMQMQANativeHessianVerification
 
             if (lReport) then
                 write(*,'(A)') 'MQ-2B Thermochimica-native plain-SUBG Hessian verification'
+                write(*,'(A)') 'native scope: nonmagnetic plain-SUBG reference/configurational/G-family'
+                write(*,'(A)') 'native exclusions: SUBQ, Q, B, R, magnetism, constrained response, GEM integration'
                 write(*,'(A,A)') 'phase = ',TRIM(cSolnPhaseName(iPhaseIndex))
                 write(*,'(A,I0)') 'quadruplet count = ',nQuad
                 write(*,'(A,I0)') 'active decoded G-family terms = ',SIZE(tInteraction)
@@ -185,17 +203,46 @@ program TestMQMQANativeHessianVerification
                 write(*,'(A,ES14.6)') 'direct gradient error = ',dGradientError
                 write(*,'(A,ES14.6)') 'symmetry residual = ',dSymmetry
                 write(*,'(A,ES14.6)') 'homogeneity residual = ',dHomogeneity
-                write(*,'(A)') 'direction h                 production-mu error'
+                write(*,'(A)') 'central production-partial-molar derivative; expected order = 2'
+                write(*,'(A)') 'accepted order window = [1.7, 2.3]'
+                write(*,'(A)') 'dir  h                 norm abs            norm scaled         max abs             max scaled          worst  order'
                 do iDirection = 1, nDirections
                     do iStep = 1, nSteps
-                        write(*,'(I5,2ES22.12)') iDirection,dSteps(iDirection,iStep), &
-                            dErrMu(iDirection,iStep)
+                        write(*,'(I3,5ES20.10,I7,2X,A)') iDirection,dSteps(iDirection,iStep), &
+                            dNormAbsMu(iDirection,iStep),dErrMu(iDirection,iStep), &
+                            dMaxAbsMu(iDirection,iStep),dMaxScaledMu(iDirection,iStep), &
+                            iWorstComponent(iDirection,iStep),TRIM(OrderLabel( &
+                            dOrders(iDirection,iStep),lOrderAvailable(iDirection,iStep)))
+                    end do
+                    call AssessFDSweep(dSteps(iDirection,:),dErrMu(iDirection,:), &
+                        FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-8,tSweep)
+                    write(*,'(A,I0,A,ES14.6,A,L1,A,L1)') 'direction ',iDirection, &
+                        ' best scaled error = ',tSweep%dBestError, &
+                        ' order region = ',tSweep%lOrderRegion, &
+                        ' roundoff upturn = ',tSweep%lRoundoffUpturn
+                    iBest = tSweep%iBest
+                    dDirection = 0D0
+                    if (iDirection < iReference) then
+                        dDirection(iDirection) = 1D0
+                    else
+                        dDirection(iDirection+1) = 1D0
+                    end if
+                    dDirection(iReference) = -1D0
+                    dPrediction = MATMUL(dHessian,dDirection)
+                    write(*,'(A)') 'component analytic-Hv          FD-Hv                absolute error       scaled error'
+                    do i = 1, nQuad
+                        write(*,'(I5,4ES21.11)') i,dPrediction(i),dFDVector(iDirection,iBest,i), &
+                            DABS(dFDVector(iDirection,iBest,i)-dPrediction(i)), &
+                            DABS(dFDVector(iDirection,iBest,i)-dPrediction(i))/ &
+                            DMAX1(1D0,VectorTwoNormFD(dPrediction),DABS(dPrediction(i)), &
+                            DABS(dFDVector(iDirection,iBest,i)))
                     end do
                 end do
                 write(*,'(A,ES14.6)') 'worst best production-mu error = ',dWorstBestMu
             end if
 
-            deallocate(dDirection,dErrMu,dSteps)
+            deallocate(dDirection,dErrMu,dSteps,dNormAbsMu,dMaxAbsMu,dMaxScaledMu, &
+                dOrders,lOrderAvailable,iWorstComponent,dFDVector,dPrediction)
         end if
         deallocate(dMoles,dGradient,dHessian,dMuProduction)
     end if
@@ -215,11 +262,13 @@ contains
     !> \brief Compare H*v with finite differences of established production partial molars.
     !---------------------------------------------------------------------------------------------------------
     subroutine VerifyProductionDirection(iPhaseLocal,dMolesLocal,dDirectionLocal,dHessianLocal, &
-        dStepValues,dErrors,lAllPass)
+        dStepValues,dNormAbsolute,dErrors,dMaxAbsolute,dMaxScaled,iWorst,dFDValues,lAllPass)
 
         integer, intent(in) :: iPhaseLocal
         real(8), intent(in) :: dMolesLocal(:), dDirectionLocal(:), dHessianLocal(:,:)
-        real(8), intent(out) :: dStepValues(:), dErrors(:)
+        real(8), intent(out) :: dStepValues(:), dNormAbsolute(:), dErrors(:)
+        real(8), intent(out) :: dMaxAbsolute(:), dMaxScaled(:), dFDValues(:,:)
+        integer, intent(out) :: iWorst(:)
         logical, intent(inout) :: lAllPass
 
         integer :: iInfoLocal, iStepLocal
@@ -252,13 +301,29 @@ contains
             call EvaluateProductionVector(iPhaseLocal,dPlus,dMuPlus,dDummyReferenceIdeal, &
                 dDummyExcess,iInfoLocal)
             lAllPass = lAllPass .AND. (iInfoLocal == 0)
-            dErrors(iStepLocal) = VectorTwoNorm((dMuPlus-dMuMinus)/(2D0*dH)-dPrediction) / &
-                DMAX1(1D0,VectorTwoNorm(dPrediction))
+            dFDValues(iStepLocal,:) = (dMuPlus-dMuMinus)/(2D0*dH)
+            call ComputeVectorErrorMetrics(dFDValues(iStepLocal,:),dPrediction, &
+                dNormAbsolute(iStepLocal),dErrors(iStepLocal),dMaxAbsolute(iStepLocal), &
+                dMaxScaled(iStepLocal),iWorst(iStepLocal))
         end do
 
         deallocate(dMinus,dMuMinus,dMuPlus,dPlus,dPrediction,dRatio)
 
     end subroutine VerifyProductionDirection
+
+
+    character(len=16) function OrderLabel(dOrder,lAvailable)
+
+        real(8), intent(in) :: dOrder
+        logical, intent(in) :: lAvailable
+
+        if (lAvailable) then
+            write(OrderLabel,'(F10.4)') dOrder
+        else
+            OrderLabel = 'N/A'
+        end if
+
+    end function OrderLabel
 
 
     !---------------------------------------------------------------------------------------------------------

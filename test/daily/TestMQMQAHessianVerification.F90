@@ -21,6 +21,7 @@ program TestMQMQAHessianVerification
 
     USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
     USE ModuleMQMQAUnconstrained
+    USE ModuleFiniteDifferenceVerification
 
     implicit none
 
@@ -200,21 +201,29 @@ contains
         logical, intent(inout) :: lAllPass
         logical, intent(in) :: lVerbose
 
-        integer, parameter :: nSteps=7
+        integer, parameter :: nSteps=9
         integer :: i,j,k,n,iInfo
         real(8) :: dG,dGRef,dGIdeal,dGEx,dGDual,dGDualRef,dGDualIdeal,dGDualEx
-        real(8) :: dScaleError,dSym,dHom,dNormH,dNormN,dHBase,dH
+        real(8) :: dScaleError,dSym,dHom,dNormH,dNormN,dHBase,dH,dGradientHBase
         real(8) :: dAnalytic,dFD3,dFD5,dErr3(nSteps),dErr5(nSteps)
+        real(8) :: dAbsErr3(nSteps),dAbsErr5(nSteps),dStep(nSteps)
         real(8) :: dGradientError,dHvError,dExtError,dGPlus,dGMinus,dTmp1,dTmp2,dTmp3
+        real(8) :: dGradNormAbs(nSteps),dGradNormScaled(nSteps),dGradMaxAbs(nSteps),dGradMaxScaled(nSteps)
+        real(8) :: dHvNormAbs(nSteps),dHvNormScaled(nSteps),dHvMaxAbs(nSteps),dHvMaxScaled(nSteps)
+        real(8) :: dOrder3(nSteps),dOrder5(nSteps),dOrderGradient(nSteps),dOrderHv(nSteps)
+        integer :: iGradWorst(nSteps),iHvWorst(nSteps)
         real(8), allocatable :: dHessian(:,:),dHRef(:,:),dHIdeal(:,:),dHEx(:,:),dGradient(:),dDirection(:)
         real(8), allocatable :: dPlus(:),dMinus(:),dPlus2(:),dMinus2(:),dGradPlus(:),dGradMinus(:),dDummyH(:,:)
-        real(8), allocatable :: dHv(:)
-        logical :: lCasePass,lTrend3,lTrend5
+        real(8), allocatable :: dHv(:),dGradientFD(:),dHvFD(:)
+        logical :: lCasePass
+        logical :: lOrder3Available(nSteps),lOrder5Available(nSteps)
+        logical :: lOrderGradientAvailable(nSteps),lOrderHvAvailable(nSteps)
+        type(FDSweepAssessment) :: tAssess3,tAssess5,tAssessGradient,tAssessHv
 
         n=SIZE(dState)
         allocate(dHessian(n,n),dHRef(n,n),dHIdeal(n,n),dHEx(n,n),dGradient(n),dDirection(n), &
             dPlus(n),dMinus(n),dPlus2(n),dMinus2(n),dGradPlus(n),dGradMinus(n),dDummyH(n,n))
-        allocate(dHv(n))
+        allocate(dHv(n),dGradientFD(n),dHvFD(n))
         call CompMQMQAGibbsEnergyUnconstrained(tData,dState,dIdealScale,tTerm,dG,dGRef,dGIdeal,dGEx,iInfo)
         lCasePass=iInfo==0
         if (.NOT.lCasePass) then
@@ -257,6 +266,7 @@ contains
         ! five-point energy stencils must show a genuine decreasing region.
         do k=1,nSteps
             dH=dHBase/(2D0**(k-1))
+            dStep(k)=dH
             dPlus=dState+dH*dDirection; dMinus=dState-dH*dDirection
             dPlus2=dState+2D0*dH*dDirection; dMinus2=dState-2D0*dH*dDirection
             call ScalarValue(tData,dPlus,dIdealScale,tTerm,dGPlus,iInfo)
@@ -265,44 +275,60 @@ contains
             call ScalarValue(tData,dMinus2,dIdealScale,tTerm,dTmp2,iInfo)
             dFD3=(dGPlus-2D0*dG+dGMinus)/(dH*dH)
             dFD5=(-dTmp1+16D0*dGPlus-30D0*dG+16D0*dGMinus-dTmp2)/(12D0*dH*dH)
+            dAbsErr3(k)=ABS(dAnalytic-dFD3)
+            dAbsErr5(k)=ABS(dAnalytic-dFD5)
             dErr3(k)=NormalizedDifference(dAnalytic,dFD3)
             dErr5(k)=NormalizedDifference(dAnalytic,dFD5)
         end do
-        lTrend3=HasTwoStepDecrease(dErr3)
-        lTrend5=HasTwoStepDecrease(dErr5)
-        lCasePass=lCasePass.AND.(MINVAL(dErr3)<=1D-6).AND.(MINVAL(dErr5)<=1D-8).AND.lTrend3.AND.lTrend5
+        call AssessFDSweep(dStep,dErr3,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-6, &
+            tAssess3,dOrder3,lOrder3Available)
+        call AssessFDSweep(dStep,dErr5,FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-8, &
+            tAssess5,dOrder5,lOrder5Available)
+        lCasePass=lCasePass.AND.tAssess3%lPassed.AND.tAssess5%lPassed
 
         ! Check each analytic chemical-potential component against the independent
-        ! scalar energy, one mole variable at a time.
-        dGradientError=0D0
-        do i=1,n
-            dH=1D-5*MAX(1D0,dState(i))
-            dPlus=dState; dMinus=dState
-            dPlus(i)=dPlus(i)+dH; dMinus(i)=dMinus(i)-dH
-            call ScalarValue(tData,dPlus,dIdealScale,tTerm,dGPlus,iInfo)
-            call ScalarValue(tData,dMinus,dIdealScale,tTerm,dGMinus,iInfo)
-            dGradientError=MAX(dGradientError,NormalizedDifference(dGradient(i),(dGPlus-dGMinus)/(2D0*dH)))
+        ! scalar energy, one mole variable at a time. A common positivity-safe
+        ! step gives one vector approximation at each refinement level.
+        dGradientHBase=0.08D0*MINVAL(dState)
+        do k=1,nSteps
+            dH=dGradientHBase/(2D0**(k-1))
+            do i=1,n
+                dPlus=dState; dMinus=dState
+                dPlus(i)=dPlus(i)+dH; dMinus(i)=dMinus(i)-dH
+                call ScalarValue(tData,dPlus,dIdealScale,tTerm,dGPlus,iInfo)
+                call ScalarValue(tData,dMinus,dIdealScale,tTerm,dGMinus,iInfo)
+                dGradientFD(i)=(dGPlus-dGMinus)/(2D0*dH)
+            end do
+            call ComputeVectorErrorMetrics(dGradientFD,dGradient,dGradNormAbs(k),dGradNormScaled(k), &
+                dGradMaxAbs(k),dGradMaxScaled(k),iGradWorst(k))
         end do
-        lCasePass=lCasePass.AND.(dGradientError<=1D-7)
+        call AssessFDSweep([(dGradientHBase/(2D0**(k-1)),k=1,nSteps)],dGradNormScaled, &
+            FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-7,tAssessGradient, &
+            dOrderGradient,lOrderGradientAvailable)
+        dGradientError=tAssessGradient%dBestError
+        lCasePass=lCasePass.AND.tAssessGradient%lPassed
 
         ! Multiplying H by direction v predicts the change of the complete
         ! gradient under that simultaneous mole perturbation. Finite-differencing
         ! analytic gradients checks this prediction and is numerically better
         ! conditioned than taking a second energy difference.
-        dH=1D-5*dHBase
-        dPlus=dState+dH*dDirection; dMinus=dState-dH*dDirection
-        call CompMQMQAHessianUnconstrained(tData,dPlus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradPlus)
-        call CompMQMQAHessianUnconstrained(tData,dMinus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradMinus)
         ! Moving the state along dDirection changes each chemical potential.
         ! Multiplying the analytic Hessian by that mole direction predicts the
         ! complete vector of those first-order changes.
         dHv=MATMUL(dHessian,dDirection)
-        dHvError=0D0
-        do i=1,n
-            dHvError=MAX(dHvError,NormalizedDifference(dHv(i), &
-                (dGradPlus(i)-dGradMinus(i))/(2D0*dH)))
+        do k=1,nSteps
+            dH=dStep(k)
+            dPlus=dState+dH*dDirection; dMinus=dState-dH*dDirection
+            call CompMQMQAHessianUnconstrained(tData,dPlus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradPlus)
+            call CompMQMQAHessianUnconstrained(tData,dMinus,dIdealScale,tTerm,dDummyH,iInfo,dGradient=dGradMinus)
+            dHvFD=(dGradPlus-dGradMinus)/(2D0*dH)
+            call ComputeVectorErrorMetrics(dHvFD,dHv,dHvNormAbs(k),dHvNormScaled(k), &
+                dHvMaxAbs(k),dHvMaxScaled(k),iHvWorst(k))
         end do
-        lCasePass=lCasePass.AND.(dHvError<=1D-7)
+        call AssessFDSweep(dStep,dHvNormScaled,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-7, &
+            tAssessHv,dOrderHv,lOrderHvAvailable)
+        dHvError=tAssessHv%dBestError
+        lCasePass=lCasePass.AND.tAssessHv%lPassed
 
         ! Scaling every quadruplet amount by the same factor changes only the
         ! amount of phase, not its composition. An extensive Gibbs energy must
@@ -324,14 +350,49 @@ contains
             write(*,'(A,ES12.4)') 'raw symmetry residual = ',dSym
             write(*,'(A,ES12.4)') 'homogeneity residual = ',dHom
             write(*,'(A,ES12.4)') 'extensivity error = ',dExtError
-            write(*,'(A)') '             h       three-point error        five-point error'
+            write(*,'(A)') 'controlled standalone inputs; expected scalar orders: 3pt=2, 5pt=4'
+            write(*,'(A)') 'h          3pt abs       3pt scaled    3pt order   5pt abs       5pt scaled    5pt order'
             do k=1,nSteps
-                write(*,'(3ES22.10)') dHBase/(2D0**(k-1)),dErr3(k),dErr5(k)
+                write(*,'(3ES14.5,2X,A,2ES14.5,2X,A)') dStep(k),dAbsErr3(k),dErr3(k), &
+                    TRIM(OrderLabel(dOrder3(k),lOrder3Available(k))),dAbsErr5(k),dErr5(k), &
+                    TRIM(OrderLabel(dOrder5(k),lOrder5Available(k)))
+            end do
+            write(*,'(A,ES12.4,A,L1)') '3pt best scaled error = ',tAssess3%dBestError, &
+                ' roundoff upturn = ',tAssess3%lRoundoffUpturn
+            write(*,'(A,ES12.4,A,L1)') '5pt best scaled error = ',tAssess5%dBestError, &
+                ' roundoff upturn = ',tAssess5%lRoundoffUpturn
+            write(*,'(A)') 'scalar-to-gradient central derivative; expected order = 2'
+            write(*,'(A)') 'h          norm abs      norm scaled   max abs       max scaled    worst  order'
+            do k=1,nSteps
+                write(*,'(5ES14.5,I7,2X,A)') dGradientHBase/(2D0**(k-1)),dGradNormAbs(k), &
+                    dGradNormScaled(k),dGradMaxAbs(k),dGradMaxScaled(k),iGradWorst(k), &
+                    TRIM(OrderLabel(dOrderGradient(k),lOrderGradientAvailable(k)))
+            end do
+            write(*,'(A)') 'gradient-to-Hessian-vector central derivative; expected order = 2'
+            write(*,'(A)') 'h          norm abs      norm scaled   max abs       max scaled    worst  order'
+            do k=1,nSteps
+                write(*,'(5ES14.5,I7,2X,A)') dStep(k),dHvNormAbs(k),dHvNormScaled(k), &
+                    dHvMaxAbs(k),dHvMaxScaled(k),iHvWorst(k), &
+                    TRIM(OrderLabel(dOrderHv(k),lOrderHvAvailable(k)))
             end do
             write(*,'(A,L1)') 'case pass = ',lCasePass
         end if
 
     end subroutine VerifyCase
+
+
+    character(len=16) function OrderLabel(dOrder,lAvailable)
+
+        real(8), intent(in) :: dOrder
+        logical, intent(in) :: lAvailable
+
+        if (lAvailable) then
+            write(OrderLabel,'(F10.4)') dOrder
+        else
+            OrderLabel='N/A'
+        end if
+
+    end function OrderLabel
 
 
     subroutine ScalarValue(tData,dState,dIdealScale,tTerm,dValue,iInfo)
@@ -504,17 +565,5 @@ contains
         MatrixTwoNorm=SQRT(DOT_PRODUCT(dNext,dNext))
     end function MatrixTwoNorm
 
-
-    logical function HasTwoStepDecrease(dError)
-        real(8), intent(in) :: dError(:)
-        integer :: i
-        HasTwoStepDecrease=.FALSE.
-        do i=1,SIZE(dError)-2
-            if ((dError(i+1)<dError(i)).AND.(dError(i+2)<dError(i+1))) then
-                HasTwoStepDecrease=.TRUE.
-                return
-            end if
-        end do
-    end function HasTwoStepDecrease
 
 end program TestMQMQAHessianVerification
