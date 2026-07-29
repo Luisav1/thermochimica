@@ -21,7 +21,8 @@ program TestRKMPGEMMappingVerification
     USE ModuleThermoIO
     USE ModuleGEMSolver
     USE ModuleRKMPResponseMapping
-    USE ModuleFiniteDifferenceVerification, ONLY: ComputeObservedOrders
+    USE ModuleFiniteDifferenceVerification, ONLY: AssessFDSweep, FDSweepAssessment, &
+        FD_ORDER_SECOND_MIN, FD_ORDER_SECOND_MAX
 
     implicit none
 
@@ -60,6 +61,7 @@ program TestRKMPGEMMappingVerification
     real(8), allocatable :: dAnalyticDX(:), dFDDX(:), dResponseSteps(:), dResponseErrors(:)
     real(8), allocatable :: dResponseOrders(:)
     logical, allocatable :: lResponseOrderAvailable(:)
+    type(FDSweepAssessment) :: tResponseSweep
     real(8), allocatable :: dC(:,:), dH(:,:), dHx(:,:), dHideal(:,:), dResponse(:,:), dIdealResponse(:,:)
     real(8), allocatable :: dMuRHS(:,:), dMuResponse(:,:), dIdealMuResponse(:,:)
     real(8), allocatable :: dDirectIdeal(:,:), dReconIdeal(:,:), dExpectedA(:,:), dA(:,:), dAOriginal(:,:)
@@ -206,13 +208,15 @@ program TestRKMPGEMMappingVerification
             dResponseErrors(iStep) = HUGE(1D0)
         end if
     end do
-    call ComputeObservedOrders(dResponseSteps,dResponseErrors,dResponseOrders,lResponseOrderAvailable)
-    iBestStep = MINLOC(dResponseErrors,DIM=1)
+    call AssessFDSweep(dResponseSteps,dResponseErrors,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX, &
+        1D-7,tResponseSweep,dResponseOrders,lResponseOrderAvailable)
+    iBestStep = tResponseSweep%iBest
     dResponseStep = dResponseSteps(iBestStep)
     dFDResponseError = dResponseErrors(iBestStep)
-    ! A visible second-order region guards against accepting one accidentally
-    ! favorable perturbation. The complete sweep should improve monotonically
-    ! before its best retained step.
+    ! Require the independent nonlinear response to approach the analytic
+    ! response with the expected second-order central-difference rate. This
+    ! prevents one accidentally favourable perturbation from passing the mapper.
+    lPass = lPass .AND. tResponseSweep%lPassed
     lPass = lPass .AND. ALL(dResponseErrors(2:nResponseSteps) < &
         dResponseErrors(1:nResponseSteps-1))
 
@@ -312,6 +316,9 @@ program TestRKMPGEMMappingVerification
         write(*,'(A,ES14.6)') 'max abs mapped delta B = ', dDeltaBMagnitude
         write(*,'(A,ES14.6)') 'structural mapped delta A error = ', dMapAError
         write(*,'(A,ES14.6)') 'structural mapped delta B error = ', dMapBError
+        write(*,'(A,L1,A,F7.4,A,F7.4)') 'mixed-response order-aware pass = ', &
+            tResponseSweep%lPassed, ' accepted p range = ',tResponseSweep%dObservedOrderMin, &
+            ' to ',tResponseSweep%dObservedOrderMax
         write(*,'(A)') 'mixed-response step        scaled error    observed order'
         do iStep = 1, nResponseSteps
             write(*,'(ES20.10,2X,ES14.6,2X,A14)') dResponseSteps(iStep),dResponseErrors(iStep), &

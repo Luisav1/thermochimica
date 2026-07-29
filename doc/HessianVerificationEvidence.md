@@ -123,6 +123,9 @@ output checks and reports zero local mapper failures.
 
 The complete suite passes `70/70` with defaults off and `70/70` with requested
 alpha one. A final default-off run is required after any exact-on experiment.
+These regressions demonstrate that the curvature-enabled path produces stable,
+converged Thermochimica solutions under the tested configurations. They do not
+establish that exact curvature reduces iteration count or wall-clock time.
 
 ## Coverage Boundaries
 
@@ -149,10 +152,15 @@ docker exec thermochimica bash -lc \
   "cd /work && env THERMOCHIMICA_RKMP_EXACT=1 \
    THERMOCHIMICA_RKMP_ALPHA_MAX=1 ./run_tests"
 
+# Plotting is optional and requires the Debian Matplotlib package:
+docker exec -u root thermochimica bash -lc \
+  "apt-get update && apt-get install -y python3-matplotlib"
+
 docker exec thermochimica bash -lc \
   "cd /work && python3 scripts/plot_hessian_verification.py"
 ```
 
-The plotting utility writes complete reports and SVG log-log figures to
-`outputs/hessian_verification/`. The automated Fortran tests do not depend on
+The plotting utility writes complete reports, vector SVG figures, and 300-DPI
+PNG figures to `outputs/hessian_verification/`. Matplotlib is required only for
+this optional presentation layer; the automated Fortran tests do not depend on
 plotting software.
