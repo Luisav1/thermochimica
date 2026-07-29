@@ -55,7 +55,8 @@ program TestRKMPHessianVerification
         end subroutine CompRKMPBinaryExcessGibbsFromMoles
     end interface
 
-    integer, parameter :: nFDSteps = 9
+    integer, parameter :: nEnergyFDSteps = 12
+    integer, parameter :: nMuFDSteps = 9
     integer :: i, iDirection, iEnergyA, iEnergyB, iFirstSpecies, iLastSpecies, iParam
     integer :: iPhaseIndex, iReference, iControlledParam, iExponentSave
     integer :: iSolnSlot, iStep, nDirections, nLocalSpecies
@@ -63,7 +64,7 @@ program TestRKMPHessianVerification
     real(8) :: dAnalyticEx, dAnalyticIdeal, dEnergy0Ex, dEnergy0Ideal
     real(8) :: dEnergyM1Ex, dEnergyM2Ex, dEnergyP1Ex, dEnergyP2Ex
     real(8) :: dEnergyM1Ideal, dEnergyM2Ideal, dEnergyP1Ideal, dEnergyP2Ideal
-    real(8) :: dEpsilonMachine, dFD3, dFD5, dH, dScale, dTotalMoles
+    real(8) :: dEpsilonMachine, dFDForward, dFDBackward, dFD3, dFD5, dH, dScale, dTotalMoles
     real(8) :: dRadialResidual, dSymmetryResidual, dScaleHessian
     real(8) :: dWorstMuBest
     logical :: lPass, lReport
@@ -71,16 +72,20 @@ program TestRKMPHessianVerification
     real(8), allocatable, dimension(:) :: dDirection, dMoles0, dMolesM1, dMolesM2
     real(8), allocatable, dimension(:) :: dMolesP1, dMolesP2, dMuAnalytic, dMuMinus, dMuPlus
     real(8), allocatable, dimension(:) :: dMolFractionSave, dPartialExcessSave, dX
-    real(8), allocatable, dimension(:) :: dEnergyStep, dErr3Ex, dErr3Ideal, dErr5Ex, dErr5Ideal
+    real(8), allocatable, dimension(:) :: dEnergyStep, dErrForwardEx, dErrBackwardEx
+    real(8), allocatable, dimension(:) :: dErr3Ex, dErr3Ideal, dErr5Ex, dErr5Ideal
+    real(8), allocatable, dimension(:) :: dAbsForwardEx, dAbsBackwardEx
     real(8), allocatable, dimension(:) :: dAbs3Ex, dAbs3Ideal, dAbs5Ex, dAbs5Ideal
+    real(8), allocatable, dimension(:) :: dOrderForwardEx, dOrderBackwardEx
     real(8), allocatable, dimension(:) :: dOrder3Ex, dOrder3Ideal, dOrder5Ex, dOrder5Ideal
+    logical, allocatable, dimension(:) :: lOrderForwardEx, lOrderBackwardEx
     logical, allocatable, dimension(:) :: lOrder3Ex, lOrder3Ideal, lOrder5Ex, lOrder5Ideal
     real(8), allocatable, dimension(:,:) :: dErrMu, dHessian, dMuStep, dNormAbsMu
     real(8), allocatable, dimension(:,:) :: dMaxAbsMu, dMaxScaledMu, dOrderMu
     real(8), allocatable, dimension(:,:,:) :: dMuFD
     logical, allocatable, dimension(:,:) :: lOrderMu
     integer, allocatable, dimension(:,:) :: iWorstMu
-    type(FDSweepAssessment) :: tRKMP3, tRKMP5, tIdeal3, tIdeal5
+    type(FDSweepAssessment) :: tRKMPForward, tRKMPBackward, tRKMP3, tRKMP5, tIdeal3, tIdeal5
 
     lPass = .TRUE.
     lReport = .FALSE.
@@ -153,16 +158,22 @@ program TestRKMPHessianVerification
             dMolesM2(nLocalSpecies), dMolesP1(nLocalSpecies), dMolesP2(nLocalSpecies), &
             dMuAnalytic(nLocalSpecies), dMuMinus(nLocalSpecies), dMuPlus(nLocalSpecies), &
             dMolFractionSave(nLocalSpecies), dPartialExcessSave(nLocalSpecies), dX(nLocalSpecies), &
-            dEnergyStep(nFDSteps), dErr3Ex(nFDSteps), dErr3Ideal(nFDSteps), &
-            dErr5Ex(nFDSteps), dErr5Ideal(nFDSteps), dAbs3Ex(nFDSteps), dAbs3Ideal(nFDSteps), &
-            dAbs5Ex(nFDSteps), dAbs5Ideal(nFDSteps), dOrder3Ex(nFDSteps), dOrder3Ideal(nFDSteps), &
-            dOrder5Ex(nFDSteps), dOrder5Ideal(nFDSteps), lOrder3Ex(nFDSteps), &
-            lOrder3Ideal(nFDSteps), lOrder5Ex(nFDSteps), lOrder5Ideal(nFDSteps), &
-            dErrMu(nDirections,nFDSteps), dHessian(nLocalSpecies,nLocalSpecies), &
-            dMuStep(nDirections,nFDSteps), dNormAbsMu(nDirections,nFDSteps), &
-            dMaxAbsMu(nDirections,nFDSteps), dMaxScaledMu(nDirections,nFDSteps), &
-            dOrderMu(nDirections,nFDSteps), lOrderMu(nDirections,nFDSteps), &
-            iWorstMu(nDirections,nFDSteps), dMuFD(nDirections,nFDSteps,nLocalSpecies))
+            dEnergyStep(nEnergyFDSteps), dErrForwardEx(nEnergyFDSteps), &
+            dErrBackwardEx(nEnergyFDSteps), dErr3Ex(nEnergyFDSteps), dErr3Ideal(nEnergyFDSteps), &
+            dErr5Ex(nEnergyFDSteps), dErr5Ideal(nEnergyFDSteps), dAbs3Ex(nEnergyFDSteps), &
+            dAbs3Ideal(nEnergyFDSteps), dAbs5Ex(nEnergyFDSteps), dAbs5Ideal(nEnergyFDSteps), &
+            dAbsForwardEx(nEnergyFDSteps), dAbsBackwardEx(nEnergyFDSteps), &
+            dOrderForwardEx(nEnergyFDSteps), dOrderBackwardEx(nEnergyFDSteps), &
+            dOrder3Ex(nEnergyFDSteps), dOrder3Ideal(nEnergyFDSteps), &
+            dOrder5Ex(nEnergyFDSteps), dOrder5Ideal(nEnergyFDSteps), &
+            lOrder3Ex(nEnergyFDSteps), lOrder3Ideal(nEnergyFDSteps), &
+            lOrder5Ex(nEnergyFDSteps), lOrder5Ideal(nEnergyFDSteps), &
+            lOrderForwardEx(nEnergyFDSteps), lOrderBackwardEx(nEnergyFDSteps), &
+            dErrMu(nDirections,nMuFDSteps), dHessian(nLocalSpecies,nLocalSpecies), &
+            dMuStep(nDirections,nMuFDSteps), dNormAbsMu(nDirections,nMuFDSteps), &
+            dMaxAbsMu(nDirections,nMuFDSteps), dMaxScaledMu(nDirections,nMuFDSteps), &
+            dOrderMu(nDirections,nMuFDSteps), lOrderMu(nDirections,nMuFDSteps), &
+            iWorstMu(nDirections,nMuFDSteps), dMuFD(nDirections,nMuFDSteps,nLocalSpecies))
 
         dMoles0 = dMolesSpecies(iFirstSpecies:iLastSpecies)
         dTotalMoles = SUM(dMoles0)
@@ -212,7 +223,7 @@ program TestRKMPHessianVerification
         call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMoles0,dEnergy0Ex)
         dEnergy0Ideal = CompIdealMixingEnergy(dMoles0)
 
-        do iStep = 1, nFDSteps
+        do iStep = 1, nEnergyFDSteps
             dH = 0.2D0*dScale * 3D0**(-(iStep-1))
             dEnergyStep(iStep) = dH
             dMolesM1 = dMoles0 - dH*dDirection
@@ -229,11 +240,26 @@ program TestRKMPHessianVerification
             dEnergyM2Ideal = CompIdealMixingEnergy(dMolesM2)
             dEnergyP2Ideal = CompIdealMixingEnergy(dMolesP2)
 
+            ! All four stencils estimate the same curvature v^T H v from
+            ! independent scalar-energy evaluations. Forward and backward
+            ! differences retain leading +h*f''' and -h*f''' terms, respectively,
+            ! and should lose absolute error as h. Their absolute-error curves
+            ! may therefore overlap even though the signed errors oppose.
+            ! Centering cancels that term, giving h**2 behavior; the wider
+            ! five-point stencil cancels more terms and gives h**4.
+            ! At very small h, subtracting nearly equal energies amplifies
+            ! floating-point roundoff, so an eventual error increase is expected.
+            dFDForward = (dEnergyP2Ex-2D0*dEnergyP1Ex+dEnergy0Ex)/(dH*dH)
+            dFDBackward = (dEnergy0Ex-2D0*dEnergyM1Ex+dEnergyM2Ex)/(dH*dH)
             dFD3 = (dEnergyP1Ex-2D0*dEnergy0Ex+dEnergyM1Ex)/(dH*dH)
             dFD5 = (-dEnergyP2Ex+16D0*dEnergyP1Ex-30D0*dEnergy0Ex+ &
                 16D0*dEnergyM1Ex-dEnergyM2Ex)/(12D0*dH*dH)
+            dAbsForwardEx(iStep) = DABS(dFDForward-dAnalyticEx)
+            dAbsBackwardEx(iStep) = DABS(dFDBackward-dAnalyticEx)
             dAbs3Ex(iStep) = DABS(dFD3-dAnalyticEx)
             dAbs5Ex(iStep) = DABS(dFD5-dAnalyticEx)
+            dErrForwardEx(iStep) = CompScaledError(dFDForward,dAnalyticEx)
+            dErrBackwardEx(iStep) = CompScaledError(dFDBackward,dAnalyticEx)
             dErr3Ex(iStep) = CompScaledError(dFD3,dAnalyticEx)
             dErr5Ex(iStep) = CompScaledError(dFD5,dAnalyticEx)
 
@@ -246,6 +272,10 @@ program TestRKMPHessianVerification
             dErr5Ideal(iStep) = CompScaledError(dFD5,dAnalyticIdeal)
         end do
 
+        call AssessFDSweep(dEnergyStep,dErrForwardEx,FD_ORDER_FIRST_MIN,FD_ORDER_FIRST_MAX,1D-6, &
+            tRKMPForward,dOrderForwardEx,lOrderForwardEx)
+        call AssessFDSweep(dEnergyStep,dErrBackwardEx,FD_ORDER_FIRST_MIN,FD_ORDER_FIRST_MAX,1D-6, &
+            tRKMPBackward,dOrderBackwardEx,lOrderBackwardEx)
         call AssessFDSweep(dEnergyStep,dErr3Ex,FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-7, &
             tRKMP3,dOrder3Ex,lOrder3Ex)
         call AssessFDSweep(dEnergyStep,dErr5Ex,FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-9, &
@@ -254,6 +284,7 @@ program TestRKMPHessianVerification
             tIdeal3,dOrder3Ideal,lOrder3Ideal)
         call AssessFDSweep(dEnergyStep,dErr5Ideal,FD_ORDER_FOURTH_MIN,FD_ORDER_FOURTH_MAX,1D-8, &
             tIdeal5,dOrder5Ideal,lOrder5Ideal)
+        lPass = lPass .AND. tRKMPForward%lPassed .AND. tRKMPBackward%lPassed
         lPass = lPass .AND. tRKMP3%lPassed .AND. tRKMP5%lPassed
         lPass = lPass .AND. tIdeal3%lPassed .AND. tIdeal5%lPassed
 
@@ -284,7 +315,7 @@ program TestRKMPHessianVerification
 
             dMuAnalytic = MATMUL(dTotalMoles*dHessian,dDirection)
 
-            do iStep = 1, nFDSteps
+            do iStep = 1, nMuFDSteps
                 dH = dScale * 10D0**(-iStep)
                 dMuStep(iDirection,iStep) = dH
 
@@ -326,9 +357,11 @@ program TestRKMPHessianVerification
         if (lReport) call PrintReport
 
         deallocate(dDirection,dMoles0,dMolesM1,dMolesM2,dMolesP1,dMolesP2,dMuAnalytic, &
-            dMuMinus,dMuPlus,dMolFractionSave,dPartialExcessSave,dX,dEnergyStep,dErr3Ex,dErr3Ideal, &
-            dErr5Ex,dErr5Ideal,dAbs3Ex,dAbs3Ideal,dAbs5Ex,dAbs5Ideal,dOrder3Ex,dOrder3Ideal, &
-            dOrder5Ex,dOrder5Ideal,lOrder3Ex,lOrder3Ideal,lOrder5Ex,lOrder5Ideal,dErrMu,dHessian, &
+            dMuMinus,dMuPlus,dMolFractionSave,dPartialExcessSave,dX,dEnergyStep,dErrForwardEx, &
+            dErrBackwardEx,dErr3Ex,dErr3Ideal,dErr5Ex,dErr5Ideal,dAbsForwardEx,dAbsBackwardEx, &
+            dAbs3Ex,dAbs3Ideal,dAbs5Ex,dAbs5Ideal,dOrderForwardEx,dOrderBackwardEx,dOrder3Ex, &
+            dOrder3Ideal,dOrder5Ex,dOrder5Ideal,lOrderForwardEx,lOrderBackwardEx,lOrder3Ex, &
+            lOrder3Ideal,lOrder5Ex,lOrder5Ideal,dErrMu,dHessian, &
             dMuStep,dNormAbsMu,dMaxAbsMu,dMaxScaledMu,dOrderMu,lOrderMu,iWorstMu,dMuFD)
     end if
 
@@ -384,19 +417,31 @@ contains
         write(*,'(A,ES14.6)') 'radial residual   = ', dRadialResidual
 
         write(*,'(/,A,I0,A,I0)') 'controlled energy direction: species ', iEnergyA, ' minus species ', iEnergyB
+        write(*,'(A)') 'h            forward abs  forward scaled order    backward abs backward scaled order'
+        do iStepLocal = 1, nEnergyFDSteps
+            write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dEnergyStep(iStepLocal), &
+                dAbsForwardEx(iStepLocal),dErrForwardEx(iStepLocal), &
+                TRIM(OrderLabel(dOrderForwardEx(iStepLocal),lOrderForwardEx(iStepLocal))), &
+                dAbsBackwardEx(iStepLocal),dErrBackwardEx(iStepLocal), &
+                TRIM(OrderLabel(dOrderBackwardEx(iStepLocal),lOrderBackwardEx(iStepLocal)))
+        end do
+        write(*,'(A,L1,A,L1)') 'controlled RKMP one-sided order/accuracy: forward=', &
+            tRKMPForward%lPassed,' backward=',tRKMPBackward%lPassed
+
+        write(*,'(/,A)') 'controlled centered-difference comparison'
         write(*,'(A)') 'h            RKMP3 abs    RKMP3 scaled order    RKMP5 abs    RKMP5 scaled order'
-        do iStepLocal = 1, nFDSteps
+        do iStepLocal = 1, nEnergyFDSteps
             write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dEnergyStep(iStepLocal), &
                 dAbs3Ex(iStepLocal),dErr3Ex(iStepLocal),TRIM(OrderLabel(dOrder3Ex(iStepLocal), &
                 lOrder3Ex(iStepLocal))),dAbs5Ex(iStepLocal),dErr5Ex(iStepLocal), &
                 TRIM(OrderLabel(dOrder5Ex(iStepLocal),lOrder5Ex(iStepLocal)))
         end do
-        write(*,'(A,L1,A,L1)') 'controlled RKMP order/accuracy: 3pt=',tRKMP3%lPassed, &
+        write(*,'(A,L1,A,L1)') 'controlled RKMP centered order/accuracy: 3pt=',tRKMP3%lPassed, &
             ' 5pt=',tRKMP5%lPassed
 
         write(*,'(/,A)') 'ideal-mixing numerical control'
         write(*,'(A)') 'h            ideal3 abs   ideal3 scaled order    ideal5 abs   ideal5 scaled order'
-        do iStepLocal = 1, nFDSteps
+        do iStepLocal = 1, nEnergyFDSteps
             write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dEnergyStep(iStepLocal), &
                 dAbs3Ideal(iStepLocal),dErr3Ideal(iStepLocal),TRIM(OrderLabel(dOrder3Ideal(iStepLocal), &
                 lOrder3Ideal(iStepLocal))),dAbs5Ideal(iStepLocal),dErr5Ideal(iStepLocal), &
@@ -409,7 +454,7 @@ contains
         do iDirLocal = 1, nDirections
             write(*,'(/,A,I0,A,I0)') 'direction: species ', iDirLocal, ' minus species ', iReference
             write(*,'(A)') 'h            norm abs      norm scaled   max abs       max scaled    worst  order'
-            do iStepLocal = 1, nFDSteps
+            do iStepLocal = 1, nMuFDSteps
                 write(*,'(ES12.4,4(2X,ES12.4),2X,I5,2X,A8)') dMuStep(iDirLocal,iStepLocal), &
                     dNormAbsMu(iDirLocal,iStepLocal),dErrMu(iDirLocal,iStepLocal), &
                     dMaxAbsMu(iDirLocal,iStepLocal),dMaxScaledMu(iDirLocal,iStepLocal), &

@@ -24,6 +24,8 @@ module ModuleFiniteDifferenceVerification
 
     private
 
+    real(8), parameter, public :: FD_ORDER_FIRST_MIN = 0.7D0
+    real(8), parameter, public :: FD_ORDER_FIRST_MAX = 1.3D0
     real(8), parameter, public :: FD_ORDER_SECOND_MIN = 1.7D0
     real(8), parameter, public :: FD_ORDER_SECOND_MAX = 2.3D0
     real(8), parameter, public :: FD_ORDER_FOURTH_MIN = 3.2D0
@@ -31,13 +33,13 @@ module ModuleFiniteDifferenceVerification
 
     !> Summary of one decreasing-step finite-difference sweep.
     type, public :: FDSweepAssessment
-        logical :: lFinite = .FALSE.
-        logical :: lAccuracy = .FALSE.
-        logical :: lOrderRegion = .FALSE.
-        logical :: lRoundoffUpturn = .FALSE.
-        logical :: lPassed = .FALSE.
-        integer :: iBest = 0
-        integer :: iOrderStart = 0
+        logical :: lFinite = .FALSE.          ! Every step and error is usable.
+        logical :: lAccuracy = .FALSE.        ! The smallest error meets the requested tolerance.
+        logical :: lOrderRegion = .FALSE.     ! Two adjacent orders pass while errors decrease.
+        logical :: lRoundoffUpturn = .FALSE.  ! Finer steps eventually increase the error.
+        logical :: lPassed = .FALSE.          ! Finite, accurate, and correct-order evidence all hold.
+        integer :: iBest = 0                  ! Index of the smallest error in the sweep.
+        integer :: iOrderStart = 0            ! First row of the accepted three-error sequence.
         real(8) :: dBestError = HUGE(1D0)
         real(8) :: dObservedOrderMin = HUGE(1D0)
         real(8) :: dObservedOrderMax = -HUGE(1D0)
@@ -79,6 +81,9 @@ contains
             if ((dStep(i) <= dStep(i+1)) .OR. (dStep(i+1) <= 0D0)) cycle
             if ((dError(i) <= dRoundoffFloor) .OR. (dError(i+1) <= dRoundoffFloor)) cycle
             if ((.NOT.IEEE_IS_FINITE(dError(i))) .OR. (.NOT.IEEE_IS_FINITE(dError(i+1)))) cycle
+            ! If error is proportional to h**p, this logarithmic ratio recovers p:
+            ! values near two support a centered three-point difference, while
+            ! values near four support a centered five-point difference.
             dOrder(i) = DLOG(dError(i)/dError(i+1))/DLOG(dStep(i)/dStep(i+1))
             lAvailable(i) = IEEE_IS_FINITE(dOrder(i))
         end do

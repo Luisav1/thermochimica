@@ -14,16 +14,45 @@ errors,
 p = log(error_coarse/error_fine) / log(h_coarse/h_fine).
 ```
 
-The accepted windows are `[1.7, 2.3]` for three-point scalar second
+Scalar comparisons use the scale-normalized error
+
+```text
+e_s = |a-b| / max(1, |a|, |b|),
+```
+
+and vector comparisons use
+
+```text
+e_v = ||a-b||_2 / max(1, ||a||_2, ||b||_2).
+```
+
+These definitions behave like relative errors when the compared quantities
+are appreciably nonzero, while avoiding division by a nearly zero reference.
+
+The accepted windows are `[0.7, 1.3]` for one-sided forward/backward scalar
+second differences, `[1.7, 2.3]` for three-point scalar second
 differences and central gradient/partial-molar differences, and `[3.2, 4.8]`
 for five-point scalar second differences. At least two consecutive orders must
 pass before or at the error minimum. Zero, non-finite, and roundoff-level
 errors are reported as `N/A`.
 
+The automated Fortran assessment owns this pass/fail decision. Figure labels
+called `in-range observed p` summarize all individual pre-minimum slopes that
+fall inside the relevant window; they are descriptive and do not claim that
+the plotting script independently reproduced the stricter consecutive-order
+gate.
+
+Dashed plot guides span the longest measured in-range convergence region and
+stop before the corresponding curve is dominated by roundoff. Plot limits are
+computed from measured errors only, so the theoretical guides cannot expand or
+compress the useful data range.
+
 ## Representative Results
 
 | Verification | Best or worst-best scaled error | Structural evidence |
 | --- | ---: | ---: |
+| Controlled RKMP scalar, forward | `3.2087E-9` | order approximately `1.00`; roundoff upturn at `h=1.1290E-6` |
+| Controlled RKMP scalar, backward | `3.5040E-9` | order approximately `1.00`; no upturn in retained sweep |
 | Controlled RKMP scalar, three point | `1.5883E-12` | symmetry `0`; radial residual `2.6531E-17` |
 | Controlled RKMP scalar, five point | `3.9900E-15` | observed pre-roundoff orders approximately `4.00` |
 | Native RKMP partial molars | `4.6425E-15` worst-best | order unavailable: native low-order polynomial begins at roundoff |
@@ -42,6 +71,28 @@ and the analytic Hessian is recomputed before the native TestThermo30
 partial-molar comparison. The native low-order polynomial is already exact to
 roundoff at the coarsest retained step, so that separate production-data check
 enforces accuracy but does not claim an observed truncation order.
+
+For presentation, the controlled RKMP scalar-energy figure is the primary
+stencil-order result because it displays the expected first-, second-, and
+fourth-order regions. The native RKMP production partial-molar figure is backup
+accuracy evidence: it begins near roundoff and therefore rises as the plotted
+step moves left toward smaller `h`.
+
+The remaining figures use the same visual language without forcing every model
+into the RKMP stencil experiment:
+
+- The controlled CEF figure shows three- and five-point scalar-energy checks,
+  including only the small-`h` region where a roundoff upturn is measured.
+- The standalone MQMQA figure shows controlled nonmagnetic `SUBG` `G`, `Q`, and
+  `B` cases. It verifies the standalone scalar forms and derivative propagation,
+  not native database decoding.
+- The native MQMQA figure compares analytic Hessian-vector products with
+  central finite differences of production partial molars along five
+  total-preserving directions at a converged `CuFeC-Kang.dat` state. It is not
+  shaded because no roundoff upturn occurs in the retained sweep.
+- Every figure reports descriptive in-range observed orders and best scaled
+  errors in the plot, while the Fortran executables remain the sole owners of
+  automated acceptance.
 
 The converged ALABANDITE CEF state has minimum site fraction
 `1.382909E-4`. It is reported as boundary-adjacent, so scalar-order enforcement

@@ -317,7 +317,7 @@ program TestRKMPGEMMappingVerification
         write(*,'(A,ES14.6)') 'structural mapped delta A error = ', dMapAError
         write(*,'(A,ES14.6)') 'structural mapped delta B error = ', dMapBError
         write(*,'(A,L1,A,F7.4,A,F7.4)') 'mixed-response order-aware pass = ', &
-            tResponseSweep%lPassed, ' accepted p range = ',tResponseSweep%dObservedOrderMin, &
+            tResponseSweep%lPassed, ' accepted consecutive p range = ',tResponseSweep%dObservedOrderMin, &
             ' to ',tResponseSweep%dObservedOrderMax
         write(*,'(A)') 'mixed-response step        scaled error    observed order'
         do iStep = 1, nResponseSteps
