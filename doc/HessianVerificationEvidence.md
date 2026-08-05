@@ -33,7 +33,7 @@ The accepted windows are `[0.7, 1.3]` for one-sided forward/backward scalar
 second differences, `[1.7, 2.3]` for three-point scalar second
 differences and central gradient/partial-molar differences, and `[3.2, 4.8]`
 for five-point scalar second differences. At least two consecutive orders must
-pass before or at the error minimum. Zero, non-finite, and roundoff-level
+pass before or at the error minimum. Zero, non-finite, and finite-precision-level
 errors are reported as `N/A`.
 
 The automated Fortran assessment owns this pass/fail decision. Figure labels
@@ -42,20 +42,43 @@ fall inside the relevant window; they are descriptive and do not claim that
 the plotting script independently reproduced the stricter consecutive-order
 gate.
 
-Dashed plot guides span the longest measured in-range convergence region and
-stop before the corresponding curve is dominated by roundoff. Plot limits are
-computed from measured errors only, so the theoretical guides cannot expand or
-compress the useful data range.
+The plotting code first finds the longest measured in-range convergence region
+and anchors each dashed guide directly to one point `(h_a,e_a)` in that region:
+
+```text
+e_guide(h) = e_a (h/h_a)^p.
+```
+
+There is no arbitrary vertical multiplier. The resulting theoretical
+`C h^p` trend is then extrapolated across the complete displayed perturbation
+range, including the shaded small-`h` region. This shows how truncation error
+would continue decreasing if finite-precision effects did not take over.
+Measured curves are solid with markers; extrapolated theoretical trends are
+dashed and markerless. Plot limits are computed from measured errors only. A
+high-order guide may therefore leave through the bottom of the plot rather than
+expanding the axis and compressing the measured evidence.
+
+Gray shading is empirical: it begins at the first observed post-minimum error
+increase as `h` decreases. The plot does not uniquely prove the cause of that
+increase. Its behavior is consistent with finite-precision cancellation because
+the stencil subtracts nearly equal Gibbs-energy values and then divides the
+remaining numerical error by `h^2`. Machine epsilon describes the underlying
+floating-point resolution; cancellation and division by `h^2` can amplify its
+effect until the plotted error is much larger than epsilon. The scientifically
+bounded interpretation is therefore **an observed small-`h` error-upturn region
+consistent with finite-precision cancellation**.
 
 ## Representative Results
 
 | Verification | Best or worst-best scaled error | Structural evidence |
 | --- | ---: | ---: |
-| Controlled RKMP scalar, forward | `3.2087E-9` | order approximately `1.00`; roundoff upturn at `h=1.1290E-6` |
-| Controlled RKMP scalar, backward | `3.5040E-9` | order approximately `1.00`; no upturn in retained sweep |
+| Controlled RKMP scalar, forward | `3.2087E-9` | order approximately `1.00`; small-`h` error upturn at `h=1.1290E-6` |
+| Controlled RKMP scalar, backward | `3.5040E-9` | order approximately `1.00`; small-`h` error upturn at `h=3.7634E-7` |
 | Controlled RKMP scalar, three point | `1.5883E-12` | symmetry `0`; radial residual `2.6531E-17` |
-| Controlled RKMP scalar, five point | `3.9900E-15` | observed pre-roundoff orders approximately `4.00` |
-| Native RKMP partial molars | `4.6425E-15` worst-best | order unavailable: native low-order polynomial begins at roundoff |
+| Controlled RKMP scalar, five point | `3.9900E-15` | observed pre-upturn orders approximately `4.00` |
+| Exponent-eight RKMP scalar, seven point | `2.2456E-19` | report-only; two visible orders `6.07`, `6.02`; small-`h` upturn at `h=1.5625E-3` |
+| Exponent-eight RKMP scalar, nine point | `2.9911E-21` | report-only; one visible order `8.00`; small-`h` upturn at `h=3.1250E-3` |
+| Native RKMP partial molars | `4.6425E-15` worst-best | order unavailable: native low-order polynomial is finite-precision-limited from the coarsest step |
 | Controlled CEF scalar, three point | `3.0903E-7` worst-best | symmetry `0`; homogeneity at or below `1.25E-16` |
 | Controlled CEF scalar, five point | `1.8582E-9` worst-best | binary, ternary, and coupled families covered |
 | Native CEF partial molars | `3.2268E-10` worst-best | controlled and admissible converged states covered |
@@ -68,28 +91,62 @@ temporarily evaluates its binary interaction at exponent four. This supplies
 the sixth directional derivative needed to visibly demonstrate the five-point
 fourth-order truncation region. The original database exponent is then restored
 and the analytic Hessian is recomputed before the native TestThermo30
-partial-molar comparison. The native low-order polynomial is already exact to
-roundoff at the coarsest retained step, so that separate production-data check
+partial-molar comparison. The native low-order polynomial already agrees to
+approximately floating-point precision at the coarsest retained step, so that separate production-data check
 enforces accuracy but does not claim an observed truncation order.
+
+The exponent-four sweep now continues four additional factor-of-three
+refinements. Both one-sided formulas reach a minimum and turn upward. Their
+signed scale-normalized errors are
+
+```text
+s_+ = (D_+ - a) / max(1, |D_+|, |D_-|, |a|),
+s_- = (D_- - a) / max(1, |D_+|, |D_-|, |a|),
+```
+
+where `a = v^T H v`. In the shared first-order region, the signs are opposite
+and the magnitude ratio approaches one, as predicted by the retained
+`+h f'''` and `-h f'''` terms. A separate symmetric-log plot shows the later
+sign changes inside the observed small-`h` upturn region rather than hiding
+them with absolute values.
+
+For an exponent `m`, the controlled constant-total-moles RKMP energy has
+directional polynomial degree `m+2`: the binary mixing factor is quadratic in
+`h`, while the composition contrast contributes degree `m`. Exponent four is
+therefore degree six, so seven- and nine-point centered formulas would be exact
+apart from finite-precision effects. A separate exponent-eight fixture is degree ten and has
+the nonzero eighth- and tenth-derivative terms needed to expose sixth- and
+eighth-order truncation. Its three-, five-, seven-, and nine-point tables report
+orders, best errors, and small-`h` error-upturn points. Seven- and nine-point results remain
+report-only because the seven-point curve has only two visible sixth-order
+intervals and the nine-point curve reaches the conservative double-precision
+floor after one visible eighth-order interval.
+
+The RKMP/CEF truncation-coefficient figure plots `e(h)/h^p` only over each
+measured expected-order region. A near-horizontal segment demonstrates
+`e(h) approximately C h^p`. Plateau heights are not expected to match: `C`
+depends on each model's higher derivatives, thermodynamic state, and error
+normalization. The diagnostic therefore tests the power-law behavior without
+misreading vertical curve separation as Hessian disagreement.
 
 For presentation, the controlled RKMP scalar-energy figure is the primary
 stencil-order result because it displays the expected first-, second-, and
 fourth-order regions. The native RKMP production partial-molar figure is backup
-accuracy evidence: it begins near roundoff and therefore rises as the plotted
+accuracy evidence: it begins near the finite-precision limit and therefore rises as the plotted
 step moves left toward smaller `h`.
 
 The remaining figures use the same visual language without forcing every model
 into the RKMP stencil experiment:
 
 - The controlled CEF figure shows three- and five-point scalar-energy checks,
-  including only the small-`h` region where a roundoff upturn is measured.
+  including the small-`h` region where a post-minimum error upturn is measured.
 - The standalone MQMQA figure shows controlled nonmagnetic `SUBG` `G`, `Q`, and
   `B` cases. It verifies the standalone scalar forms and derivative propagation,
   not native database decoding.
 - The native MQMQA figure compares analytic Hessian-vector products with
   central finite differences of production partial molars along five
   total-preserving directions at a converged `CuFeC-Kang.dat` state. It is not
-  shaded because no roundoff upturn occurs in the retained sweep.
+  shaded because no small-`h` upturn is observed in the retained sweep.
 - Every figure reports descriptive in-range observed orders and best scaled
   errors in the plot, while the Fortran executables remain the sole owners of
   automated acceptance.

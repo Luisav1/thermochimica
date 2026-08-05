@@ -32,6 +32,7 @@ except ImportError:
 NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][+-]?\d+)?"
 COLORS = ("#8a1538", "#006747", "#2f5597", "#c55a11", "#7030a0", "#444444")
 MARKERS = ("o", "s", "^", "D", "v", "P")
+FD_FINITE_PRECISION_FLOOR = 100.0 * math.ulp(1.0)
 
 
 def run_report(bin_dir: Path, executable: str) -> list[str]:
@@ -84,31 +85,28 @@ def find_after(lines: list[str], marker: str, header: str, start: int = 0) -> tu
     return marker_index, numeric_rows(lines, header_index, 3)
 
 
-def slope_guide(
+def expected_order_region(
     h: list[float],
     error: list[float],
-    order: int,
-    label: str,
-    order_min: float | None = None,
-    order_max: float | None = None,
-) -> tuple[str, list[float], list[float]] | None:
-    valid = [(x, y) for x, y in zip(h, error) if x > 0.0 and y > 0.0 and math.isfinite(y)]
+    order_min: float,
+    order_max: float,
+) -> list[tuple[float, float]]:
+    valid = [
+        (x, y)
+        for x, y in zip(h, error)
+        if x > 0.0 and y > FD_FINITE_PRECISION_FLOOR and math.isfinite(y)
+    ]
     if len(valid) < 2:
-        return None
+        return []
 
     best_index = min(range(len(valid)), key=lambda index: valid[index][1])
     guide_start = 0
     guide_end = best_index if best_index > 0 else len(valid) - 1
 
-    # When an expected-order window is supplied, use the longest consecutive
-    # run of in-range, decreasing errors. This keeps the guide on the measured
-    # truncation region instead of extending it into a coarse nonlinear point.
-    if (
-        order_min is not None
-        and order_max is not None
-        and best_index >= 1
-        and best_index < len(valid) - 1
-    ):
+    # Use the longest consecutive run of in-range, decreasing errors. This
+    # identifies a measured truncation region without extending into either a
+    # coarse nonlinear point or the observed small-h error-upturn region.
+    if best_index >= 1:
         in_range: list[bool] = []
         for index in range(best_index):
             h_coarse, error_coarse = valid[index]
@@ -137,19 +135,40 @@ def slope_guide(
             guide_start = longest_start
             guide_end = longest_start + longest_length
 
-    guide_region = valid[guide_start : guide_end + 1]
+    return valid[guide_start : guide_end + 1]
+
+
+def slope_guide(
+    h: list[float],
+    error: list[float],
+    order: int,
+    label: str,
+    order_min: float,
+    order_max: float,
+    extrapolation_h: list[float] | None = None,
+) -> tuple[str, list[float], list[float]] | None:
+    guide_region = expected_order_region(h, error, order_min, order_max)
+
     if len(guide_region) < 2:
         return None
     anchor = min(2, len(guide_region) - 1)
     h0, e0 = guide_region[anchor]
-    guide_h = [value[0] for value in guide_region]
-    # Deliberately offset the theoretical guide so it cannot be mistaken for a
-    # duplicate measured series when the observed convergence is nearly exact.
-    guide_e = [2.5 * e0 * (value / h0) ** order for value in guide_h]
+    guide_h = sorted(
+        {
+            value
+            for value in (extrapolation_h if extrapolation_h is not None else h)
+            if value > 0.0 and math.isfinite(value)
+        }
+    )
+    # The guide passes through an actual measured point. Its vertical placement
+    # therefore has no arbitrary visibility offset. Extrapolating C*h**p over
+    # the complete measured h-range shows how truncation error would continue
+    # decreasing if finite-precision cancellation did not become dominant.
+    guide_e = [e0 * (value / h0) ** order for value in guide_h]
     return label, guide_h, guide_e
 
 
-def roundoff_onset(h: list[float], error: list[float]) -> float | None:
+def small_h_upturn_onset(h: list[float], error: list[float]) -> float | None:
     valid = [
         (step, value)
         for step, value in zip(h, error)
@@ -164,16 +183,19 @@ def roundoff_onset(h: list[float], error: list[float]) -> float | None:
     return None
 
 
-def in_range_order_bounds(
+def in_range_orders(
     h: list[float], error: list[float], order_min: float, order_max: float
-) -> tuple[float, float] | None:
+) -> list[float]:
     valid = [
         (step, value)
         for step, value in zip(h, error)
-        if step > 0.0 and value > 0.0 and math.isfinite(step) and math.isfinite(value)
+        if step > 0.0
+        and value > FD_FINITE_PRECISION_FLOOR
+        and math.isfinite(step)
+        and math.isfinite(value)
     ]
     if len(valid) < 2:
-        return None
+        return []
     best_index = min(range(len(valid)), key=lambda index: valid[index][1])
     orders: list[float] = []
     for index in range(best_index):
@@ -184,6 +206,13 @@ def in_range_order_bounds(
         observed = math.log(error_coarse / error_fine) / math.log(h_coarse / h_fine)
         if order_min <= observed <= order_max:
             orders.append(observed)
+    return orders
+
+
+def in_range_order_bounds(
+    h: list[float], error: list[float], order_min: float, order_max: float
+) -> tuple[float, float] | None:
+    orders = in_range_orders(h, error, order_min, order_max)
     return (min(orders), max(orders)) if orders else None
 
 
@@ -244,10 +273,10 @@ def sweep_summary(
     else:
         order_text = "in-range observed $p$: N/A"
 
-    roundoff_step = None
+    upturn_step = None
     for index in range(best_index + 1, len(errors)):
         if errors[index] > errors[index - 1]:
-            roundoff_step = steps[index]
+            upturn_step = steps[index]
             break
 
     summary = (
@@ -255,7 +284,7 @@ def sweep_summary(
         f"{order_text}"
     )
     return summary, (
-        f"{label} roundoff onset: $h$={roundoff_step:.2e}" if roundoff_step is not None else None
+        f"{label} small-$h$ error upturn: $h$={upturn_step:.2e}" if upturn_step is not None else None
     )
 
 
@@ -267,7 +296,7 @@ def combined_sweep_summary(
 ) -> list[str]:
     best_errors: list[float] = []
     in_range_orders: list[float] = []
-    roundoff_steps: list[float] = []
+    upturn_steps: list[float] = []
     for h, error in series:
         valid = [
             (step, value)
@@ -290,7 +319,7 @@ def combined_sweep_summary(
                 in_range_orders.append(order)
         for index in range(best_index + 1, len(errors)):
             if errors[index] > errors[index - 1]:
-                roundoff_steps.append(steps[index])
+                upturn_steps.append(steps[index])
                 break
 
     if not best_errors:
@@ -303,16 +332,16 @@ def combined_sweep_summary(
     summary = [
         f"{label}: best-error range={min(best_errors):.2e}-{max(best_errors):.2e}; {order_text}"
     ]
-    if roundoff_steps:
-        if math.isclose(min(roundoff_steps), max(roundoff_steps), rel_tol=1e-12):
-            summary.append(f"Roundoff onset across shown series: $h$={roundoff_steps[0]:.2e}")
+    if upturn_steps:
+        if math.isclose(min(upturn_steps), max(upturn_steps), rel_tol=1e-12):
+            summary.append(f"Small-$h$ error upturn across shown series: $h$={upturn_steps[0]:.2e}")
         else:
             summary.append(
-                f"Roundoff onset across shown series: $h$={min(roundoff_steps):.2e}-"
-                f"{max(roundoff_steps):.2e}"
+                f"Small-$h$ error upturn across shown series: $h$={min(upturn_steps):.2e}-"
+                f"{max(upturn_steps):.2e}"
             )
     else:
-        summary.append("No roundoff upturn in the retained sweep")
+        summary.append("No small-$h$ upturn observed in the retained sweep")
     return summary
 
 
@@ -323,8 +352,8 @@ def write_plot(
     subtitle: str | None = None,
     summary: list[str] | None = None,
     caption: str | None = None,
-    roundoff_start: float | None = None,
-    roundoff_label: str = "Roundoff-dominated region",
+    small_h_upturn_start: float | None = None,
+    small_h_region_label: str = "Small-$h$ finite-precision region",
 ) -> None:
     fig, ax = plt.subplots(figsize=(9.6, 6.8))
     plotted = 0
@@ -378,17 +407,17 @@ def write_plot(
     ax.grid(which="major", color="#cfcfcf", linewidth=0.8)
     ax.grid(which="minor", color="#e8e8e8", linewidth=0.5, alpha=0.8)
 
-    if roundoff_start is not None:
+    if small_h_upturn_start is not None:
         left_limit = ax.get_xlim()[0]
         right_limit = ax.get_xlim()[1]
-        shade_right = min(max(roundoff_start, left_limit), right_limit)
+        shade_right = min(max(small_h_upturn_start, left_limit), right_limit)
         ax.axvspan(
             left_limit,
             shade_right,
             color="#777777",
             alpha=0.08,
             zorder=0,
-            label=roundoff_label,
+            label=small_h_region_label,
         )
 
     ax.legend(
@@ -409,18 +438,28 @@ def write_plot(
             color="#333333",
             bbox={"facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.88},
         )
-    if caption:
+    display_caption = caption
+    if small_h_upturn_start is not None:
+        upturn_explanation = (
+            "Gray shading begins at the first observed post-minimum error increase. At sufficiently "
+            "small h, cancellation between nearly equal Gibbs-energy evaluations and division by "
+            "h squared amplify floating-point error."
+        )
+        display_caption = (
+            f"{caption} {upturn_explanation}" if caption else upturn_explanation
+        )
+    if display_caption:
         fig.text(
             0.5,
             0.025,
-            caption,
+            display_caption,
             ha="center",
             va="bottom",
             fontsize=9,
             color="#333333",
             wrap=True,
         )
-    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.15 if caption else 0.11)
+    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.17 if display_caption else 0.11)
     fig.savefig(output_stem.with_suffix(".svg"), bbox_inches="tight")
     fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -449,7 +488,7 @@ def write_rkmp_order_plot(
                     h_one_sided,
                     err_forward,
                     1,
-                    r"Reference $O(h)$",
+                    r"Extrapolated theoretical $O(h)$ truncation trend",
                     0.7,
                     1.3,
                 )
@@ -459,8 +498,8 @@ def write_rkmp_order_plot(
                 ("backward", in_range_order_bounds(h_one_sided, err_backward, 0.7, 1.3)),
             ],
             [
-                ("forward", roundoff_onset(h_one_sided, err_forward)),
-                ("backward", roundoff_onset(h_one_sided, err_backward)),
+                ("forward", small_h_upturn_onset(h_one_sided, err_forward)),
+                ("backward", small_h_upturn_onset(h_one_sided, err_backward)),
             ],
         ),
         (
@@ -475,7 +514,7 @@ def write_rkmp_order_plot(
                     h_centered,
                     err3,
                     2,
-                    r"Reference $O(h^2)$",
+                    r"Extrapolated theoretical $O(h^2)$ truncation trend",
                     1.7,
                     2.3,
                 ),
@@ -483,7 +522,7 @@ def write_rkmp_order_plot(
                     h_centered,
                     err5,
                     4,
-                    r"Reference $O(h^4)$",
+                    r"Extrapolated theoretical $O(h^4)$ truncation trend",
                     3.2,
                     4.8,
                 ),
@@ -493,8 +532,8 @@ def write_rkmp_order_plot(
                 ("five-point", in_range_order_bounds(h_centered, err5, 3.2, 4.8)),
             ],
             [
-                ("three-point", roundoff_onset(h_centered, err3)),
-                ("five-point", roundoff_onset(h_centered, err5)),
+                ("three-point", small_h_upturn_onset(h_centered, err3)),
+                ("five-point", small_h_upturn_onset(h_centered, err5)),
             ],
         ),
     )
@@ -544,6 +583,7 @@ def write_rkmp_order_plot(
                 color="#777777",
                 alpha=0.08,
                 zorder=0,
+                label="Small-$h$ finite-precision region",
             )
 
         order_lines = [
@@ -552,12 +592,12 @@ def write_rkmp_order_plot(
             if bounds is not None
         ]
         onset_lines = [
-            f"{name} roundoff h={value:.2e}"
+            f"{name} small-$h$ upturn at $h$={value:.2e}"
             for name, value in onsets
             if value is not None
         ]
         if not onset_lines:
-            onset_lines = ["no roundoff upturn in retained sweep"]
+            onset_lines = ["no small-$h$ upturn observed in retained sweep"]
         ax.text(
             0.97,
             0.03,
@@ -575,7 +615,7 @@ def write_rkmp_order_plot(
     fig.text(
         0.5,
         0.90,
-        "Dashed lines show theoretical truncation rates over the measured convergence region.",
+        "Dashed theoretical truncation trends are anchored to measured convergence points and extrapolated across $h$.",
         ha="center",
         fontsize=10,
         color="#444444",
@@ -584,7 +624,8 @@ def write_rkmp_order_plot(
         0.5,
         0.035,
         "Forward/backward absolute errors may overlap because their leading signed errors have "
-        "opposite signs but similar magnitudes. Gray shading marks where roundoff affects at least one curve.",
+        "opposite signs but similar magnitudes. Gray shading begins at the first observed post-minimum error increase; "
+        "cancellation between nearly equal energies and division by $h^2$ then amplify floating-point error.",
         ha="center",
         fontsize=9,
         color="#333333",
@@ -595,7 +636,116 @@ def write_rkmp_order_plot(
     plt.close(fig)
 
 
-def plot_rkmp(lines: list[str], output_dir: Path) -> None:
+def write_signed_one_sided_plot(
+    output_stem: Path,
+    h: list[float],
+    signed_forward: list[float],
+    signed_backward: list[float],
+    abs_forward: list[float],
+    abs_backward: list[float],
+) -> None:
+    fig, ax = plt.subplots(figsize=(9.6, 6.8))
+    for label, values, color, marker in (
+        ("Forward signed error", signed_forward, COLORS[0], MARKERS[0]),
+        ("Backward signed error", signed_backward, COLORS[1], MARKERS[1]),
+    ):
+        usable = sorted(
+            (step, value)
+            for step, value in zip(h, values)
+            if step > 0.0 and math.isfinite(step) and math.isfinite(value)
+        )
+        ax.plot(
+            [item[0] for item in usable],
+            [item[1] for item in usable],
+            color=color,
+            marker=marker,
+            markersize=5,
+            linewidth=1.8,
+            label=label,
+        )
+
+    common_ratios = []
+    opposite_count = 0
+    for forward, backward in zip(signed_forward, signed_backward):
+        if forward * backward < 0.0:
+            opposite_count += 1
+        if forward * backward < 0.0 and backward != 0.0:
+            ratio = abs(forward / backward)
+            if 0.5 <= ratio <= 2.0:
+                common_ratios.append(ratio)
+
+    onset_values = [
+        value
+        for value in (small_h_upturn_onset(h, abs_forward), small_h_upturn_onset(h, abs_backward))
+        if value is not None
+    ]
+    ax.set_xscale("log")
+    nonzero = [abs(value) for value in signed_forward + signed_backward if value != 0.0]
+    linthresh = max(100.0 * math.ulp(1.0), min(nonzero) if nonzero else 1.0e-12)
+    ax.set_yscale("symlog", linthresh=linthresh)
+    ax.axhline(0.0, color="#555555", linewidth=0.9)
+    ax.set_xlabel("Perturbation size, $h$ (smaller $h$ to the left)")
+    ax.set_ylabel("Signed scale-normalized error")
+    ax.set_title("RKMP one-sided signed-error verification", fontweight="bold", pad=24)
+    ax.text(
+        0.5,
+        1.015,
+        "Opposite-sign leading errors are expected before finite-precision cancellation dominates",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        color="#444444",
+    )
+    ax.grid(which="major", color="#cfcfcf", linewidth=0.8)
+    ax.grid(which="minor", color="#e8e8e8", linewidth=0.5, alpha=0.8)
+    if onset_values:
+        left_limit = ax.get_xlim()[0]
+        ax.axvspan(
+            left_limit,
+            max(onset_values),
+            color="#777777",
+            alpha=0.08,
+            zorder=0,
+            label="Small-$h$ finite-precision region",
+        )
+    ratio_text = (
+        f"matched magnitude ratio={min(common_ratios):.3f}-{max(common_ratios):.3f}"
+        if common_ratios
+        else "matched magnitude ratio: N/A"
+    )
+    ax.text(
+        0.97,
+        0.03,
+        f"opposite signs at {opposite_count}/{len(h)} steps\n{ratio_text}",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="#333333",
+        bbox={"facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.88},
+    )
+    ax.legend(loc="upper left", frameon=False, fontsize=9)
+    fig.text(
+        0.5,
+        0.025,
+        "The forward and backward formulas approach the same analytic curvature from opposite sides. "
+        "Sign changes inside the gray region occur after finite-precision cancellation begins to dominate "
+        "and are not evidence of failed first-order convergence. Gray shading begins at the first observed "
+        "post-minimum increase in either absolute error.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="#333333",
+        wrap=True,
+    )
+    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.15)
+    fig.savefig(output_stem.with_suffix(".svg"), bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_rkmp(lines: list[str], output_dir: Path) -> dict[str, tuple[list[float], list[float]]]:
     marker = next(i for i, line in enumerate(lines) if "controlled energy direction" in line)
     one_sided_header = next(i for i in range(marker, len(lines)) if "forward abs" in lines[i])
     one_sided_rows = fixed_table_rows(lines, one_sided_header, 7)
@@ -615,6 +765,76 @@ def plot_rkmp(lines: list[str], output_dir: Path) -> None:
         h,
         err3,
         err5,
+    )
+
+    signed_header = next(i for i in range(marker, len(lines)) if "forward signed" in lines[i])
+    signed_rows = numeric_rows(lines, signed_header, 4)
+    signed_h = [row[0] for row in signed_rows]
+    signed_forward = [row[1] for row in signed_rows]
+    signed_backward = [row[2] for row in signed_rows]
+    write_signed_one_sided_plot(
+        output_dir / "rkmp_one_sided_signed",
+        signed_h,
+        signed_forward,
+        signed_backward,
+        err_forward,
+        err_backward,
+    )
+
+    high_marker = next(i for i, line in enumerate(lines) if "exponent-eight centered" in line)
+    high35_header = next(i for i in range(high_marker, len(lines)) if "high3 abs" in lines[i])
+    high35_rows = fixed_table_rows(lines, high35_header, 7)
+    high79_header = next(i for i in range(high_marker, len(lines)) if "high7 abs" in lines[i])
+    high79_rows = fixed_table_rows(lines, high79_header, 7)
+    high_h = [float(row[0]) for row in high35_rows]
+    high_err3 = [float(row[2]) for row in high35_rows]
+    high_err5 = [float(row[5]) for row in high35_rows]
+    high_err7 = [float(row[2]) for row in high79_rows]
+    high_err9 = [float(row[5]) for row in high79_rows]
+    high_series: list[tuple[str, list[float], list[float], bool]] = [
+        ("Three-point", high_h, high_err3, False),
+        ("Five-point", high_h, high_err5, False),
+        ("Seven-point", high_h, high_err7, False),
+        ("Nine-point", high_h, high_err9, False),
+    ]
+    for values, order, label, lower, upper in (
+        (high_err3, 2, r"Extrapolated theoretical $O(h^2)$ truncation trend", 1.7, 2.3),
+        (high_err5, 4, r"Extrapolated theoretical $O(h^4)$ truncation trend", 3.2, 4.8),
+        (high_err7, 6, r"Extrapolated theoretical $O(h^6)$ truncation trend", 4.8, 7.2),
+        (high_err9, 8, r"Extrapolated theoretical $O(h^8)$ truncation trend", 6.4, 9.6),
+    ):
+        guide = slope_guide(high_h, values, order, label, lower, upper)
+        if guide:
+            high_series.append((*guide, True))
+    high_onsets = [
+        value
+        for values in (high_err3, high_err5, high_err7, high_err9)
+        if (value := small_h_upturn_onset(high_h, values)) is not None
+    ]
+    high_summaries = []
+    for name, values, lower, upper in (
+        ("3pt", high_err3, 1.7, 2.3),
+        ("5pt", high_err5, 3.2, 4.8),
+        ("7pt", high_err7, 4.8, 7.2),
+        ("9pt", high_err9, 6.4, 9.6),
+    ):
+        orders = in_range_orders(high_h, values, lower, upper)
+        best = min(value for value in values if value > 0.0 and math.isfinite(value))
+        order_text = f"p={min(orders):.2f}-{max(orders):.2f}" if orders else "p=N/A"
+        high_summaries.append(
+            f"{name}: {order_text} ({len(orders)} interval{'s' if len(orders) != 1 else ''}); "
+            f"best={best:.2e}"
+        )
+    write_plot(
+        output_dir / "rkmp_high_order",
+        "RKMP exponent-eight centered verification",
+        high_series,
+        "Degree-ten controlled energy; seven- and nine-point results are report-only",
+        summary=high_summaries,
+        caption="The exponent-eight fixture supplies nonzero eighth- and tenth-derivative terms. "
+        "The measured curves are solid with markers; every dashed guide is anchored directly "
+        "to measured data in its observed convergence region.",
+        small_h_upturn_start=max(high_onsets) if high_onsets else None,
     )
 
     plot_series = []
@@ -644,7 +864,7 @@ def plot_rkmp(lines: list[str], output_dir: Path) -> None:
             min(value for value in error if value > 0.0 and math.isfinite(value))
             for _, _, error, _ in plot_series
         ]
-        # The native TestThermo30 polynomial begins at roundoff-level agreement,
+        # The native TestThermo30 polynomial begins at finite-precision-level agreement,
         # so this plot demonstrates accuracy rather than a truncation-order slope.
         write_plot(
             output_dir / "rkmp_partial_molar",
@@ -655,22 +875,27 @@ def plot_rkmp(lines: list[str], output_dir: Path) -> None:
             [
                 f"best scaled error={min(best_errors):.2e}-{max(best_errors):.2e}",
                 "measured order: N/A",
-                "roundoff-limited from coarsest retained step",
+                "finite-precision-limited from coarsest retained step",
             ],
             "The unmodified low-order RKMP polynomial agrees at nearly machine precision "
             "before refinement. This is a native Thermochimica accuracy cross-check, not "
             "a truncation-order demonstration.",
-            roundoff_start=max(
+            small_h_upturn_start=max(
                 step
                 for _, h_values, _, _ in plot_series
                 for step in h_values
                 if step > 0.0 and math.isfinite(step)
             ),
-            roundoff_label="Roundoff-limited sweep",
+            small_h_region_label="Finite-precision-limited sweep",
         )
 
+    return {
+        "three-point": (high_h, high_err3),
+        "five-point": (high_h, high_err5),
+    }
 
-def plot_cef(lines: list[str], output_dir: Path) -> None:
+
+def plot_cef(lines: list[str], output_dir: Path) -> dict[str, tuple[list[float], list[float]]]:
     marker = next(i for i, line in enumerate(lines) if line.strip() == "ALABANDITE controlled")
     header = next(i for i in range(marker, len(lines)) if "3pt abs" in lines[i])
     rows = fixed_table_rows(lines, header, 8)
@@ -682,8 +907,8 @@ def plot_cef(lines: list[str], output_dir: Path) -> None:
         ("Three-point", h, err3, False),
         ("Five-point", h, err5, False),
     ]
-    onset3 = roundoff_onset(h, err3)
-    onset5 = roundoff_onset(h, err5)
+    onset3 = small_h_upturn_onset(h, err3)
+    onset5 = small_h_upturn_onset(h, err5)
     onset_values = [value for value in (onset3, onset5) if value is not None]
     order3 = in_range_order_bounds(h, err3, 1.7, 2.3)
     order5 = in_range_order_bounds(h, err5, 3.2, 4.8)
@@ -692,11 +917,11 @@ def plot_cef(lines: list[str], output_dir: Path) -> None:
     summary = [
         f"3-point: p={order3[0]:.2f}-{order3[1]:.2f}; best={best3:.2e}",
         f"5-point: p={order5[0]:.2f}-{order5[1]:.2f}; best={best5:.2e}",
-        f"roundoff onset h={onset3:.2e} / {onset5:.2e}",
+        f"small-$h$ upturn at $h$={onset3:.2e} / {onset5:.2e}",
     ]
     for guide in (
-        slope_guide(h, err3, 2, r"Reference $O(h^2)$", 1.7, 2.3),
-        slope_guide(h, err5, 4, r"Reference $O(h^4)$", 3.2, 4.8),
+        slope_guide(h, err3, 2, r"Extrapolated theoretical $O(h^2)$ truncation trend", 1.7, 2.3),
+        slope_guide(h, err5, 4, r"Extrapolated theoretical $O(h^4)$ truncation trend", 3.2, 4.8),
     ):
         if guide:
             plot_series.append((*guide, True))
@@ -709,9 +934,77 @@ def plot_cef(lines: list[str], output_dir: Path) -> None:
         summary=summary,
         caption="The measured second- and fourth-order regions verify the standalone CEF "
         "Hessian against scalar-energy finite differences. Gray shading marks the "
-        "identified small-h roundoff region.",
-        roundoff_start=max(onset_values) if onset_values else None,
+        "identified small-$h$ finite-precision region.",
+        small_h_upturn_start=max(onset_values) if onset_values else None,
     )
+    return {
+        "three-point": (h, err3),
+        "five-point": (h, err5),
+    }
+
+
+def plot_truncation_coefficients(
+    output_stem: Path,
+    rkmp: dict[str, tuple[list[float], list[float]]],
+    cef: dict[str, tuple[list[float], list[float]]],
+) -> None:
+    fig, ax = plt.subplots(figsize=(9.6, 6.8))
+    specifications = (
+        ("RKMP 3-point", rkmp["three-point"], 2, 1.7, 2.3),
+        ("RKMP 5-point", rkmp["five-point"], 4, 3.2, 4.8),
+        ("CEF 3-point", cef["three-point"], 2, 1.7, 2.3),
+        ("CEF 5-point", cef["five-point"], 4, 3.2, 4.8),
+    )
+    for index, (label, (h, error), order, lower, upper) in enumerate(specifications):
+        region = expected_order_region(h, error, lower, upper)
+        if len(region) < 2:
+            continue
+        steps = [item[0] for item in region]
+        coefficients = [item[1] / item[0] ** order for item in region]
+        usable = sorted(zip(steps, coefficients))
+        ax.plot(
+            [item[0] for item in usable],
+            [item[1] for item in usable],
+            marker=MARKERS[index],
+            markersize=5,
+            linewidth=1.8,
+            color=COLORS[index],
+            label=f"{label}, $e/h^{order}$",
+        )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Perturbation size, $h$ (smaller $h$ to the left)")
+    ax.set_ylabel("Scaled truncation coefficient, $e(h)/h^p$")
+    ax.set_title("RKMP and CEF truncation-coefficient evidence", fontweight="bold", pad=24)
+    ax.text(
+        0.5,
+        1.015,
+        "A plateau indicates that measured error follows the expected power of h",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        color="#444444",
+    )
+    ax.grid(which="major", color="#cfcfcf", linewidth=0.8)
+    ax.grid(which="minor", color="#e8e8e8", linewidth=0.5, alpha=0.8)
+    ax.legend(loc="best", frameon=False, fontsize=9)
+    fig.text(
+        0.5,
+        0.025,
+        "Plateau height depends on each model's higher derivatives, state, and error normalization. "
+        "Different RKMP and CEF heights are therefore expected and are not Hessian disagreement.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="#333333",
+        wrap=True,
+    )
+    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.15)
+    fig.savefig(output_stem.with_suffix(".svg"), bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_standalone_mqmqa(lines: list[str], output_dir: Path) -> None:
@@ -728,13 +1021,21 @@ def plot_standalone_mqmqa(lines: list[str], output_dir: Path) -> None:
         summary_series.append((h, error))
         guide_data = guide_data or (h, error)
     if guide_data:
-        guide = slope_guide(*guide_data, 4, r"Reference $O(h^4)$", 3.2, 4.8)
+        displayed_h = [step for h_values, _ in summary_series for step in h_values]
+        guide = slope_guide(
+            *guide_data,
+            4,
+            r"Extrapolated theoretical $O(h^4)$ truncation trend",
+            3.2,
+            4.8,
+            extrapolation_h=displayed_h,
+        )
         if guide:
             plot_series.append((*guide, True))
     onset_values = [
         onset
         for h_values, error_values in summary_series
-        if (onset := roundoff_onset(h_values, error_values)) is not None
+        if (onset := small_h_upturn_onset(h_values, error_values)) is not None
     ]
     order_values = [
         bounds
@@ -746,10 +1047,10 @@ def plot_standalone_mqmqa(lines: list[str], output_dir: Path) -> None:
         for _, error_values in summary_series
     ]
     if math.isclose(min(onset_values), max(onset_values), rel_tol=1e-12):
-        onset_summary = f"roundoff onset h={onset_values[0]:.2e}"
+        onset_summary = f"small-$h$ upturn at $h$={onset_values[0]:.2e}"
     else:
         onset_summary = (
-            f"roundoff onset h={min(onset_values):.2e}-{max(onset_values):.2e}"
+            f"small-$h$ upturn at $h$={min(onset_values):.2e}-{max(onset_values):.2e}"
         )
     write_plot(
         output_dir / "mqmqa_standalone",
@@ -766,7 +1067,7 @@ def plot_standalone_mqmqa(lines: list[str], output_dir: Path) -> None:
         caption="The controlled cases independently check the traced standalone G, Q, and "
         "B scalar forms and their analytic Hessian propagation. They are not "
         "database-backed native Thermochimica comparisons.",
-        roundoff_start=max(onset_values) if onset_values else None,
+        small_h_upturn_start=max(onset_values) if onset_values else None,
     )
 
 
@@ -792,7 +1093,15 @@ def plot_native_mqmqa(lines: list[str], output_dir: Path) -> None:
         summary_series.append((h, error))
         guide_data = guide_data or (h, error)
     if guide_data:
-        guide = slope_guide(*guide_data, 2, r"Reference $O(h^2)$", 1.7, 2.3)
+        displayed_h = [step for h_values, _ in summary_series for step in h_values]
+        guide = slope_guide(
+            *guide_data,
+            2,
+            r"Extrapolated theoretical $O(h^2)$ truncation trend",
+            1.7,
+            2.3,
+            extrapolation_h=displayed_h,
+        )
         if guide:
             plot_series.append((*guide, True))
     order_values = [
@@ -814,7 +1123,7 @@ def plot_native_mqmqa(lines: list[str], output_dir: Path) -> None:
             f"five directions: p={min(item[0] for item in order_values):.2f}-"
             f"{max(item[1] for item in order_values):.2f}",
             f"best scaled error={min(best_values):.2e}-{max(best_values):.2e}",
-            "no roundoff upturn in retained sweep",
+            "no small-$h$ upturn observed in retained sweep",
         ],
         caption="At a converged CuFeC-Kang.dat plain-SUBG state, analytic Hessian-vector "
         "products agree with production Thermochimica partial-molar differences. "
@@ -838,8 +1147,13 @@ def main() -> None:
     for name, lines in reports.items():
         (args.output_dir / f"{name}_report.txt").write_text("\n".join(lines) + "\n")
 
-    plot_rkmp(reports["rkmp"], args.output_dir)
-    plot_cef(reports["cef"], args.output_dir)
+    rkmp_controlled = plot_rkmp(reports["rkmp"], args.output_dir)
+    cef_controlled = plot_cef(reports["cef"], args.output_dir)
+    plot_truncation_coefficients(
+        args.output_dir / "rkmp_cef_truncation_coefficients",
+        rkmp_controlled,
+        cef_controlled,
+    )
     plot_standalone_mqmqa(reports["standalone"], args.output_dir)
     plot_native_mqmqa(reports["native"], args.output_dir)
     print(f"Wrote reports and plots to {args.output_dir}")

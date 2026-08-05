@@ -16,10 +16,15 @@
 !!             current mole vector should be zero.
 !!          4. Transfer moles between two interacting species along direction v.
 !!             Compare the energy curvature predicted by Hloc along that
-!!             direction with three- and five-point scalar-energy differences.
-!!          5. Apply the same stencils to ideal mixing as a truncation/roundoff
+!!             direction with one-sided, three-point, and five-point scalar-energy
+!!             differences using a controlled exponent-four interaction.
+!!          5. Repeat the centered comparison with a separate exponent-eight
+!!             interaction. Its degree-ten directional energy exposes the formal
+!!             three-, five-, seven-, and nine-point truncation regions. The
+!!             seven- and nine-point results are report-only evidence.
+!!          6. Apply the same stencils to ideal mixing as a truncation/finite-precision
 !!             control with known convergence order.
-!!          6. For each independent composition direction, use Hloc to predict
+!!          7. For each independent composition direction, use Hloc to predict
 !!             how all excess partial molars change, then compare with finite
 !!             differences of the established production RKMP routine.
 !!
@@ -55,31 +60,40 @@ program TestRKMPHessianVerification
         end subroutine CompRKMPBinaryExcessGibbsFromMoles
     end interface
 
-    integer, parameter :: nEnergyFDSteps = 12
+    integer, parameter :: nEnergyFDSteps = 16
+    integer, parameter :: nHighOrderFDSteps = 22
     integer, parameter :: nMuFDSteps = 9
     integer :: i, iDirection, iEnergyA, iEnergyB, iFirstSpecies, iLastSpecies, iParam
     integer :: iPhaseIndex, iReference, iControlledParam, iExponentSave
-    integer :: iSolnSlot, iStep, nDirections, nLocalSpecies
+    integer :: iSignEnd, iSignStart, iSolnSlot, iStep, nDirections, nLocalSpecies
     integer :: nStorageBits, nDecimalPrecision, nBinaryDigits
-    real(8) :: dAnalyticEx, dAnalyticIdeal, dEnergy0Ex, dEnergy0Ideal
-    real(8) :: dEnergyM1Ex, dEnergyM2Ex, dEnergyP1Ex, dEnergyP2Ex
+    real(8) :: dAnalyticEx, dAnalyticHigh, dAnalyticIdeal, dEnergy0Ex, dEnergy0Ideal
+    real(8) :: dEnergyM1Ex, dEnergyM2Ex, dEnergyM3Ex, dEnergyM4Ex
+    real(8) :: dEnergyP1Ex, dEnergyP2Ex, dEnergyP3Ex, dEnergyP4Ex
     real(8) :: dEnergyM1Ideal, dEnergyM2Ideal, dEnergyP1Ideal, dEnergyP2Ideal
-    real(8) :: dEpsilonMachine, dFDForward, dFDBackward, dFD3, dFD5, dH, dScale, dTotalMoles
+    real(8) :: dEpsilonMachine, dFDForward, dFDBackward, dFD3, dFD5, dFD7, dFD9
+    real(8) :: dH, dScale, dSignedRatio, dSignedScale, dTotalMoles
     real(8) :: dRadialResidual, dSymmetryResidual, dScaleHessian
     real(8) :: dWorstMuBest
-    logical :: lPass, lReport
+    logical :: lPass, lReport, lSignedOneSided
     character(len=32) :: cArgument
-    real(8), allocatable, dimension(:) :: dDirection, dMoles0, dMolesM1, dMolesM2
-    real(8), allocatable, dimension(:) :: dMolesP1, dMolesP2, dMuAnalytic, dMuMinus, dMuPlus
+    real(8), allocatable, dimension(:) :: dDirection, dMoles0, dMolesM1, dMolesM2, dMolesM3, dMolesM4
+    real(8), allocatable, dimension(:) :: dMolesP1, dMolesP2, dMolesP3, dMolesP4
+    real(8), allocatable, dimension(:) :: dMuAnalytic, dMuMinus, dMuPlus
     real(8), allocatable, dimension(:) :: dMolFractionSave, dPartialExcessSave, dX
     real(8), allocatable, dimension(:) :: dEnergyStep, dErrForwardEx, dErrBackwardEx
     real(8), allocatable, dimension(:) :: dErr3Ex, dErr3Ideal, dErr5Ex, dErr5Ideal
     real(8), allocatable, dimension(:) :: dAbsForwardEx, dAbsBackwardEx
+    real(8), allocatable, dimension(:) :: dSignedForwardEx, dSignedBackwardEx
     real(8), allocatable, dimension(:) :: dAbs3Ex, dAbs3Ideal, dAbs5Ex, dAbs5Ideal
     real(8), allocatable, dimension(:) :: dOrderForwardEx, dOrderBackwardEx
     real(8), allocatable, dimension(:) :: dOrder3Ex, dOrder3Ideal, dOrder5Ex, dOrder5Ideal
     logical, allocatable, dimension(:) :: lOrderForwardEx, lOrderBackwardEx
     logical, allocatable, dimension(:) :: lOrder3Ex, lOrder3Ideal, lOrder5Ex, lOrder5Ideal
+    real(8), allocatable, dimension(:) :: dHighStep, dHighErr3, dHighErr5, dHighErr7, dHighErr9
+    real(8), allocatable, dimension(:) :: dHighAbs3, dHighAbs5, dHighAbs7, dHighAbs9
+    real(8), allocatable, dimension(:) :: dHighOrder3, dHighOrder5, dHighOrder7, dHighOrder9
+    logical, allocatable, dimension(:) :: lHighOrder3, lHighOrder5, lHighOrder7, lHighOrder9
     real(8), allocatable, dimension(:,:) :: dErrMu, dHessian, dMuStep, dNormAbsMu
     real(8), allocatable, dimension(:,:) :: dMaxAbsMu, dMaxScaledMu, dOrderMu
     real(8), allocatable, dimension(:,:,:) :: dMuFD
@@ -155,7 +169,9 @@ program TestRKMPHessianVerification
         lPass = lPass .AND. (iEnergyA > 0) .AND. (iEnergyB > 0)
 
         allocate(dDirection(nLocalSpecies), dMoles0(nLocalSpecies), dMolesM1(nLocalSpecies), &
-            dMolesM2(nLocalSpecies), dMolesP1(nLocalSpecies), dMolesP2(nLocalSpecies), &
+            dMolesM2(nLocalSpecies), dMolesM3(nLocalSpecies), dMolesM4(nLocalSpecies), &
+            dMolesP1(nLocalSpecies), dMolesP2(nLocalSpecies), dMolesP3(nLocalSpecies), &
+            dMolesP4(nLocalSpecies), &
             dMuAnalytic(nLocalSpecies), dMuMinus(nLocalSpecies), dMuPlus(nLocalSpecies), &
             dMolFractionSave(nLocalSpecies), dPartialExcessSave(nLocalSpecies), dX(nLocalSpecies), &
             dEnergyStep(nEnergyFDSteps), dErrForwardEx(nEnergyFDSteps), &
@@ -163,12 +179,22 @@ program TestRKMPHessianVerification
             dErr5Ex(nEnergyFDSteps), dErr5Ideal(nEnergyFDSteps), dAbs3Ex(nEnergyFDSteps), &
             dAbs3Ideal(nEnergyFDSteps), dAbs5Ex(nEnergyFDSteps), dAbs5Ideal(nEnergyFDSteps), &
             dAbsForwardEx(nEnergyFDSteps), dAbsBackwardEx(nEnergyFDSteps), &
+            dSignedForwardEx(nEnergyFDSteps), dSignedBackwardEx(nEnergyFDSteps), &
             dOrderForwardEx(nEnergyFDSteps), dOrderBackwardEx(nEnergyFDSteps), &
             dOrder3Ex(nEnergyFDSteps), dOrder3Ideal(nEnergyFDSteps), &
             dOrder5Ex(nEnergyFDSteps), dOrder5Ideal(nEnergyFDSteps), &
             lOrder3Ex(nEnergyFDSteps), lOrder3Ideal(nEnergyFDSteps), &
             lOrder5Ex(nEnergyFDSteps), lOrder5Ideal(nEnergyFDSteps), &
             lOrderForwardEx(nEnergyFDSteps), lOrderBackwardEx(nEnergyFDSteps), &
+            dHighStep(nHighOrderFDSteps), dHighErr3(nHighOrderFDSteps), &
+            dHighErr5(nHighOrderFDSteps), dHighErr7(nHighOrderFDSteps), &
+            dHighErr9(nHighOrderFDSteps), dHighAbs3(nHighOrderFDSteps), &
+            dHighAbs5(nHighOrderFDSteps), dHighAbs7(nHighOrderFDSteps), &
+            dHighAbs9(nHighOrderFDSteps), dHighOrder3(nHighOrderFDSteps), &
+            dHighOrder5(nHighOrderFDSteps), dHighOrder7(nHighOrderFDSteps), &
+            dHighOrder9(nHighOrderFDSteps), lHighOrder3(nHighOrderFDSteps), &
+            lHighOrder5(nHighOrderFDSteps), lHighOrder7(nHighOrderFDSteps), &
+            lHighOrder9(nHighOrderFDSteps), &
             dErrMu(nDirections,nMuFDSteps), dHessian(nLocalSpecies,nLocalSpecies), &
             dMuStep(nDirections,nMuFDSteps), dNormAbsMu(nDirections,nMuFDSteps), &
             dMaxAbsMu(nDirections,nMuFDSteps), dMaxScaledMu(nDirections,nMuFDSteps), &
@@ -203,7 +229,8 @@ program TestRKMPHessianVerification
         ! SECTION 3: SCALAR-ENERGY DIRECTIONAL CURVATURE
         !
         ! Use the actual binary interaction pair for scalar-energy differences. Both species have substantial
-        ! phase amounts in TestThermo30, leaving a visible truncation region before roundoff dominates.
+        ! phase amounts in TestThermo30, leaving a visible truncation region before finite-precision
+        ! cancellation dominates at small h.
         !=====================================================================================================
         ! TestThermo30 contains only a constant binary interaction, whose
         ! directional scalar energy is too low-order to display stencil
@@ -248,7 +275,7 @@ program TestRKMPHessianVerification
             ! Centering cancels that term, giving h**2 behavior; the wider
             ! five-point stencil cancels more terms and gives h**4.
             ! At very small h, subtracting nearly equal energies amplifies
-            ! floating-point roundoff, so an eventual error increase is expected.
+            ! finite-precision cancellation, so an eventual error increase is expected.
             dFDForward = (dEnergyP2Ex-2D0*dEnergyP1Ex+dEnergy0Ex)/(dH*dH)
             dFDBackward = (dEnergy0Ex-2D0*dEnergyM1Ex+dEnergyM2Ex)/(dH*dH)
             dFD3 = (dEnergyP1Ex-2D0*dEnergy0Ex+dEnergyM1Ex)/(dH*dH)
@@ -260,6 +287,9 @@ program TestRKMPHessianVerification
             dAbs5Ex(iStep) = DABS(dFD5-dAnalyticEx)
             dErrForwardEx(iStep) = CompScaledError(dFDForward,dAnalyticEx)
             dErrBackwardEx(iStep) = CompScaledError(dFDBackward,dAnalyticEx)
+            dSignedScale = DMAX1(1D0,DABS(dFDForward),DABS(dFDBackward),DABS(dAnalyticEx))
+            dSignedForwardEx(iStep) = (dFDForward-dAnalyticEx)/dSignedScale
+            dSignedBackwardEx(iStep) = (dFDBackward-dAnalyticEx)/dSignedScale
             dErr3Ex(iStep) = CompScaledError(dFD3,dAnalyticEx)
             dErr5Ex(iStep) = CompScaledError(dFD5,dAnalyticEx)
 
@@ -288,6 +318,92 @@ program TestRKMPHessianVerification
         lPass = lPass .AND. tRKMP3%lPassed .AND. tRKMP5%lPassed
         lPass = lPass .AND. tIdeal3%lPassed .AND. tIdeal5%lPassed
 
+        ! In their common first-order truncation region, the one-sided formulas
+        ! retain equal-and-opposite h*f''' terms. Check that this conceptual
+        ! signature is present without extending the requirement into the small-h
+        ! finite-precision/cancellation region.
+        iSignStart = MAX(tRKMPForward%iOrderStart,tRKMPBackward%iOrderStart)
+        iSignEnd = MIN(iSignStart+2,MIN(tRKMPForward%iBest,tRKMPBackward%iBest)-1)
+        lSignedOneSided = (iSignStart > 0) .AND. (iSignEnd >= iSignStart+1)
+        if (lSignedOneSided) then
+            do iStep = iSignStart, iSignEnd
+                if (dSignedForwardEx(iStep)*dSignedBackwardEx(iStep) >= 0D0) then
+                    lSignedOneSided = .FALSE.
+                    exit
+                end if
+                dSignedRatio = DABS(dSignedForwardEx(iStep))/DABS(dSignedBackwardEx(iStep))
+                if ((dSignedRatio < 0.5D0) .OR. (dSignedRatio > 2D0)) then
+                    lSignedOneSided = .FALSE.
+                    exit
+                end if
+            end do
+        end if
+        lPass = lPass .AND. lSignedOneSided
+
+        !=====================================================================================================
+        ! SECTION 4: REPORT-ONLY HIGH-ORDER CENTERED DIFFERENCES
+        !
+        ! Along the constant-total-moles direction, an exponent-m binary RKMP
+        ! interaction is a polynomial of degree m+2 in h. Exponent four therefore
+        ! cannot expose the eighth and tenth derivatives that control seven- and
+        ! nine-point truncation error. Exponent eight gives degree ten, allowing
+        ! all four centered formulas below to exhibit their formal orders before
+        ! cancellation dominates. Seven- and nine-point evidence is intentionally
+        ! not included in lPass until stable sixth/eighth-order regions are reviewed.
+        !=====================================================================================================
+        iRegularParam(iControlledParam,4) = 8
+        call CompExcessGibbsEnergyRKMP_unconstrained(iPhaseIndex,dHessian)
+        dAnalyticHigh = DOT_PRODUCT(dDirection,MATMUL(dHessian,dDirection))
+        call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMoles0,dEnergy0Ex)
+
+        do iStep = 1, nHighOrderFDSteps
+            ! The widest stencil reaches four steps from the base state. The
+            ! 0.2 factor leaves every perturbed mole at least 20% of its base
+            ! value at the coarsest point, then refinement only moves inward.
+            dH = 0.2D0*dScale * 2D0**(-(iStep-1))
+            dHighStep(iStep) = dH
+            dMolesM1 = dMoles0 - dH*dDirection
+            dMolesP1 = dMoles0 + dH*dDirection
+            dMolesM2 = dMoles0 - 2D0*dH*dDirection
+            dMolesP2 = dMoles0 + 2D0*dH*dDirection
+            dMolesM3 = dMoles0 - 3D0*dH*dDirection
+            dMolesP3 = dMoles0 + 3D0*dH*dDirection
+            dMolesM4 = dMoles0 - 4D0*dH*dDirection
+            dMolesP4 = dMoles0 + 4D0*dH*dDirection
+
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesM1,dEnergyM1Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesP1,dEnergyP1Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesM2,dEnergyM2Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesP2,dEnergyP2Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesM3,dEnergyM3Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesP3,dEnergyP3Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesM4,dEnergyM4Ex)
+            call CompRKMPBinaryExcessGibbsFromMoles(iPhaseIndex,nLocalSpecies,dMolesP4,dEnergyP4Ex)
+
+            dFD3 = (dEnergyP1Ex-2D0*dEnergy0Ex+dEnergyM1Ex)/(dH*dH)
+            dFD5 = (-dEnergyP2Ex+16D0*dEnergyP1Ex-30D0*dEnergy0Ex+ &
+                16D0*dEnergyM1Ex-dEnergyM2Ex)/(12D0*dH*dH)
+            dFD7 = (2D0*(dEnergyM3Ex+dEnergyP3Ex)-27D0*(dEnergyM2Ex+dEnergyP2Ex)+ &
+                270D0*(dEnergyM1Ex+dEnergyP1Ex)-490D0*dEnergy0Ex)/(180D0*dH*dH)
+            dFD9 = (-9D0*(dEnergyM4Ex+dEnergyP4Ex)+128D0*(dEnergyM3Ex+dEnergyP3Ex)- &
+                1008D0*(dEnergyM2Ex+dEnergyP2Ex)+8064D0*(dEnergyM1Ex+dEnergyP1Ex)- &
+                14350D0*dEnergy0Ex)/(5040D0*dH*dH)
+
+            dHighAbs3(iStep) = DABS(dFD3-dAnalyticHigh)
+            dHighAbs5(iStep) = DABS(dFD5-dAnalyticHigh)
+            dHighAbs7(iStep) = DABS(dFD7-dAnalyticHigh)
+            dHighAbs9(iStep) = DABS(dFD9-dAnalyticHigh)
+            dHighErr3(iStep) = CompScaledError(dFD3,dAnalyticHigh)
+            dHighErr5(iStep) = CompScaledError(dFD5,dAnalyticHigh)
+            dHighErr7(iStep) = CompScaledError(dFD7,dAnalyticHigh)
+            dHighErr9(iStep) = CompScaledError(dFD9,dAnalyticHigh)
+        end do
+
+        call ComputeObservedOrders(dHighStep,dHighErr3,dHighOrder3,lHighOrder3)
+        call ComputeObservedOrders(dHighStep,dHighErr5,dHighOrder5,lHighOrder5)
+        call ComputeObservedOrders(dHighStep,dHighErr7,dHighOrder7,lHighOrder7)
+        call ComputeObservedOrders(dHighStep,dHighErr9,dHighOrder9,lHighOrder9)
+
         ! The order fixture ends here. Restore the parsed TestThermo30 parameter
         ! and rebuild Hloc so the following production comparison is genuinely
         ! native to the database rather than another controlled-exponent test.
@@ -295,11 +411,11 @@ program TestRKMPHessianVerification
         call CompExcessGibbsEnergyRKMP_unconstrained(iPhaseIndex,dHessian)
 
         !=====================================================================================================
-        ! SECTION 4: NATIVE PRODUCTION PARTIAL-MOLAR DERIVATIVE ORACLE
+        ! SECTION 5: NATIVE PRODUCTION PARTIAL-MOLAR DERIVATIVE ORACLE
         !
         ! This section uses the unmodified TestThermo30 database parameter. Its
         ! low-order RKMP polynomial can make a centered derivative exact up to
-        ! roundoff from the coarsest step onward, so this is an accuracy and
+        ! finite-precision cancellation from the coarsest step onward, so this is an accuracy and
         ! implementation-consistency check rather than an observed-order test.
         ! The controlled scalar fixture above supplies the truncation-order
         ! evidence.
@@ -339,7 +455,7 @@ program TestRKMPHessianVerification
             if (VectorTwoNormFD(dMuAnalytic) <= 1D-12) then
                 ! A direction that leaves this binary interaction unchanged has
                 ! an identically zero derivative. Accuracy is meaningful here,
-                ! but an observed order formed from zero/roundoff errors is not.
+                ! but an observed order formed from zero/finite-precision errors is not.
                 lPass = lPass .AND. ALL(dNormAbsMu(iDirection,:) <= 1D-10)
             else
                 lPass = lPass .AND. (MINVAL(dErrMu(iDirection,:)) <= 1D-9)
@@ -356,12 +472,17 @@ program TestRKMPHessianVerification
 
         if (lReport) call PrintReport
 
-        deallocate(dDirection,dMoles0,dMolesM1,dMolesM2,dMolesP1,dMolesP2,dMuAnalytic, &
+        deallocate(dDirection,dMoles0,dMolesM1,dMolesM2,dMolesM3,dMolesM4, &
+            dMolesP1,dMolesP2,dMolesP3,dMolesP4,dMuAnalytic, &
             dMuMinus,dMuPlus,dMolFractionSave,dPartialExcessSave,dX,dEnergyStep,dErrForwardEx, &
             dErrBackwardEx,dErr3Ex,dErr3Ideal,dErr5Ex,dErr5Ideal,dAbsForwardEx,dAbsBackwardEx, &
+            dSignedForwardEx,dSignedBackwardEx, &
             dAbs3Ex,dAbs3Ideal,dAbs5Ex,dAbs5Ideal,dOrderForwardEx,dOrderBackwardEx,dOrder3Ex, &
             dOrder3Ideal,dOrder5Ex,dOrder5Ideal,lOrderForwardEx,lOrderBackwardEx,lOrder3Ex, &
-            lOrder3Ideal,lOrder5Ex,lOrder5Ideal,dErrMu,dHessian, &
+            lOrder3Ideal,lOrder5Ex,lOrder5Ideal,dHighStep,dHighErr3,dHighErr5,dHighErr7, &
+            dHighErr9,dHighAbs3,dHighAbs5,dHighAbs7,dHighAbs9,dHighOrder3,dHighOrder5, &
+            dHighOrder7,dHighOrder9,lHighOrder3,lHighOrder5,lHighOrder7,lHighOrder9, &
+            dErrMu,dHessian, &
             dMuStep,dNormAbsMu,dMaxAbsMu,dMaxScaledMu,dOrderMu,lOrderMu,iWorstMu,dMuFD)
     end if
 
@@ -378,7 +499,7 @@ program TestRKMPHessianVerification
 contains
 
     !=========================================================================================================
-    ! SECTION 5: NUMERICAL CONTROLS AND REPORTING
+    ! SECTION 6: NUMERICAL CONTROLS AND REPORTING
     !=========================================================================================================
 
     real(8) function CompIdealMixingEnergy(dMoles)
@@ -408,6 +529,7 @@ contains
         write(*,'(A)') 'RKMP Hessian verification'
         write(*,'(A)') 'native scope: converged TestThermo30 plain-RKMP topology, parameters, and partial molars'
         write(*,'(A)') 'order fixture: parsed TestThermo30 binary parameter temporarily evaluated at exponent four'
+        write(*,'(A)') 'high-order fixture: same parameter evaluated at exponent eight; 7pt/9pt are report-only'
         write(*,'(A)') 'excluded: RKMPM magnetism, ternary/Muggiano curvature, GEM response mapping, solver behavior'
         write(*,'(A,I0)') 'storage bits      = ', nStorageBits
         write(*,'(A,I0)') 'decimal precision = ', nDecimalPrecision
@@ -427,6 +549,19 @@ contains
         end do
         write(*,'(A,L1,A,L1)') 'controlled RKMP one-sided order/accuracy: forward=', &
             tRKMPForward%lPassed,' backward=',tRKMPBackward%lPassed
+        write(*,'(A,L1)') 'controlled RKMP signed one-sided leading-error check: ',lSignedOneSided
+
+        write(*,'(/,A)') 'controlled signed one-sided comparison'
+        write(*,'(A)') 'h            forward signed    backward signed   magnitude ratio'
+        do iStepLocal = 1, nEnergyFDSteps
+            if (DABS(dSignedBackwardEx(iStepLocal)) > 0D0) then
+                dSignedRatio = DABS(dSignedForwardEx(iStepLocal))/DABS(dSignedBackwardEx(iStepLocal))
+            else
+                dSignedRatio = HUGE(1D0)
+            end if
+            write(*,'(4(ES16.8,2X))') dEnergyStep(iStepLocal),dSignedForwardEx(iStepLocal), &
+                dSignedBackwardEx(iStepLocal),dSignedRatio
+        end do
 
         write(*,'(/,A)') 'controlled centered-difference comparison'
         write(*,'(A)') 'h            RKMP3 abs    RKMP3 scaled order    RKMP5 abs    RKMP5 scaled order'
@@ -449,8 +584,30 @@ contains
         end do
         write(*,'(A,L1,A,L1)') 'ideal order/accuracy: 3pt=',tIdeal3%lPassed,' 5pt=',tIdeal5%lPassed
 
+        write(*,'(/,A)') 'controlled exponent-eight centered comparison (report-only for 7pt and 9pt)'
+        write(*,'(A)') 'directional polynomial degree = 10'
+        write(*,'(A)') 'h            high3 abs    high3 scaled order    high5 abs    high5 scaled order'
+        do iStepLocal = 1, nHighOrderFDSteps
+            write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dHighStep(iStepLocal), &
+                dHighAbs3(iStepLocal),dHighErr3(iStepLocal),TRIM(OrderLabel(dHighOrder3(iStepLocal), &
+                lHighOrder3(iStepLocal))),dHighAbs5(iStepLocal),dHighErr5(iStepLocal), &
+                TRIM(OrderLabel(dHighOrder5(iStepLocal),lHighOrder5(iStepLocal)))
+        end do
+        call PrintDiagnosticSweepSummary('high3',dHighStep,dHighErr3)
+        call PrintDiagnosticSweepSummary('high5',dHighStep,dHighErr5)
+
+        write(*,'(/,A)') 'h            high7 abs    high7 scaled order    high9 abs    high9 scaled order'
+        do iStepLocal = 1, nHighOrderFDSteps
+            write(*,'(ES12.4,2(2X,ES12.4,2X,ES12.4,1X,A8))') dHighStep(iStepLocal), &
+                dHighAbs7(iStepLocal),dHighErr7(iStepLocal),TRIM(OrderLabel(dHighOrder7(iStepLocal), &
+                lHighOrder7(iStepLocal))),dHighAbs9(iStepLocal),dHighErr9(iStepLocal), &
+                TRIM(OrderLabel(dHighOrder9(iStepLocal),lHighOrder9(iStepLocal)))
+        end do
+        call PrintDiagnosticSweepSummary('high7',dHighStep,dHighErr7)
+        call PrintDiagnosticSweepSummary('high9',dHighStep,dHighErr9)
+
         write(*,'(/,A)') 'native TestThermo30 production partial-molar RKMP comparison'
-        write(*,'(A)') 'observed order: N/A when the native low-order polynomial begins in the roundoff regime'
+        write(*,'(A)') 'observed order: N/A when the native low-order polynomial is finite-precision-limited'
         do iDirLocal = 1, nDirections
             write(*,'(/,A,I0,A,I0)') 'direction: species ', iDirLocal, ' minus species ', iReference
             write(*,'(A)') 'h            norm abs      norm scaled   max abs       max scaled    worst  order'
@@ -464,6 +621,26 @@ contains
         end do
         write(*,'(/,A,ES14.6)') 'worst best production-mu error = ', dWorstMuBest
     end subroutine PrintReport
+
+    subroutine PrintDiagnosticSweepSummary(cName,dStep,dError)
+        character(len=*), intent(in) :: cName
+        real(8), intent(in) :: dStep(:), dError(:)
+        integer :: iBestLocal, iLocal, iUpturnLocal
+
+        iBestLocal = MINLOC(dError,1)
+        iUpturnLocal = 0
+        do iLocal = iBestLocal+1, SIZE(dError)
+            if (dError(iLocal) > dError(iLocal-1)) then
+                iUpturnLocal = iLocal
+                exit
+            end if
+        end do
+        write(*,'(A,A,ES14.6,A,ES14.6,A,L1)') TRIM(cName),' summary: best=', &
+            dError(iBestLocal),' best_h=',dStep(iBestLocal),' small_h_upturn=',iUpturnLocal > 0
+        if (iUpturnLocal > 0) then
+            write(*,'(A,A,ES14.6)') TRIM(cName),' small_h_upturn_h=',dStep(iUpturnLocal)
+        end if
+    end subroutine PrintDiagnosticSweepSummary
 
     function OrderLabel(dOrder,lAvailable) result(cLabel)
         real(8), intent(in) :: dOrder
