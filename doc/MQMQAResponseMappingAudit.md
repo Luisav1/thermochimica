@@ -561,6 +561,121 @@ is no more than half of the measured mapped error. This prevents a small
 composition-space residual or an excellent aggregate matrix norm from hiding
 an unresolved element direction.
 
-MQ-4A does not provide a reusable correction builder and does not mutate a GEM
-matrix. Those are MQ-4B concerns. Controls, alpha selection, solver activation,
-and globalization remain MQ-4C concerns.
+MQ-4A itself did not provide a reusable correction builder or mutate a GEM
+matrix. MQ-4B packages that verified result as described below. Controls,
+solver activation, trust selection, and globalization remain MQ-4C concerns.
+
+## MQ-4B Reusable Correction Builder
+
+`ModuleMQMQAResponseMapping` turns the MQ-4A derivation into two deliberately
+separate software operations:
+
+```text
+BuildMQMQAGEMCorrection
+    reads one live eligible plain-SUBG phase
+    returns its complete unscaled deltaA and deltaB
+
+ApplyMQMQAGEMCorrection
+    receives caller-owned A and B arrays
+    adds a caller-selected fraction only to the element equations
+```
+
+Neither routine is called by normal `GEMNewton` execution in MQ-4B. The
+existing diagnostic capture hook is unchanged, and no corrected Newton solve
+occurs.
+
+### Builder layers
+
+The live builder checks that the requested phase is active, plain `SUBG`,
+uncharged, positive, interior, finite, and dimensionally consistent. It then
+uses `ModuleMQMQAProductionAdapter` and
+`CompMQMQAHessianUnconstrained` to obtain the production-decoded mole Hessian.
+It does not duplicate database parameters or thermodynamic formulas.
+
+The response algebra is isolated in `BuildMQMQAReducedCorrection`. This
+state-based kernel accepts
+
+```text
+N, x, mu, S, Hx
+```
+
+and constructs the baseline curvature, normalization constraint, corrected
+and baseline element responses, and corrected and baseline residual responses.
+Separating this kernel from production decoding has two purposes:
+
+1. decoding failures and response-solve failures receive different statuses;
+2. singular response systems can be tested directly without a test-only switch
+   in the live builder.
+
+Both entry points clear `deltaA` and `deltaB` before checking inputs. A failed
+stage therefore cannot expose a partially assembled correction.
+
+### Applicability and status
+
+`lApplicable` is false for a phase outside the supported model scope, including
+a charged phase. It becomes true after a live phase passes model and domain
+eligibility. A later decoding, Hessian, response, or correction failure keeps
+`lApplicable` true but returns a nonzero stage-specific status. This separates
+ordinary inapplicability from a numerical or implementation failure in a phase
+that should have been mappable.
+
+The public status constants distinguish:
+
+- success;
+- not applicable;
+- unsupported charged phase;
+- invalid input;
+- decoding or Hessian failure;
+- corrected or baseline element-response failure;
+- corrected or baseline residual-response failure;
+- invalid correction or application.
+
+### Structural checks
+
+Every successful build requires:
+
+- complete corrected and baseline KKT residuals below tolerance;
+- normalization residuals below tolerance;
+- finite `deltaA` and `deltaB`;
+- raw `deltaA` symmetric within numerical tolerance, followed by removal of
+  roundoff-level skew so the returned matrix is exactly symmetric;
+- correct element-space dimensions.
+
+The builder reads complete production `dChemicalPotential` values after
+`CompChemicalPotential`. It does not add `dPartialExcessGibbs`, and it does not
+write any Thermochimica global array.
+
+The applicator validates dimensions, finite inputs, correction symmetry, and a
+caller-owned weight in `[0,1]`. A materially nonsymmetric correction is rejected
+before either caller-owned array is changed. The weight is a future
+globalization choice applied to the fully formed correction. It does not scale
+the local MQMQA Hessian. The applicator can change only
+
+```text
+A(1:nElements,1:nElements)
+B(1:nElements).
+```
+
+Phase rows and columns, phase residuals, pure-phase equations, and production
+thermodynamic state remain untouched.
+
+### MQ-4B verification boundary
+
+`TestMQMQAGEMMappingVerification` retains the independent MQ-4A construction
+and nonlinear production-partial-molar oracle. It additionally verifies that:
+
+1. builder `deltaA` and `deltaB` match the independent MQ-4A reference;
+2. the builder changes no production state array;
+3. inapplicable, invalid-input, charged, and singular-response cases return zero
+   corrections with distinct statuses;
+4. full and zero-weight application modify copied arrays exactly as expected;
+5. sequential supplied correction pairs add linearly;
+6. invalid alpha or materially nonsymmetric application leaves copied arrays
+   unchanged;
+7. all independent `deltaA`, `deltaB`, affine, and per-column oracle checks
+   continue to pass.
+
+MQ-4C may call this builder from an experimental solver path and decide when a
+correction is trustworthy. That future stage must add controls, phase-by-phase
+aggregation in the live iteration, alpha-zero reference solves, and nonlinear
+globalization tests. MQ-4B does none of those things.
