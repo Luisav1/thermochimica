@@ -309,12 +309,13 @@ MQ-3B must require three-way agreement among:
 3. the corresponding phase contribution reconstructed directly from the
    current `GEMNewton` arrays.
 
-The third comparison must be phase-local. It must not compare against a final
-`A` or residual vector that already contains contributions from multiple
-phases. MQ-3B must obtain the selected phase contribution either by capturing
-it immediately before accumulation or by taking before-and-after snapshots
-around that phase's assembly. The same isolation is required for the selected
-phase's element-to-phase-amount column and residual-vector contribution.
+The third MQ-3B comparison is a **source-faithful phase-local reconstruction
+from the arrays consumed by `GEMNewton`**. It reproduces the selected phase's
+element block, element-to-phase-amount column, and residual formula without
+mixing in contributions from other phases. It does not capture the internally
+assembled `A` matrix directly. Live reduced-system verification in MQ-4 must
+strengthen this evidence with a before-and-after snapshot around the selected
+phase's production assembly or an equivalent internal diagnostic capture.
 
 The comparison must also cover the raw element-block symmetry residual before
 any explicit symmetrization, the element-to-phase-amount column, scaling with
@@ -360,8 +361,10 @@ The next stage should proceed in this order:
 2. Compare the symmetric KKT convention against the existing RKMP response
    solver and the null-space solve. Implement this solver independently; do not
    refactor or replace the validated RKMP production path during MQ-3B.
-3. Numerically pass the three-way, phase-local diagonal-baseline reconstruction
-   gate using an isolated selected-phase contribution.
+3. Numerically pass the three-way diagonal-baseline gate using a source-faithful
+   phase-local reconstruction from the arrays consumed by `GEMNewton`. Document
+   that this is not yet a capture of the internally assembled matrix; that live
+   reduced-system check belongs to MQ-4.
 4. Decode the converged uncharged `CuFeC-Kang.dat` Liquid using normalized
    production `dMolFraction`, `N=dMolesPhase(activeSlot)`, and `n=N*x`. Report
    the discrepancy from the floored `dMolesSpecies` values.
@@ -372,27 +375,38 @@ The next stage should proceed in this order:
 6. Solve the corrected and baseline responses for an independent forcing
    basis `P`, verify `Z^T*S*P` has full column rank, represent the response on
    that supported forcing subspace, check null directions separately, and
-   verify the KKT and constraint residuals.
+   verify both parts of the complete KKT residual,
+   `Hx*R+C^T*Lambda-F` and `C*R`. Retain the multiplier-eliminated projected
+   residual only as an additional algebraic cross-check. Use an orthonormal
+   tangent basis when reporting eigenvalues and tangent condition estimates.
 7. Independently perturb each forcing-basis direction and reconverge the local
-   composition with the established production `Subminimization` path, whose
-   diagonal Newton approximation does not use the new analytic MQMQA Hessian.
+   composition using the established production `CompExcessGibbsEnergySUBG`
+   partial molars. Build the test-only nonlinear oracle from finite differences
+   of those production partial molars; do not use the new analytic MQMQA Hessian
+   in the oracle Jacobian.
 8. Keep phase amount, phase type, topology, active parameter records, and
    production branch fixed. Warm-start from the unperturbed composition, save
    and restore every touched global array, and reject branch changes, failed
    positivity, boundary clipping, or failed convergence.
-9. Require the perturbed production stationarity residual to be sufficiently
-   smaller than the measured response error. Use a positivity-safe step sweep
-   with observed-order reporting, componentwise errors, and vector norms rather
-   than accepting one favourable perturbation.
+9. Classify a finite-difference point as oracle-resolved only when the estimated
+   stationarity uncertainty satisfies `u(h) <= 0.5*e(h)`. Require the accepted
+   second-order region to contain resolved points, apply the accuracy gate to
+   the best resolved point, and report both the raw minimum and best resolved
+   error. Use a positivity-safe sweep with observed-order reporting,
+   componentwise errors, worst-quadruplet indices, and vector norms rather than
+   accepting one favourable perturbation.
 10. Keep the complete MQ-3B path diagnostic-only and leave `GEMNewton`
     unchanged. Stop for review after the native local response passes. MQ-3B
     does not authorize assembly of `deltaA`, assembly of `deltaB`, activation
     in `GEMNewton`, or refactoring of the validated RKMP production mapper.
 
-The production `Subminimization` result is the independent nonlinear oracle:
-its converged composition satisfies the full production partial-molar
-stationarity equations, while its local iteration matrix remains the existing
-simple diagonal approximation rather than the new MQMQA Hessian.
+The public production `Subminimization` path remains relevant source evidence,
+but its historical update-size stopping rule is intentionally looser than a
+derivative finite-difference oracle requires. MQ-3B therefore solves the same
+production partial-molar stationarity equations to a documented tighter
+tolerance using a test-only finite-difference Jacobian. This oracle remains
+independent of the new analytic MQMQA Hessian and does not modify production
+`Subminimization` behavior.
 
 Only after this response agrees should MQ-4 construct and independently verify
 the reduced `A` and `B` deltas.
@@ -432,6 +446,7 @@ The source audit identifies the bordered `diag(1/x)` response as the candidate
 Thermochimica baseline and establishes its algebraic equivalence only for the
 uncharged normalized interior case. MQ-3B must still demonstrate numerical
 baseline equivalence, tangent-space stability, independent forcing coverage,
-phase-local GEM baseline isolation, and agreement with the production nonlinear
-oracle on the supported forcing basis. Response mapping itself has not yet been
-validated, and no production solver behavior has changed.
+source-faithful phase-local GEM baseline reconstruction, and agreement with the
+production nonlinear oracle on the supported forcing basis. Direct capture of
+the live assembled reduced system, response-delta mapping, and GEM integration
+remain MQ-4 work; no production solver behavior has changed.

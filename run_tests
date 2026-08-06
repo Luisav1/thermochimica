@@ -28,6 +28,8 @@ tail -1 test12out.txt
 ./TestCEFHessianVerification
 ./TestMQMQAHessianVerification
 ./TestMQMQANativeHessianVerification
+./TestConstrainedResponseSolver
+./TestMQMQAResponseVerification
 ./TestThermo31
 ./TestThermo32
 ./TestThermo33
