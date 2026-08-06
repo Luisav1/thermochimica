@@ -450,3 +450,117 @@ source-faithful phase-local GEM baseline reconstruction, and agreement with the
 production nonlinear oracle on the supported forcing basis. Direct capture of
 the live assembled reduced system, response-delta mapping, and GEM integration
 remain MQ-4 work; no production solver behavior has changed.
+
+## MQ-4A Diagnostic Reduced Mapping
+
+MQ-4A keeps the correction outside `GEMNewton` and first derives it from the
+actual species update used by `GEMLineSearch`. For species `q`, that update is
+proportional to
+
+```text
+1 + lambdaPhase + S(q,:)*Gamma - mu(q).
+```
+
+Here `lambdaPhase` is the solution-phase radial update variable. It changes the
+total amount of the phase without being an additional composition coordinate.
+The local composition response remains tangent to normalization.
+
+Let `C` be the row of ones, `S` the quadruplet-to-element stoichiometric
+forcing matrix, and `Hx=N*Hn`. The corrected element-potential response and
+the response to the current species residual are defined by the candidate KKT
+systems
+
+```text
+[ Hx  C^T ] [ Rcorr   ] = [ S ]
+[ C    0  ] [ LambdaS ]   [ 0 ]
+
+[ Hx  C^T ] [ rMuCorr ] = [ fMu ]
+[ C    0  ] [ lambdaMu ]   [  0  ].
+```
+
+The corresponding baseline objects use `Hbase=diag(1/x)`. The production
+element residual contains `mu-1`, so the source-faithful choice is
+`fMu=mu-1`. Solving with `mu` gives the same composition response: the two
+right-hand sides differ by `C^T`, and that constant forcing is absorbed by the
+normalization multiplier because `C*rMu=0`. MQ-4A verifies this cancellation
+numerically rather than assuming it.
+
+Expanding the species update in the element-balance equation gives the
+phase-local candidate corrections
+
+```text
+deltaA = N*S^T*(Rcorr-Rbase),
+deltaB = N*S^T*(rMuCorr-rMuBase).
+```
+
+The two terms must also satisfy one combined affine-response identity. For a
+trial element-potential update `dGamma`, the corrected and baseline local
+composition changes are
+
+```text
+dxCorr = Rcorr*dGamma-rMuCorr,
+dxBase = Rbase*dGamma-rMuBase.
+```
+
+Their mapped difference is therefore
+
+```text
+N*S^T*(dxCorr-dxBase) = deltaA*dGamma-deltaB.
+```
+
+The minus sign follows from the species forcing
+`S*dGamma-(mu-1)`. MQ-4A verifies this complete identity with a single
+nonlinear finite-difference experiment, so separate sign errors in `deltaA`
+or `deltaB` cannot be hidden by using two unrelated tests.
+
+Both corrections have amount units and target only the element equations.
+The current element-to-solution-phase column remains `N*S^T*x`; its transpose
+and the current solution-phase residual `SUM(n*mu)` are unchanged because the
+new curvature changes the tangent response, not the current state or radial
+direction. A later builder must therefore return zero corrections for those
+objects unless a broader derivation proves otherwise.
+
+Two production chemical-potential conventions must not be mixed:
+
+- after `CompChemicalPotential`, `dChemicalPotential` already contains the
+  complete SUBG partial molar;
+- after a direct low-level call to `CompExcessGibbsEnergySUBG`, the complete
+  partial molar is `dChemicalPotential+dPartialExcessGibbs`.
+
+Adding the excess array to the first form would double count it.
+
+`GEMNewton` floors each live species amount before assembling its baseline.
+The candidate response instead uses the authoritative thermodynamic state
+`n=N*x`. MQ-4A reports their discrepancy and accepts the candidate only when
+it is immaterial. The test temporarily installs the same positive,
+off-equilibrium composition used by the nonlinear response oracle, recomputes
+production chemical potentials, and requests the opt-in snapshot in
+`ModuleGEMNewtonDiagnosticCapture`. The snapshot copies the completed baseline
+immediately before any experimental correction or solve. Contributions from
+the other active solution phases are removed from that captured system to
+expose the selected Liquid contribution. Every modified production array is
+then restored to its converged value.
+
+`TestMQMQAGEMMappingVerification` verifies:
+
+1. live phase-local element block, element residual, solution-phase column,
+   and solution-phase residual reconstruction;
+2. zero correction when corrected and baseline responses are identical;
+3. finite values, normalization residuals, `deltaA` symmetry, constant-forcing
+   cancellation, and non-vacuous `deltaB`;
+4. the complete `deltaA`, `deltaB`, and combined affine identity against
+   independent central finite differences of nonlinear states converged with
+   production SUBG partial molars;
+5. second-order convergence, oracle-resolution, normwise error, and maximum
+   scaled component error;
+6. every `deltaA` column using its own resolved step and uncertainty after both
+   are mapped into the element-residual space through `N*S^T`.
+
+An oracle point is resolved only when its mapped, scale-normalized uncertainty
+is no more than half of the measured mapped error. This prevents a small
+composition-space residual or an excellent aggregate matrix norm from hiding
+an unresolved element direction.
+
+MQ-4A does not provide a reusable correction builder and does not mutate a GEM
+matrix. Those are MQ-4B concerns. Controls, alpha selection, solver activation,
+and globalization remain MQ-4C concerns.

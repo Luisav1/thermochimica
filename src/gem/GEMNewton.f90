@@ -94,6 +94,7 @@ subroutine GEMNewton(INFO)
     USE ModuleThermo
     USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureGEMNewtonSystem
 
     implicit none
 
@@ -236,6 +237,10 @@ subroutine GEMNewton(INFO)
                 A(j,j) = 1D0
             end do LOOP_SUB
         end if
+
+        ! Verification tests may request the exact baseline system at this point. The capture routine is a
+        ! default-inactive copy operation and runs before any experimental model-specific correction.
+        call CaptureGEMNewtonSystem(A,B,nVar)
 
         ! Optionally verify mapped RKMP second-order terms without changing the Newton matrix:
         if (lDebugRKMPHessianFD) then
