@@ -332,8 +332,12 @@ data through runtime decoding and local derivatives. They do not create
 database-backed evidence for `Q` or `B`, extend the result to `SUBQ`, or
 connect the Hessian to `GEMNewton`.
 
-The next mathematical stage is the constrained local MQMQA composition
-response: determine how quadruplet amounts respond to perturbations while
-preserving the model's local normalization and topology identities. That
-response should be verified independently before deriving any reduced GEM
-matrix contribution.
+MQ-3A is recorded in `doc/MQMQAResponseMappingAudit.md`. The source audit finds
+that production plain-`SUBG` uses quadruplet fractions with one normalization
+constraint for the uncharged prototype; site, pair, coordination, zeta, and
+ternary quantities are derived functions rather than additional constrained
+unknowns. It identifies the bordered diagonal `1/x` response as the candidate
+Thermochimica local/GEM baseline for an uncharged normalized interior state.
+MQ-3B must establish that baseline numerically and verify the corrected
+`N*H_SUBG` local response independently before any reduced GEM contribution is
+implemented.
