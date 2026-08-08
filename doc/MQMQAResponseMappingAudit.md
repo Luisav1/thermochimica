@@ -389,7 +389,9 @@ The next stage should proceed in this order:
    composition using the established production `CompExcessGibbsEnergySUBG`
    partial molars. Build the test-only nonlinear oracle from finite differences
    of those production partial molars; do not use the new analytic MQMQA Hessian
-   in the oracle Jacobian.
+   in the oracle Jacobian. Rebuild that finite-difference Jacobian at each final
+   perturbed root and use it, rather than the analytic Hessian, to convert the
+   remaining stationarity residual into an oracle-uncertainty estimate.
 8. Keep phase amount, phase type, topology, active parameter records, and
    production branch fixed. Warm-start from the unperturbed composition, save
    and restore every touched global array, and reject branch changes, failed
@@ -954,8 +956,10 @@ silently routing SUBQ through the completed SUBG test:
    `Z^T*Hx*Z`. Positive definiteness is required to claim that `x0` is a stable
    local minimum. Otherwise classify the stationary point and do not complete
    the first stable-response prototype with that state.
-6. Determine the independent rank of `Z^T*S` and construct the supported
-   element-potential forcing basis `P`. Report rank and null forcing directions.
+6. Determine the independent rank of `Z^T*S` with a rank-revealing,
+   column-pivoted QR construction and construct the supported element-potential
+   forcing basis `P`. Report the selected element names and columns, rank, and
+   null forcing directions.
 7. Pass the three-way ordinary-interior baseline comparison among the bordered
    `diag(1/x0)` solve, `[diag(x0)-x0*x0^T]*S`, and a source-faithful phase-local
    reconstruction from the FeTiVO arrays consumed by `GEMNewton`. Do not invoke
@@ -974,11 +978,14 @@ silently routing SUBQ through the completed SUBG test:
 10. Use `(xPlus-xMinus)/(2*h)` as the independent nonlinear response oracle.
     Require every nonlinear root and every intermediate accepted state to
     remain strictly positive; clipping is not permitted.
-11. Estimate the oracle uncertainty from the nonlinear stationarity residual
-    and classify a point as resolved only when `u(h) <= 0.5*e(h)`. Apply
-    convergence-order gates only to resolved points. Require and report the
-    best resolved normwise error, maximum scaled component error and worst
-    quadruplet, observed order, and the raw minimum separately.
+11. Rebuild the production-partial-molar finite-difference tangent Jacobian at
+    each converged `xPlus` and `xMinus` root. Estimate the oracle uncertainty
+    from the nonlinear stationarity residuals using those independent
+    Jacobians, not the analytic SUBQ Hessian under test. Classify a point as
+    resolved only when `u(h) <= 0.5*e(h)`. Apply convergence-order gates only
+    to resolved points. Require and report the best resolved normwise error,
+    maximum scaled component error and worst quadruplet, observed order, and
+    the raw minimum separately.
 12. Keep MQ-3B diagnostic-only. Do not broaden the MQ-4B builder, construct live
     GEM corrections, or alter `GEMNewton` in the same stage.
 
@@ -997,3 +1004,64 @@ the assessed FeTiVO `G/Q` case to converge and classify a positive stationary
 root, then verify its native constrained response. The existing live correction
 builder must remain SUBG-only until that response and the subsequent
 reduced-mapping evidence pass.
+
+### SUBQ MQ-3B exit result
+
+`TestMQMQASUBQResponseVerification.F90` now performs the dedicated native
+response experiment required above. The 20%-blended FeTiVO composition is used
+only as a positive nonlinear-solve seed. At fixed temperature, pressure, phase
+amount, production element potentials, model branch, topology, and decoded
+parameters, the independent production-partial-molar solver moves by
+`1.133449E-01` in composition two-norm to a stationary root. The root remains
+strictly positive (`MINVAL(x0)=1.128405E-09`) and its tangent stationarity
+residual is `1.348160E-14`.
+
+The decoded root contains the assessed 15-quadruplet, six-`G`, eight-`Q`,
+uniform-zeta (`2.4`) SUBQ model. Its orthonormal tangent Hessian is positive
+definite: the minimum and maximum tangent eigenvalues are `1.352461E+00` and
+`8.271186E+08`. The resulting condition estimate, `6.115654E+08`, is reported
+because forward-solution comparisons must be interpreted separately from
+backward equation residuals.
+
+All four independent element-potential forcing directions are supported. A
+rank-revealing column-pivoted QR construction selects them in the order O, Fe,
+Ti, and V. The bordered KKT solve has a top-equation residual of `1.776357E-15`, a
+normalization residual of `9.150666E-17`, and a projected residual of
+`1.554312E-15`. A separate null-space solve agrees with the bordered response
+within `3.686123E-09`, below its condition-aware `1.357948E-07` forward-error
+bound; its scaled reduced-equation residual is `7.578160E-17`. A synthetic
+normalization-only forcing produces exactly zero composition response.
+
+Three ordinary-interior GEM response/block formulations plus the residual
+reconstruction agree independently:
+
+- bordered ideal solve versus the closed normalized response: `1.292369E-16`;
+- phase-local centered element block reconstruction: `3.383117E-16`;
+- element-to-phase reconstruction: `1.110223E-16`;
+- phase-local residual reconstruction: `2.842327E-16`.
+
+For every supported forcing direction, independently reconverged production
+SUBQ roots at `Gamma +/- h*P(:,j)` exhibit a resolved second-order region. The
+uncertainty classifier rebuilds the production-partial-molar finite-difference
+tangent Jacobian at each converged plus/minus root; it does not use the analytic
+SUBQ Hessian being tested. The worst raw minimum response error is
+`2.049665E-11`; after enforcing the oracle
+resolution rule `u(h)<=0.5*e(h)`, the worst best resolved normwise error is
+`4.981605E-10`, the worst corresponding scaled component error is
+`3.755623E-10`, and the worst accepted stationarity uncertainty is
+`1.232034E-11`.
+
+The stationary root is interior under the test contract but close to the
+composition boundary, and its tangent condition estimate is approximately
+`6.12E+08`. MQ-3B therefore establishes the correctness of the analytic local
+response in this difficult state. It does not establish that a future live
+mapper should activate at every similarly small minimum fraction or condition
+number; MQ-4 eligibility and globalization must define and test that policy.
+
+This completes native constrained-response verification for the assessed
+uniform-zeta FeTiVO SUBQ `G/Q` case. It does not verify SUBQ `B`, `R`,
+nonuniform-zeta production data, reduced `deltaA/deltaB` mapping, the live
+correction builder, or `GEMNewton` activation. The next SUBQ stage is a
+diagnostic reduced-mapping verification analogous to MQ-4A; the existing
+production correction builder remains strict plain-`SUBG` until that gate
+passes.

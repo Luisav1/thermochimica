@@ -32,6 +32,7 @@ tail -1 test12out.txt
 ./TestMQMQASUBQNativeHessianVerification
 ./TestConstrainedResponseSolver
 ./TestMQMQAResponseVerification
+./TestMQMQASUBQResponseVerification
 ./TestMQMQAGEMMappingVerification
 ./TestThermo31
 ./TestThermo32

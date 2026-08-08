@@ -420,6 +420,10 @@ machinery, per-particle element forcing, and diagonal `1/x` GEM baseline.
 Current production SUBQ phases are normalization-only because electron IDs are
 assigned only to `SUBL`/`SUBLM`. Currently supported production SUBQ phases
 change the decoded thermodynamic gradient and curvature, not the response
-coordinate system. SUBQ MQ-3B must now re-establish the baseline and
-independently verify the corrected `N*H_SUBQ` constrained response before the
-existing SUBG-only builder can be broadened.
+coordinate system. SUBQ MQ-3B now re-establishes the ordinary `1/x` baseline
+and independently verifies the corrected `N*H_SUBQ` constrained response in
+all four supported FeTiVO element-potential directions. The worst
+oracle-resolved response error is `4.98E-10`, with a positive-definite but
+strongly ill-conditioned tangent Hessian. The existing SUBG-only builder
+remains intentionally unchanged until a dedicated SUBQ reduced-mapping test
+verifies `deltaA`, `deltaB`, and their affine identity.
