@@ -1,6 +1,6 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    TestMQMQAHessianVerification.F90
-!> \brief   Standalone verification of the supported nonmagnetic SUBG Hessian.
+!> \brief   Standalone verification of SUBG and staged nonmagnetic SUBQ curvature.
 !>
 !> \details Independent ordinary-real and second-order-object evaluators are compared before finite
 !!          differences test the analytic gradient and Hessian. The cases isolate ordinary
@@ -10,11 +10,14 @@
 !!
 !!          Verification map:
 !!          1. Check the generic second-order calculus kernel.
-!!          2. Build one complete positive synthetic SUBG topology.
+!!          2. Build one complete positive synthetic topology and exercise SUBQ S3, chi, and pair zeta changes.
 !!          3. Define isolated G, Q, ternary, and B interaction cases.
 !!          4. Apply the scalar/gradient/Hessian verification ladder to each case.
-!!          5. Check the independently derived extensive B identity.
-!!          6. Confirm unsupported and boundary inputs fail explicitly.
+!!          5. Quantify the known paper-versus-production SUBQ S3 distinction.
+!!          6. Measure that distinction relative to complete controlled SUBQ
+!!             energy, chemical-potential, and Hessian scales.
+!!          7. Check the independently derived extensive B identity.
+!!          8. Confirm unsupported and boundary inputs fail explicitly.
 !-------------------------------------------------------------------------------------------------------------
 
 program TestMQMQAHessianVerification
@@ -25,8 +28,8 @@ program TestMQMQAHessianVerification
 
     implicit none
 
-    type(MQMQAModelData) :: tModel
-    type(MQMQAInteractionTerm), allocatable :: tAll(:), tOne(:), tNone(:)
+    type(MQMQAModelData) :: tModel, tSUBQModel
+    type(MQMQAInteractionTerm), allocatable :: tAll(:), tOne(:), tNone(:), tSwapped(:)
     real(8), allocatable :: dMoles(:)
     logical :: lPass, lReport
     integer :: iKernelInfo
@@ -46,11 +49,19 @@ program TestMQMQAHessianVerification
     if (lReport) write(*,'(A,I0)') 'derivative-kernel iInfo = ',iKernelInfo
 
     call BuildModel(tModel,dMoles)
+    tSUBQModel=tModel
+    tSUBQModel%iModelType=MQMQA_MODEL_SUBQ
+    ! SUBG databases provide one common zeta. This deliberately nonuniform
+    ! matrix exercises the pair-specific SUBQ path and prevents a global-zeta
+    ! implementation from passing by coincidence.
+    tSUBQModel%dZeta=RESHAPE([3.8D0,4.0D0,4.2D0,4.4D0,4.1D0,4.3D0,4.5D0,4.7D0],[4,2])
     call BuildInteractions(tAll)
-    allocate(tNone(0),tOne(1))
+    allocate(tNone(0),tOne(1),tSwapped(1))
+    call SetGQTerm(tSwapped(1),MQMQA_TERM_G,1,1,1,2,1,1,0,0, &
+        [ .TRUE.,.FALSE. ],[ .FALSE.,.TRUE. ],48D0)
 
     if (lReport) then
-        write(*,'(A)') 'Stage MQ-1 supported nonmagnetic SUBG Hessian verification'
+        write(*,'(A)') 'Stage MQ-1 SUBG and staged SUBQ S3/chi/zeta Hessian verification'
         write(*,'(A,I0)') 'storage bits = ',STORAGE_SIZE(1D0)
         write(*,'(A,I0)') 'decimal precision = ',PRECISION(1D0)
         write(*,'(A,I0)') 'binary digits = ',DIGITS(1D0)
@@ -61,14 +72,23 @@ program TestMQMQAHessianVerification
     ! Add one physical/mathematical layer at a time. This localizes a failure to
     ! configurational mixing, one production family, or one ternary branch.
     call VerifyCase('reference + ideal',tModel,dMoles,1D0,tNone,lPass,lReport)
+    call VerifyCase('SUBQ nonuniform-zeta configurational',tSUBQModel,dMoles,1D0,tNone,lPass,lReport)
     tOne(1)=tAll(1); call VerifyCase('G binary',tModel,dMoles,1D0,tOne,lPass,lReport)
+    tOne(1)=tAll(1); call VerifyCase('SUBQ G binary chi incidence',tSUBQModel,dMoles,1D0,tOne,lPass,lReport)
+    call VerifyCase('SUBQ G binary swapped chi incidence',tSUBQModel,dMoles,1D0,tSwapped,lPass,lReport)
     tOne(1)=tAll(2); call VerifyCase('Q binary',tModel,dMoles,1D0,tOne,lPass,lReport)
     tOne(1)=tAll(3); call VerifyCase('ternary group 1',tModel,dMoles,1D0,tOne,lPass,lReport)
     tOne(1)=tAll(4); call VerifyCase('ternary group 2',tModel,dMoles,1D0,tOne,lPass,lReport)
     tOne(1)=tAll(5); call VerifyCase('ternary neither group',tModel,dMoles,1D0,tOne,lPass,lReport)
     tOne(1)=tAll(6); call VerifyCase('B family',tModel,dMoles,1D0,tOne,lPass,lReport)
+    tOne(1)=tAll(6); call VerifyCase('SUBQ nonuniform-zeta configurational + B', &
+        tSUBQModel,dMoles,1D0,tOne,lPass,lReport)
     call VerifyCase('integrated total',tModel,dMoles,1D0,tAll,lPass,lReport)
-    call VerifyBProductionIdentity(tModel,dMoles,tAll(6),lPass,lReport)
+    call VerifyS3FormulationDifference(tSUBQModel,dMoles,lPass,lReport)
+    call VerifyS3TotalSignificance(tSUBQModel,dMoles,tAll,lPass,lReport)
+    call VerifyPairSpecificZeta(tSUBQModel,dMoles,tNone,tAll(6),lPass,lReport)
+    call VerifyBProductionIdentity('SUBG common-zeta',tModel,dMoles,tAll(6),lPass,lReport)
+    call VerifyBProductionIdentity('SUBQ pair-specific-zeta',tSUBQModel,dMoles,tAll(6),lPass,lReport)
     call VerifyFailures(tModel,dMoles,tAll(1),lPass,lReport)
 
     if (lPass) then
@@ -93,9 +113,10 @@ contains
     !> \brief Build a positive interior state containing every canonical quadruplet.
     !>
     !> \details The synthetic topology is intentionally complete rather than a toy
-    !!          binary subset. Nonuniform moles, coordination numbers, zeta values,
-    !!          and reference energies prevent accidental cancellation from making
-    !!          an incorrect derivative appear correct.
+    !!          binary subset. Nonuniform moles, coordination numbers, and reference
+    !!          energies prevent accidental cancellation from making an incorrect
+    !!          derivative appear correct. This base SUBG model uses one common zeta;
+    !!          the caller installs nonuniform pair-specific values for SUBQ.
     !---------------------------------------------------------------------------------------------------------
     subroutine BuildModel(tData,dState)
 
@@ -123,7 +144,7 @@ contains
                 end do
             end do
         end do
-        tData%dZeta=RESHAPE([3.8D0,4.0D0,4.2D0,4.4D0,4.1D0,4.3D0,4.5D0,4.7D0],[4,2])
+        tData%dZeta=4.2D0
 
     end subroutine BuildModel
 
@@ -418,6 +439,435 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
+    !> \brief Quantify the published-versus-production SUBQ S3 formulation difference.
+    !>
+    !> \details Current production evaluates the S3 quadruplet term with ordinary
+    !!          pair fractions, while published Equations 29--31 appear to imply
+    !!          zeta-weighted pair fractions. At one deliberately nonuniform-zeta
+    !!          state, this diagnostic evaluates both scalar definitions and then
+    !!          finite-differences their signed difference. Stable, nonzero energy,
+    !!          gradient, and Hessian differences prove that the formulations are
+    !!          genuinely distinct without deciding which convention is intended.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine VerifyS3FormulationDifference(tData,dState,lAllPass,lVerbose)
+
+        type(MQMQAModelData), intent(in) :: tData
+        real(8), intent(in) :: dState(:)
+        logical, intent(inout) :: lAllPass
+        logical, intent(in) :: lVerbose
+
+        real(8), allocatable :: dGradientCoarse(:),dGradientFine(:)
+        real(8), allocatable :: dHessianCoarse(:,:),dHessianFine(:,:)
+        real(8) :: dProduction,dPaper,dDelta,dEnergyScaled,dGradientScaled,dHessianScaled
+        real(8) :: dGradientUncertainty,dHessianUncertainty,dStep,dGradientMax,dHessianMax
+        integer :: n,iInfo,iGradientWorst,iHessianRow,iHessianColumn,i,j
+        logical :: lCasePass
+
+        n=SIZE(dState)
+        allocate(dGradientCoarse(n),dGradientFine(n),dHessianCoarse(n,n),dHessianFine(n,n))
+        call EvaluateS3Definitions(tData,dState,dProduction,dPaper,iInfo)
+        lCasePass=iInfo==0
+        if (.NOT.lCasePass) then
+            if (lVerbose) write(*,'(/,A,I0)') 'SUBQ S3 formulation diagnostic iInfo = ',iInfo
+            lAllPass=.FALSE.
+            return
+        end if
+
+        dDelta=dPaper-dProduction
+        dEnergyScaled=ABS(dDelta)/MAX(1D0,ABS(dPaper),ABS(dProduction))
+        dStep=1D-3*MINVAL(dState)
+        call NumericalS3DifferenceDerivatives(tData,dState,dStep,dGradientCoarse,dHessianCoarse,iInfo)
+        lCasePass=lCasePass.AND.(iInfo==0)
+        call NumericalS3DifferenceDerivatives(tData,dState,0.5D0*dStep,dGradientFine,dHessianFine,iInfo)
+        lCasePass=lCasePass.AND.(iInfo==0)
+
+        dGradientScaled=SQRT(DOT_PRODUCT(dGradientFine,dGradientFine))/MAX(1D0,ABS(dDelta))
+        dHessianScaled=FrobeniusNorm(dHessianFine)/MAX(1D0,ABS(dDelta))
+        dGradientUncertainty=SQRT(DOT_PRODUCT(dGradientFine-dGradientCoarse, &
+            dGradientFine-dGradientCoarse))/MAX(1D0,SQRT(DOT_PRODUCT(dGradientFine,dGradientFine)))
+        dHessianUncertainty=FrobeniusNorm(dHessianFine-dHessianCoarse)/ &
+            MAX(1D0,FrobeniusNorm(dHessianFine))
+
+        iGradientWorst=MAXLOC(ABS(dGradientFine),DIM=1)
+        dGradientMax=ABS(dGradientFine(iGradientWorst))
+        iHessianRow=1; iHessianColumn=1; dHessianMax=0D0
+        do j=1,n
+            do i=1,n
+                if (ABS(dHessianFine(i,j))>dHessianMax) then
+                    dHessianMax=ABS(dHessianFine(i,j))
+                    iHessianRow=i; iHessianColumn=j
+                end if
+            end do
+        end do
+
+        ! The diagnostic must be non-vacuous and numerically resolved. These
+        ! gates do not choose between the paper and production conventions.
+        lCasePass=lCasePass.AND.ALL(IEEE_IS_FINITE(dGradientFine)) &
+            .AND.ALL(IEEE_IS_FINITE(dHessianFine))
+        lCasePass=lCasePass.AND.(dEnergyScaled>1D-10).AND.(dGradientScaled>1D-10) &
+            .AND.(dHessianScaled>1D-10)
+        lCasePass=lCasePass.AND.(dGradientUncertainty<=0.05D0*dGradientScaled) &
+            .AND.(dHessianUncertainty<=0.10D0*dHessianScaled)
+        lAllPass=lAllPass.AND.lCasePass
+
+        if (lVerbose) then
+            write(*,'(/,A)') 'SUBQ S3 paper-versus-production formulation diagnostic'
+            write(*,'(A)') 'production S3 uses ordinary pair fractions; paper S3 uses zeta-weighted fractions'
+            write(*,'(A,ES14.6)') 'production S3 = ',dProduction
+            write(*,'(A,ES14.6)') 'paper S3 = ',dPaper
+            write(*,'(A,ES14.6)') 'signed Delta S3 (paper-production) = ',dDelta
+            write(*,'(A,ES12.4)') 'scaled energy difference = ',dEnergyScaled
+            write(*,'(A,ES12.4)') 'gradient difference norm (scaled) = ',dGradientScaled
+            write(*,'(A,ES12.4,A,I0)') 'maximum gradient difference = ',dGradientMax, &
+                ' at quadruplet ',iGradientWorst
+            write(*,'(A,ES12.4)') 'gradient refinement disagreement = ',dGradientUncertainty
+            write(*,'(A,ES12.4)') 'Hessian difference norm (scaled) = ',dHessianScaled
+            write(*,'(A,ES12.4,A,I0,A,I0,A)') 'maximum Hessian difference = ',dHessianMax, &
+                ' at (',iHessianRow,',',iHessianColumn,')'
+            write(*,'(A,ES12.4)') 'Hessian refinement disagreement = ',dHessianUncertainty
+            write(*,'(A,L1)') 'formulations numerically distinct and resolved = ',lCasePass
+        end if
+
+    end subroutine VerifyS3FormulationDifference
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Evaluate production-style and paper-style SUBQ S3 scalars independently.
+    !>
+    !> \details The two expressions differ only in the four pair fractions inside
+    !!          each quadruplet logarithm. Both use SUBQ theta=3/4, psi=1/2,
+    !!          identical equivalent fractions, and the same quadruplet multiplicity.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine EvaluateS3Definitions(tData,dState,dProduction,dPaper,iInfo)
+
+        type(MQMQAModelData), intent(in) :: tData
+        real(8), intent(in) :: dState(:)
+        real(8), intent(out) :: dProduction,dPaper
+        integer, intent(out) :: iInfo
+
+        integer :: n,q,i,j,a,b,x,y,nA,nX,iPosition,jPosition,iWeight
+        real(8) :: dN,dOrdinarySum,dWeightedSum,dProdPairLog,dPaperPairLog,dEquivalentLog
+        real(8), allocatable :: dFraction(:),dEquivalent1(:),dEquivalent2(:)
+        real(8), allocatable :: dOrdinary(:,:),dWeighted(:,:),dXOrdinary(:,:),dXWeighted(:,:)
+
+        iInfo=0; dProduction=0D0; dPaper=0D0
+        n=SIZE(dState)
+        if ((tData%iModelType/=MQMQA_MODEL_SUBQ).OR.(n/=SIZE(tData%iQuadruplet,1)) &
+            .OR.ANY(dState<=0D0)) then
+            iInfo=1
+            return
+        end if
+        allocate(dFraction(n),dEquivalent1(tData%nSublattice1),dEquivalent2(tData%nSublattice2), &
+            dOrdinary(tData%nSublattice1,tData%nSublattice2), &
+            dWeighted(tData%nSublattice1,tData%nSublattice2), &
+            dXOrdinary(tData%nSublattice1,tData%nSublattice2), &
+            dXWeighted(tData%nSublattice1,tData%nSublattice2))
+
+        dN=SUM(dState); dFraction=dState/dN
+        dEquivalent1=0D0; dEquivalent2=0D0; dOrdinary=0D0; dWeighted=0D0
+        do q=1,n
+            a=tData%iQuadruplet(q,1); b=tData%iQuadruplet(q,2)
+            x=tData%iQuadruplet(q,3); y=tData%iQuadruplet(q,4)
+            dEquivalent1(a)=dEquivalent1(a)+0.5D0*dFraction(q)
+            dEquivalent1(b)=dEquivalent1(b)+0.5D0*dFraction(q)
+            dEquivalent2(x)=dEquivalent2(x)+0.5D0*dFraction(q)
+            dEquivalent2(y)=dEquivalent2(y)+0.5D0*dFraction(q)
+            do i=1,tData%nSublattice1
+                nA=MERGE(1,0,a==i)+MERGE(1,0,b==i)
+                do j=1,tData%nSublattice2
+                    nX=MERGE(1,0,x==j)+MERGE(1,0,y==j)
+                    dOrdinary(i,j)=dOrdinary(i,j)+dState(q)*DFLOAT(nA*nX)
+                    dWeighted(i,j)=dWeighted(i,j)+dState(q)*DFLOAT(nA*nX)/tData%dZeta(i,j)
+                end do
+            end do
+        end do
+        dOrdinarySum=SUM(dOrdinary); dWeightedSum=SUM(dWeighted)
+        if ((dOrdinarySum<=0D0).OR.(dWeightedSum<=0D0).OR.ANY(dEquivalent1<=0D0) &
+            .OR.ANY(dEquivalent2<=0D0)) then
+            iInfo=2
+            return
+        end if
+        dXOrdinary=dOrdinary/dOrdinarySum
+        dXWeighted=dWeighted/dWeightedSum
+
+        do q=1,n
+            a=tData%iQuadruplet(q,1); b=tData%iQuadruplet(q,2)
+            x=tData%iQuadruplet(q,3); y=tData%iQuadruplet(q,4)
+            iWeight=1
+            if (a/=b) iWeight=2*iWeight
+            if (x/=y) iWeight=2*iWeight
+            dProdPairLog=0D0; dPaperPairLog=0D0
+            do iPosition=1,2
+                do jPosition=3,4
+                    i=tData%iQuadruplet(q,iPosition)
+                    j=tData%iQuadruplet(q,jPosition)
+                    if ((dXOrdinary(i,j)<=0D0).OR.(dXWeighted(i,j)<=0D0)) then
+                        iInfo=3
+                        return
+                    end if
+                    dProdPairLog=dProdPairLog+DLOG(dXOrdinary(i,j))
+                    dPaperPairLog=dPaperPairLog+DLOG(dXWeighted(i,j))
+                end do
+            end do
+            dEquivalentLog=DLOG(dEquivalent1(a))+DLOG(dEquivalent1(b))+ &
+                DLOG(dEquivalent2(x))+DLOG(dEquivalent2(y))
+            dProduction=dProduction+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
+                -0.75D0*dProdPairLog+0.5D0*dEquivalentLog)
+            dPaper=dPaper+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
+                -0.75D0*dPaperPairLog+0.5D0*dEquivalentLog)
+        end do
+
+    end subroutine EvaluateS3Definitions
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Finite-difference the signed paper-minus-production S3 discrepancy.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine NumericalS3DifferenceDerivatives(tData,dState,dH,dGradient,dHessian,iInfo)
+
+        type(MQMQAModelData), intent(in) :: tData
+        real(8), intent(in) :: dState(:),dH
+        real(8), intent(out) :: dGradient(:),dHessian(:,:)
+        integer, intent(out) :: iInfo
+
+        integer :: n,i,j,iLocalInfo
+        real(8) :: dBase,dPlus,dMinus,dPP,dPM,dMP,dMM,dProd,dPaper
+        real(8), allocatable :: dTrial(:)
+
+        iInfo=0; n=SIZE(dState); allocate(dTrial(n))
+        call EvaluateS3Definitions(tData,dState,dProd,dPaper,iLocalInfo)
+        if (iLocalInfo/=0) then; iInfo=iLocalInfo; return; end if
+        dBase=dPaper-dProd
+        do i=1,n
+            dTrial=dState; dTrial(i)=dTrial(i)+dH
+            call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dPlus=dPaper-dProd
+            dTrial=dState; dTrial(i)=dTrial(i)-dH
+            call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dMinus=dPaper-dProd
+            if (iLocalInfo/=0) then; iInfo=iLocalInfo; return; end if
+            dGradient(i)=(dPlus-dMinus)/(2D0*dH)
+            dHessian(i,i)=(dPlus-2D0*dBase+dMinus)/(dH*dH)
+        end do
+        do j=2,n
+            do i=1,j-1
+                dTrial=dState; dTrial(i)=dTrial(i)+dH; dTrial(j)=dTrial(j)+dH
+                call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dPP=dPaper-dProd
+                dTrial=dState; dTrial(i)=dTrial(i)+dH; dTrial(j)=dTrial(j)-dH
+                call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dPM=dPaper-dProd
+                dTrial=dState; dTrial(i)=dTrial(i)-dH; dTrial(j)=dTrial(j)+dH
+                call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dMP=dPaper-dProd
+                dTrial=dState; dTrial(i)=dTrial(i)-dH; dTrial(j)=dTrial(j)-dH
+                call EvaluateS3Definitions(tData,dTrial,dProd,dPaper,iLocalInfo); dMM=dPaper-dProd
+                if (iLocalInfo/=0) then; iInfo=iLocalInfo; return; end if
+                dHessian(i,j)=(dPP-dPM-dMP+dMM)/(4D0*dH*dH)
+                dHessian(j,i)=dHessian(i,j)
+            end do
+        end do
+
+    end subroutine NumericalS3DifferenceDerivatives
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Compare the S3 formulation difference with complete controlled SUBQ scales.
+    !>
+    !> \details Three strictly positive states with the same total phase amount
+    !!          probe the baseline composition and two deterministic composition
+    !!          skews. The production-style total is evaluated by the complete
+    !!          standalone SUBQ model. Because the paper-style interpretation
+    !!          changes only S3, its complete energy, gradient, and Hessian equal
+    !!          the production totals plus the independently finite-differenced
+    !!          paper-minus-production S3 difference.
+    !!
+    !!          These ratios measure numerical significance within this controlled
+    !!          model. They do not measure equilibrium or phase-stability effects
+    !!          in an assessed database.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine VerifyS3TotalSignificance(tData,dBaseState,tTerm,lAllPass,lVerbose)
+
+        type(MQMQAModelData), intent(in) :: tData
+        real(8), intent(in) :: dBaseState(:)
+        type(MQMQAInteractionTerm), intent(in) :: tTerm(:)
+        logical, intent(inout) :: lAllPass
+        logical, intent(in) :: lVerbose
+
+        integer, parameter :: nCases=3
+        character(len=24), parameter :: cCaseName(nCases)=[character(len=24) :: &
+            'baseline composition','graded composition skew','alternating composition']
+        real(8), allocatable :: dState(:,:),dGradientProduction(:),dGradientDeltaCoarse(:)
+        real(8), allocatable :: dGradientDelta(:),dHessianProduction(:,:),dHessianDeltaCoarse(:,:)
+        real(8), allocatable :: dHessianDelta(:,:),dGradientPaper(:),dHessianPaper(:,:)
+        real(8) :: dGProduction,dGPaper,dS3Production,dS3Paper,dDeltaG,dTotalAmount,dStep
+        real(8) :: dEnergyRatio,dGradientRatio,dHessianRatio,dGradientUncertainty,dHessianUncertainty
+        real(8) :: dMinEnergyRatio,dMaxEnergyRatio,dMinGradientRatio,dMaxGradientRatio
+        real(8) :: dMinHessianRatio,dMaxHessianRatio,dWeight
+        integer :: n,i,iCase,iInfo,iLocalInfo
+        logical :: lCasePass,lAllCasesPass
+
+        n=SIZE(dBaseState)
+        allocate(dState(n,nCases),dGradientProduction(n),dGradientDeltaCoarse(n), &
+            dGradientDelta(n),dHessianProduction(n,n),dHessianDeltaCoarse(n,n), &
+            dHessianDelta(n,n),dGradientPaper(n),dHessianPaper(n,n))
+
+        dTotalAmount=SUM(dBaseState)
+        dState(:,1)=dBaseState
+        do i=1,n
+            if (n>1) then
+                dWeight=0.55D0+0.90D0*DFLOAT(i-1)/DFLOAT(n-1)
+            else
+                dWeight=1D0
+            end if
+            dState(i,2)=dBaseState(i)*dWeight
+            dState(i,3)=dBaseState(i)*(0.55D0+0.18D0*DFLOAT(MOD(i,5)))
+        end do
+        do iCase=2,nCases
+            dState(:,iCase)=dState(:,iCase)*dTotalAmount/SUM(dState(:,iCase))
+        end do
+
+        dMinEnergyRatio=HUGE(1D0); dMaxEnergyRatio=0D0
+        dMinGradientRatio=HUGE(1D0); dMaxGradientRatio=0D0
+        dMinHessianRatio=HUGE(1D0); dMaxHessianRatio=0D0
+        lAllCasesPass=.TRUE.
+
+        if (lVerbose) then
+            write(*,'(/,A)') 'SUBQ S3 significance relative to the complete controlled model'
+            write(*,'(A)') 'All states are synthetic, positive, nonuniform-zeta states with equal total phase amount.'
+            write(*,'(A)') 'Ratios compare paper-minus-production S3 changes with complete production-style totals.'
+            write(*,'(A)') 'The energy ratio depends on the chosen reference-energy zero; derivative ratios do not.'
+            write(*,'(A)') 'state                       G production       Delta G   |Delta G|/|G|  '// &
+                '||Delta mu||/||mu||  ||Delta H||/||H||'
+        end if
+
+        do iCase=1,nCases
+            call CompMQMQAHessianUnconstrained(tData,dState(:,iCase),1D0,tTerm, &
+                dHessianProduction,iInfo,dGibbs=dGProduction,dGradient=dGradientProduction)
+            lCasePass=iInfo==0
+            call EvaluateS3Definitions(tData,dState(:,iCase),dS3Production,dS3Paper,iLocalInfo)
+            lCasePass=lCasePass.AND.(iLocalInfo==0)
+            dDeltaG=dS3Paper-dS3Production
+
+            dStep=1D-3*MINVAL(dState(:,iCase))
+            call NumericalS3DifferenceDerivatives(tData,dState(:,iCase),dStep, &
+                dGradientDeltaCoarse,dHessianDeltaCoarse,iLocalInfo)
+            lCasePass=lCasePass.AND.(iLocalInfo==0)
+            call NumericalS3DifferenceDerivatives(tData,dState(:,iCase),0.5D0*dStep, &
+                dGradientDelta,dHessianDelta,iLocalInfo)
+            lCasePass=lCasePass.AND.(iLocalInfo==0)
+
+            dGPaper=dGProduction+dDeltaG
+            dGradientPaper=dGradientProduction+dGradientDelta
+            dHessianPaper=dHessianProduction+dHessianDelta
+            dEnergyRatio=ABS(dDeltaG)/MAX(1D0,ABS(dGProduction),ABS(dGPaper))
+            dGradientRatio=VectorNorm(dGradientDelta)/ &
+                MAX(1D0,VectorNorm(dGradientProduction),VectorNorm(dGradientPaper))
+            dHessianRatio=FrobeniusNorm(dHessianDelta)/ &
+                MAX(1D0,FrobeniusNorm(dHessianProduction),FrobeniusNorm(dHessianPaper))
+            dGradientUncertainty=VectorNorm(dGradientDelta-dGradientDeltaCoarse)/ &
+                MAX(1D0,VectorNorm(dGradientDelta))
+            dHessianUncertainty=FrobeniusNorm(dHessianDelta-dHessianDeltaCoarse)/ &
+                MAX(1D0,FrobeniusNorm(dHessianDelta))
+
+            lCasePass=lCasePass.AND.IEEE_IS_FINITE(dGProduction).AND.IEEE_IS_FINITE(dGPaper) &
+                .AND.ALL(IEEE_IS_FINITE(dGradientPaper)).AND.ALL(IEEE_IS_FINITE(dHessianPaper))
+            lCasePass=lCasePass.AND.(dEnergyRatio>1D-12).AND.(dGradientRatio>1D-12) &
+                .AND.(dHessianRatio>1D-12)
+            lCasePass=lCasePass.AND.(dGradientUncertainty<=0.05D0*dGradientRatio) &
+                .AND.(dHessianUncertainty<=0.10D0*dHessianRatio)
+            lAllCasesPass=lAllCasesPass.AND.lCasePass
+
+            dMinEnergyRatio=MIN(dMinEnergyRatio,dEnergyRatio)
+            dMaxEnergyRatio=MAX(dMaxEnergyRatio,dEnergyRatio)
+            dMinGradientRatio=MIN(dMinGradientRatio,dGradientRatio)
+            dMaxGradientRatio=MAX(dMaxGradientRatio,dGradientRatio)
+            dMinHessianRatio=MIN(dMinHessianRatio,dHessianRatio)
+            dMaxHessianRatio=MAX(dMaxHessianRatio,dHessianRatio)
+
+            if (lVerbose) then
+                write(*,'(A24,5ES19.6)') cCaseName(iCase),dGProduction,dDeltaG,dEnergyRatio, &
+                    dGradientRatio,dHessianRatio
+                write(*,'(A,2ES12.4,A,L1)') '  derivative refinement disagreements (mu,H) = ', &
+                    dGradientUncertainty,dHessianUncertainty,' resolved = ',lCasePass
+            end if
+        end do
+
+        lAllPass=lAllPass.AND.lAllCasesPass
+        if (lVerbose) then
+            write(*,'(A,2ES12.4)') 'energy-ratio range = ',dMinEnergyRatio,dMaxEnergyRatio
+            write(*,'(A,2ES12.4)') 'chemical-potential-ratio range = ',dMinGradientRatio,dMaxGradientRatio
+            write(*,'(A,2ES12.4)') 'Hessian-ratio range = ',dMinHessianRatio,dMaxHessianRatio
+            write(*,'(A,L1)') 'complete-model significance diagnostic pass = ',lAllCasesPass
+        end if
+
+    end subroutine VerifyS3TotalSignificance
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Prove that nonuniform SUBQ zeta values affect the intended dependent quantities.
+    !>
+    !> \details A uniform-zeta SUBQ copy is compared with the nonuniform model at
+    !!          the same positive mole state. The configurational comparison tests
+    !!          the weighted pair distribution and its F marginals in S2. The
+    !!          B-only comparison tests direct use of the same weighted pair
+    !!          fractions. Requiring nonzero energy and Hessian differences prevents
+    !!          pair-specific zeta support from being merely accepted as unused data.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine VerifyPairSpecificZeta(tData,dState,tNone,tB,lAllPass,lVerbose)
+
+        type(MQMQAModelData), intent(in) :: tData
+        real(8), intent(in) :: dState(:)
+        type(MQMQAInteractionTerm), intent(in) :: tNone(:),tB
+        logical, intent(inout) :: lAllPass
+        logical, intent(in) :: lVerbose
+
+        type(MQMQAModelData) :: tUniform
+        type(MQMQAInteractionTerm) :: tOnly(1)
+        real(8), allocatable :: dHNonuniform(:,:),dHUniform(:,:)
+        real(8) :: dG,dRef,dIdealNonuniform,dIdealUniform,dEx,dEnergyDifference,dHessianDifference
+        real(8) :: dBNonuniform,dBUniform,dBEnergyDifference,dBHessianDifference
+        integer :: iInfo,n
+
+        n=SIZE(dState)
+        allocate(dHNonuniform(n,n),dHUniform(n,n))
+        tUniform=tData
+        tUniform%dZeta=SUM(tData%dZeta)/DFLOAT(SIZE(tData%dZeta))
+
+        call CompMQMQAGibbsEnergyUnconstrained(tData,dState,1D0,tNone,dG,dRef,dIdealNonuniform,dEx,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAGibbsEnergyUnconstrained(tUniform,dState,1D0,tNone,dG,dRef,dIdealUniform,dEx,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAHessianUnconstrained(tData,dState,1D0,tNone,dHNonuniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAHessianUnconstrained(tUniform,dState,1D0,tNone,dHUniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        dEnergyDifference=NormalizedDifference(dIdealNonuniform,dIdealUniform)
+        dHessianDifference=FrobeniusNorm(dHNonuniform-dHUniform)/ &
+            MAX(1D0,FrobeniusNorm(dHNonuniform),FrobeniusNorm(dHUniform))
+
+        tOnly(1)=tB
+        call CompMQMQAGibbsEnergyUnconstrained(tData,dState,0D0,tOnly,dG,dRef,dIdealNonuniform,dBNonuniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAGibbsEnergyUnconstrained(tUniform,dState,0D0,tOnly,dG,dRef,dIdealUniform,dBUniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAHessianUnconstrained(tData,dState,0D0,tOnly,dHNonuniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        call CompMQMQAHessianUnconstrained(tUniform,dState,0D0,tOnly,dHUniform,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==0)
+        dBEnergyDifference=NormalizedDifference(dBNonuniform,dBUniform)
+        dBHessianDifference=FrobeniusNorm(dHNonuniform-dHUniform)/ &
+            MAX(1D0,FrobeniusNorm(dHNonuniform),FrobeniusNorm(dHUniform))
+
+        lAllPass=lAllPass.AND.(dEnergyDifference>1D-8).AND.(dHessianDifference>1D-8) &
+            .AND.(dBEnergyDifference>1D-8).AND.(dBHessianDifference>1D-8)
+        if (lVerbose) then
+            write(*,'(/,A)') 'SUBQ pair-specific-zeta non-vacuity'
+            write(*,'(A,ES12.4)') 'configurational energy difference = ',dEnergyDifference
+            write(*,'(A,ES12.4)') 'configurational Hessian difference = ',dHessianDifference
+            write(*,'(A,ES12.4)') 'B energy difference = ',dBEnergyDifference
+            write(*,'(A,ES12.4)') 'B Hessian difference = ',dBHessianDifference
+        end if
+
+    end subroutine VerifyPairSpecificZeta
+
+
+    !---------------------------------------------------------------------------------------------------------
     !> \brief Verify why B-family energy equals total quadruplet moles times its composition-only local modifier.
     !>
     !> \details N_Q denotes the sum of all quadruplet mole amounts. This check
@@ -426,8 +876,9 @@ contains
     !!          potentials. Agreement rules out choosing N_Q merely because it
     !!          makes the standalone finite differences self-consistent.
     !---------------------------------------------------------------------------------------------------------
-    subroutine VerifyBProductionIdentity(tData,dState,tB,lAllPass,lVerbose)
+    subroutine VerifyBProductionIdentity(cName,tData,dState,tB,lAllPass,lVerbose)
 
+        character(*), intent(in) :: cName
         type(MQMQAModelData), intent(in) :: tData
         real(8), intent(in) :: dState(:)
         type(MQMQAInteractionTerm), intent(in) :: tB
@@ -492,7 +943,8 @@ contains
             dError=MAX(dError,NormalizedDifference(dExpected(q),dGradient(q)))
         end do
         lAllPass=lAllPass.AND.(iInfo==0).AND.(dError<=1D-12)
-        if (lVerbose) write(*,'(/,A,ES12.4)') 'B production-gradient identity error = ',dError
+        if (lVerbose) write(*,'(/,A,A,ES12.4)') TRIM(cName), &
+            ' B production-gradient identity error = ',dError
 
     end subroutine VerifyBProductionIdentity
 
@@ -506,6 +958,7 @@ contains
         logical, intent(inout) :: lAllPass
         logical, intent(in) :: lVerbose
 
+        type(MQMQAModelData) :: tBadModel
         type(MQMQAInteractionTerm) :: tBad(1)
         real(8), allocatable :: dBadState(:)
         real(8) :: dG,dRef,dIdeal,dEx
@@ -520,7 +973,16 @@ contains
         tBad(1)=tTemplate
         call CompMQMQAGibbsEnergyUnconstrained(tData,dBadState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
         lAllPass=lAllPass.AND.(iInfo==4)
-        if (lVerbose) write(*,'(/,A)') 'failure checks: R rejected and boundary state rejected'
+        tBadModel=tData
+        tBadModel%dZeta(1,1)=1.25D0*tBadModel%dZeta(1,1)
+        call CompMQMQAGibbsEnergyUnconstrained(tBadModel,dState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==7)
+        tBadModel=tData
+        tBadModel%iModelType=0
+        call CompMQMQAGibbsEnergyUnconstrained(tBadModel,dState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
+        lAllPass=lAllPass.AND.(iInfo==6)
+        if (lVerbose) write(*,'(/,A)') &
+            'failure checks: R, boundary state, nonuniform SUBG zeta, and unknown formulation rejected'
 
     end subroutine VerifyFailures
 
@@ -542,6 +1004,12 @@ contains
         real(8), intent(in) :: dA(:,:)
         FrobeniusNorm=SQRT(SUM(dA*dA))
     end function FrobeniusNorm
+
+
+    real(8) function VectorNorm(dA)
+        real(8), intent(in) :: dA(:)
+        VectorNorm=SQRT(DOT_PRODUCT(dA,dA))
+    end function VectorNorm
 
 
     real(8) function MatrixTwoNorm(dA)

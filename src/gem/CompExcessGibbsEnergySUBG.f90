@@ -322,6 +322,9 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
             dPowYi  = 0.5D0
         end if
 
+        ! TODO Markus: Confirm whether SUBQ intentionally uses the ordinary
+        ! pair fractions dXij in S3. Published Eqs. 29--31 appear to imply the
+        ! zeta-weighted dXsij pair fractions when zeta is pair-specific.
         if (.NOT. (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll) == 0D0)) then
             dSum = iWeight * (dXij(ii,ka) * dXij(ii,la) * dXij(jj,ka) * dXij(jj,la))**dPowXij &
                             / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi

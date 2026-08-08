@@ -1,8 +1,8 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    ModuleMQMQAUnconstrained.f90
-!> \brief   Disconnected Hessian for the supported nonmagnetic SUBG scalar forms.
+!> \brief   Disconnected Hessian for SUBG and staged nonmagnetic SUBQ scalar forms.
 !>
-!> \details The module evaluates reference, traced SUBG configurational, G-family, Q-family, B-family,
+!> \details The module evaluates reference, traced configurational, G-family, Q-family, B-family,
 !!          and supported ternary scalar terms from generic arrays. It neither reads Thermochimica global
 !!          state nor maps curvature into GEMNewton. The ordinary-real energy evaluator is intentionally
 !!          independent of the private value/gradient/Hessian evaluator used for analytic derivatives.
@@ -27,10 +27,13 @@
 !!            quadruplet species, not a matrix expression.
 !!          - n(p) is the mole amount of quadruplet species p, and N_Q is the sum
 !!            of all quadruplet mole amounts in the phase.
-!!          - A "pair fraction" describes how frequently one first-sublattice
+!!          - An ordinary pair fraction describes how frequently one first-sublattice
 !!            constituent is paired with one second-sublattice constituent.
-!!          - zeta is fixed model data that changes the statistical weight of
-!!            different pair types.
+!!          - zeta is fixed model data with zero mole derivatives. SUBG supplies one
+!!            common zeta for every pair. SUBQ may supply a different zeta for each
+!!            pair, creating a second, normalized zeta-weighted pair distribution.
+!!            S2 and B use that weighted distribution; S3 retains ordinary pair
+!!            fractions and changes through its separate theta/psi exponents.
 !!          - chi and xi are normalized composition coordinates used by the G
 !!            and Q parameter families; they are calculated from quadruplet
 !!            populations and are not additional independent solver variables.
@@ -67,23 +70,28 @@ module ModuleMQMQAUnconstrained
     !=========================================================================================================
     ! SECTION 1: PUBLIC MODEL AND INTERACTION DESCRIPTIONS
     !
-    ! These types describe a local SUBG phase without reading ModuleThermo. They
+    ! These types describe a local MQMQA phase without reading ModuleThermo. They
     ! are the boundary between a future production-data adapter and the
     ! disconnected thermodynamic mathematics implemented below.
     !=========================================================================================================
+
+    integer, parameter, public :: MQMQA_MODEL_SUBG = 1
+    integer, parameter, public :: MQMQA_MODEL_SUBQ = 2
 
     integer, parameter, public :: MQMQA_TERM_G = 1
     integer, parameter, public :: MQMQA_TERM_Q = 2
     integer, parameter, public :: MQMQA_TERM_B = 3
     integer, parameter, public :: MQMQA_TERM_R = 4
 
-    !> Generic topology and constant data for one disconnected SUBG phase.
+    !> Generic topology and constant data for one disconnected MQMQA phase.
     !>
     !> Each row of iQuadruplet identifies [A,B,X,Y], where A/B belong to the
     !> first sublattice and X/Y belong to the second. Coordination numbers
     !> convert quadruplet amounts into site amounts. Zeta values provide the
     !> pair weighting used by the modified quasichemical composition variables.
     type, public :: MQMQAModelData
+        !> Configurational formulation. SUBG is the default retained by existing callers.
+        integer :: iModelType = MQMQA_MODEL_SUBG
         !> Number of constituents available on the cation-like sublattice.
         integer :: nSublattice1 = 0
         !> Number of constituents available on the anion-like sublattice.
@@ -92,7 +100,8 @@ module ModuleMQMQAUnconstrained
         integer, allocatable :: iQuadruplet(:,:)
         !> Coordination number associated with each of the four quadruplet positions.
         real(8), allocatable :: dCoordination(:,:)
-        !> Pair-specific zeta values indexed by first- and second-sublattice constituent.
+        !> Pair zeta values indexed by first- and second-sublattice constituent.
+        !> All entries must be equal for SUBG; SUBQ permits pair-specific values.
         real(8), allocatable :: dZeta(:,:)
         !> Standard Gibbs energy assigned to each quadruplet.
         real(8), allocatable :: dReferenceEnergy(:)
@@ -305,8 +314,8 @@ contains
     !=========================================================================================================
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Evaluate the disconnected SUBG scalar energy using ordinary real arithmetic.
-    !> \param[in]  tModel          Generic SUBG topology and model constants.
+    !> \brief Evaluate the selected disconnected MQMQA scalar energy using ordinary real arithmetic.
+    !> \param[in]  tModel          Generic MQMQA topology, formulation, and model constants.
     !> \param[in]  dMoles          Strictly positive quadruplet mole amounts.
     !> \param[in]  dIdealScale     Scale multiplying the traced configurational-energy expression.
     !> \param[in]  tInteraction    Supported nonmagnetic G, Q, and B interaction terms.
@@ -337,7 +346,7 @@ contains
     !>
     !> \details Optional energy and gradient outputs expose the derivative path for verification against the
     !!          independent ordinary-real evaluator. The raw Hessian is returned without symmetrization.
-    !> \param[in]  tModel             Generic SUBG topology and model constants.
+    !> \param[in]  tModel             Generic MQMQA topology, formulation, and model constants.
     !> \param[in]  dMoles             Strictly positive quadruplet mole amounts.
     !> \param[in]  dIdealScale        Scale multiplying the traced configurational-energy expression.
     !> \param[in]  tInteraction       Supported nonmagnetic G, Q, and B interaction terms.
@@ -434,7 +443,7 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Enforce the mathematical domain assumed by the disconnected SUBG equations.
+    !> \brief Enforce the mathematical domain assumed by the disconnected MQMQA equations.
     !>
     !> \details The analytic Hessian is an interior-state object. Zero constituent
     !!          populations would make logarithms or normalized ratios singular, so
@@ -456,6 +465,11 @@ contains
             iInfo = 1
             return
         end if
+        if ((tModel%iModelType /= MQMQA_MODEL_SUBG) .AND. &
+            (tModel%iModelType /= MQMQA_MODEL_SUBQ)) then
+            iInfo = 6
+            return
+        end if
         if (.NOT. ALLOCATED(tModel%iQuadruplet) .OR. .NOT. ALLOCATED(tModel%dCoordination) .OR. &
             .NOT. ALLOCATED(tModel%dZeta) .OR. .NOT. ALLOCATED(tModel%dReferenceEnergy)) then
             iInfo = 2
@@ -474,6 +488,16 @@ contains
         if (ANY(dMoles <= 0D0) .OR. ANY(tModel%dCoordination <= 0D0) .OR. ANY(tModel%dZeta <= 0D0)) then
             iInfo = 4
             return
+        end if
+        ! Thermochimica parses one common FNN/SNN ratio for SUBG but one value
+        ! per constituent pair for SUBQ. Enforcing that distinction prevents a
+        ! nominal SUBG fixture from silently exercising SUBQ weighting.
+        if (tModel%iModelType == MQMQA_MODEL_SUBG) then
+            if (MAXVAL(ABS(tModel%dZeta-tModel%dZeta(1,1))) > &
+                1D-12*MAX(1D0,ABS(tModel%dZeta(1,1)))) then
+                iInfo = 7
+                return
+            end if
         end if
         if (ANY(tModel%iQuadruplet(:,1:2) < 1) .OR. &
             ANY(tModel%iQuadruplet(:,1:2) > tModel%nSublattice1) .OR. &
@@ -570,7 +594,7 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Evaluate the independent ordinary-real SUBG energy path.
+    !> \brief Evaluate the independent ordinary-real MQMQA energy path.
     !>
     !> \details This path deliberately does not carry derivatives. Finite differences
     !!          of this independently coded scalar energy therefore test the analytic
@@ -585,7 +609,8 @@ contains
         integer, intent(out) :: iInfo
 
         integer :: a, x, q, iPosition, jPosition, iWeight
-        real(8) :: dN, dS1, dS2, dS3, dDen
+        real(8) :: dN, dS1, dS2, dS3, dDen, dTheta, dPsi
+        real(8) :: dPairLogBlock, dEquivalentLogBlock, dLogRatio
         real(8), allocatable :: dQuadFraction(:), dSiteAmount1(:), dSiteAmount2(:), dSiteFraction1(:), dSiteFraction2(:)
         real(8), allocatable :: dEquivalent1(:), dEquivalent2(:), dPairAmount(:,:), dPairWeightedAmount(:,:)
         real(8), allocatable :: dPairFraction(:,:), dPairWeightedFraction(:,:), dF1(:), dF2(:)
@@ -637,27 +662,57 @@ contains
             end do
         end do
 
-        ! S3 measures ordering at the complete quadruplet level. It compares the
-        ! actual A-B-X-Y population with the population reconstructed from pair and
-        ! equivalent-constituent fractions. iWeight counts distinguishable swaps.
+        ! S3 measures ordering at the complete quadruplet level. The pair-log block
+        ! contains the four A-X, A-Y, B-X, and B-Y pair fractions. The equivalent-
+        ! fraction block contains the two first-sublattice and two second-sublattice
+        ! constituent fractions. SUBG gives both blocks unit weight. SUBQ retains the
+        ! same logarithmic derivative structure but uses theta=3/4 for the pair block
+        ! and psi=1/2 for the equivalent-fraction block.
+        dTheta = 0D0
+        dPsi = 0D0
+        select case(tModel%iModelType)
+        case(MQMQA_MODEL_SUBG)
+            dTheta = 1D0
+            dPsi = 1D0
+        case(MQMQA_MODEL_SUBQ)
+            dTheta = 3D0/4D0
+            dPsi = 1D0/2D0
+        end select
         dS3 = 0D0
         do q = 1, SIZE(dMoles)
+            ! TODO Markus: Confirm whether production intentionally evaluates
+            ! SUBQ S3 with ordinary pair fractions, rather than the zeta-weighted
+            ! pair fractions implied by published Eqs. 29--31. This standalone
+            ! scalar path follows current production pending that clarification.
             iWeight = 1
             if (tModel%iQuadruplet(q,1) /= tModel%iQuadruplet(q,2)) iWeight = 2*iWeight
             if (tModel%iQuadruplet(q,3) /= tModel%iQuadruplet(q,4)) iWeight = 2*iWeight
-            dDen = DFLOAT(iWeight)
+            dPairLogBlock = 0D0
             do iPosition = 1, 2
                 do jPosition = 3, 4
-                    dDen = dDen*dPairFraction(tModel%iQuadruplet(q,iPosition),tModel%iQuadruplet(q,jPosition))
+                    dDen = dPairFraction(tModel%iQuadruplet(q,iPosition),tModel%iQuadruplet(q,jPosition))
+                    if (dDen <= 0D0) then
+                        iInfo = 42
+                        return
+                    end if
+                    dPairLogBlock = dPairLogBlock+DLOG(dDen)
                 end do
             end do
-            dDen = dDen/(dEquivalent1(tModel%iQuadruplet(q,1))*dEquivalent1(tModel%iQuadruplet(q,2))* &
-                dEquivalent2(tModel%iQuadruplet(q,3))*dEquivalent2(tModel%iQuadruplet(q,4)))
-            if ((dQuadFraction(q) <= 0D0) .OR. (dDen <= 0D0)) then
+            if ((dQuadFraction(q) <= 0D0) .OR. &
+                (dEquivalent1(tModel%iQuadruplet(q,1)) <= 0D0) .OR. &
+                (dEquivalent1(tModel%iQuadruplet(q,2)) <= 0D0) .OR. &
+                (dEquivalent2(tModel%iQuadruplet(q,3)) <= 0D0) .OR. &
+                (dEquivalent2(tModel%iQuadruplet(q,4)) <= 0D0)) then
                 iInfo = 42
                 return
             end if
-            dS3 = dS3 + dMoles(q)*DLOG(dQuadFraction(q)/dDen)
+            dEquivalentLogBlock = DLOG(dEquivalent1(tModel%iQuadruplet(q,1)))+ &
+                DLOG(dEquivalent1(tModel%iQuadruplet(q,2)))+ &
+                DLOG(dEquivalent2(tModel%iQuadruplet(q,3)))+ &
+                DLOG(dEquivalent2(tModel%iQuadruplet(q,4)))
+            dLogRatio = DLOG(dQuadFraction(q))-DLOG(DFLOAT(iWeight))- &
+                dTheta*dPairLogBlock+dPsi*dEquivalentLogBlock
+            dS3 = dS3+dMoles(q)*dLogRatio
         end do
         dIdeal = dIdealScale*(dS1+dS2+dS3)
 
@@ -713,6 +768,13 @@ contains
         ! 1. constituent site amounts, adjusted by coordination numbers;
         ! 2. equivalent constituent fractions, counting the two positions equally;
         ! 3. cross-sublattice pair populations, counting every A-X pairing.
+        !
+        ! For pair i-j and quadruplet q, nA and nX are the numbers of times i
+        ! and j occur in q. The ordinary incidence is nA*nX. The weighted
+        ! incidence is the production Eq. 31 quantity (nA*nX)/zeta(i,j).
+        ! Zeta is fixed model data, so only the quadruplet mole amount carries
+        ! derivatives; pair-specific SUBQ values change the resulting normalized
+        ! weighted distribution without changing the ordinary pair fractions.
         do q = 1, SIZE(dMoles)
             a = tModel%iQuadruplet(q,1); b = tModel%iQuadruplet(q,2)
             x = tModel%iQuadruplet(q,3); y = tModel%iQuadruplet(q,4)
@@ -729,15 +791,17 @@ contains
                 do j = 1, tModel%nSublattice2
                     nX = MERGE(1,0,x==j)+MERGE(1,0,y==j)
                     dPairAmount(i,j) = dPairAmount(i,j) + dMoles(q)*DFLOAT(nA*nX)
-                    ! Zeta weighting modifies the statistical importance of each
-                    ! pair type. S2 and the B family use this weighted distribution.
+                    ! SUBG receives the same zeta in every entry, whereas SUBQ can
+                    ! assign a distinct fixed value to this exact constituent pair.
                     dPairWeightedAmount(i,j) = dPairWeightedAmount(i,j) + &
                         dMoles(q)*DFLOAT(nA*nX)/tModel%dZeta(i,j)
                 end do
             end do
         end do
-        ! Normalize the different descriptions separately. F1 and F2 are the
-        ! cation and anion marginals of the weighted pair distribution.
+        ! Normalize the ordinary and zeta-weighted pair amounts separately.
+        ! F1 and F2 are marginals of the weighted distribution, so their values
+        ! also change when SUBQ pair-specific zeta values differ. Their quotient
+        ! and logarithm derivative formulas do not need to be re-derived.
         dSum1 = SUM(dSiteAmount1); dSum2 = SUM(dSiteAmount2)
         dSiteFraction1 = dSiteAmount1/dSum1
         dSiteFraction2 = dSiteAmount2/dSum2
@@ -840,10 +904,12 @@ contains
     !---------------------------------------------------------------------------------------------------------
     !> \brief Evaluate the binary G/Q composition polynomial and optional ternary modifier.
     !>
-    !> \details Chi is a local binary coordinate restricted to quadruplets with
-    !!          the required diagonal environment. Xi is a broader projection that
-    !!          counts how much of each asymmetric group occurs with that environment.
-    !!          G-family parameters use chi; Q-family parameters use normalized xi.
+    !> \details Chi is a local binary coordinate weighted by how many of the two
+    !!          fixed-environment positions contain the selected constituent. SUBG
+    !!          admits only a fully matching diagonal environment, while SUBQ uses
+    !!          half the matching-position count and therefore permits weights 1,
+    !!          1/2, and 0. Xi remains a broader projection of asymmetric-group
+    !!          occurrence. G-family parameters use chi; Q-family parameters use xi.
     !---------------------------------------------------------------------------------------------------------
     subroutine ScalarGQModifier(tModel,dQuadFraction,tTerm,dModifier,iInfo)
 
@@ -855,6 +921,7 @@ contains
 
         integer :: q, a, b, x, y, nFixed
         real(8) :: dChi1, dChi2, dChiDen, dXi1, dXi2, dXiDen, dTernary
+        real(8) :: dEnvironmentWeight
 
         dChi1 = 0D0; dChi2 = 0D0; dChiDen = 0D0; dXi1 = 0D0; dXi2 = 0D0
         do q = 1, SIZE(dQuadFraction)
@@ -862,12 +929,24 @@ contains
             x = tModel%iQuadruplet(q,3); y = tModel%iQuadruplet(q,4)
             if (tTerm%iX == tTerm%iY) then
                 ! Binary branch with fixed X-X environment: A/B carry the
-                ! changing binary composition on the first sublattice.
-                if ((x == tTerm%iX) .AND. (y == tTerm%iX)) then
-                    if (tTerm%lGroup1(a) .AND. tTerm%lGroup1(b)) dChi1 = dChi1+dQuadFraction(q)
-                    if (tTerm%lGroup2(a) .AND. tTerm%lGroup2(b)) dChi2 = dChi2+dQuadFraction(q)
+                ! changing binary composition on the first sublattice. This mirrors
+                ! production SUBG/SUBQ selection directly from the two constituent
+                ! indices: both matches give one, a single SUBQ match gives one half.
+                dEnvironmentWeight = 0D0
+                if ((tTerm%iX == x) .AND. (tTerm%iX == y)) then
+                    dEnvironmentWeight = 1D0
+                else if ((tModel%iModelType == MQMQA_MODEL_SUBQ) .AND. &
+                    ((tTerm%iX == x) .OR. (tTerm%iX == y))) then
+                    dEnvironmentWeight = 0.5D0
+                end if
+                if (dEnvironmentWeight > 0D0) then
+                    if (tTerm%lGroup1(a) .AND. tTerm%lGroup1(b)) &
+                        dChi1 = dChi1+dEnvironmentWeight*dQuadFraction(q)
+                    if (tTerm%lGroup2(a) .AND. tTerm%lGroup2(b)) &
+                        dChi2 = dChi2+dEnvironmentWeight*dQuadFraction(q)
                     if ((tTerm%lGroup1(a).OR.tTerm%lGroup2(a)) .AND. &
-                        (tTerm%lGroup1(b).OR.tTerm%lGroup2(b))) dChiDen = dChiDen+dQuadFraction(q)
+                        (tTerm%lGroup1(b).OR.tTerm%lGroup2(b))) &
+                        dChiDen = dChiDen+dEnvironmentWeight*dQuadFraction(q)
                 end if
                 nFixed = MERGE(1,0,x==tTerm%iX)+MERGE(1,0,y==tTerm%iX)
                 if (tTerm%lGroup1(a)) dXi1=dXi1+0.25D0*dQuadFraction(q)*nFixed
@@ -877,11 +956,21 @@ contains
             else
                 ! Sublattice-swapped binary branch with fixed A-A environment:
                 ! X/Y carry the changing composition on the second sublattice.
-                if ((a == tTerm%iA) .AND. (b == tTerm%iA)) then
-                    if (tTerm%lGroup1(x) .AND. tTerm%lGroup1(y)) dChi1=dChi1+dQuadFraction(q)
-                    if (tTerm%lGroup2(x) .AND. tTerm%lGroup2(y)) dChi2=dChi2+dQuadFraction(q)
+                dEnvironmentWeight = 0D0
+                if ((tTerm%iA == a) .AND. (tTerm%iA == b)) then
+                    dEnvironmentWeight = 1D0
+                else if ((tModel%iModelType == MQMQA_MODEL_SUBQ) .AND. &
+                    ((tTerm%iA == a) .OR. (tTerm%iA == b))) then
+                    dEnvironmentWeight = 0.5D0
+                end if
+                if (dEnvironmentWeight > 0D0) then
+                    if (tTerm%lGroup1(x) .AND. tTerm%lGroup1(y)) &
+                        dChi1=dChi1+dEnvironmentWeight*dQuadFraction(q)
+                    if (tTerm%lGroup2(x) .AND. tTerm%lGroup2(y)) &
+                        dChi2=dChi2+dEnvironmentWeight*dQuadFraction(q)
                     if ((tTerm%lGroup1(x).OR.tTerm%lGroup2(x)) .AND. &
-                        (tTerm%lGroup1(y).OR.tTerm%lGroup2(y))) dChiDen=dChiDen+dQuadFraction(q)
+                        (tTerm%lGroup1(y).OR.tTerm%lGroup2(y))) &
+                        dChiDen=dChiDen+dEnvironmentWeight*dQuadFraction(q)
                 end if
                 nFixed = MERGE(1,0,a==tTerm%iA)+MERGE(1,0,b==tTerm%iA)
                 if (tTerm%lGroup1(x)) dXi1=dXi1+0.25D0*dQuadFraction(q)*nFixed
@@ -1061,7 +1150,9 @@ contains
         integer, intent(out) :: iInfo
 
         integer :: nQuad, q, a, b, x, y, i, j, nA, nX, iPosition, jPosition, iWeight
+        real(8) :: dTheta, dPsi
         type(SecondOrderScalar) :: tN, tS1, tS2, tS3, tDen, tTermValue
+        type(SecondOrderScalar) :: tPairLogBlock, tEquivalentLogBlock, tLogRatio
         type(SecondOrderScalar) :: tMoles(SIZE(dMoles)), tQuadFraction(SIZE(dMoles))
         type(SecondOrderScalar) :: tSiteAmount1(tModel%nSublattice1), tSiteAmount2(tModel%nSublattice2)
         type(SecondOrderScalar) :: tSiteFraction1(tModel%nSublattice1), tSiteFraction2(tModel%nSublattice2)
@@ -1113,6 +1204,9 @@ contains
         ! This is the derivative-carrying counterpart of AllocateScalarState.
         ! Because each tMoles(q) is seeded independently, these projections also
         ! construct their complete first- and second-order composition response.
+        ! The coefficient (nA*nX)/zeta(i,j) is constant with respect to moles:
+        ! SUBQ changes its pair-specific numerical value, not the outer product,
+        ! quotient, logarithm, or Hessian propagation rules.
         do q=1,nQuad
             a=tModel%iQuadruplet(q,1); b=tModel%iQuadruplet(q,2)
             x=tModel%iQuadruplet(q,3); y=tModel%iQuadruplet(q,4)
@@ -1136,6 +1230,10 @@ contains
         end do
 
         tSiteSum1=ConstantSO(0D0,nQuad); tSiteSum2=ConstantSO(0D0,nQuad)
+        ! Normalize the weighted amounts and form their first- and second-
+        ! sublattice marginals. These F values feed S2; the complete weighted
+        ! pair distribution also feeds B. S3 below intentionally uses the
+        ! separately normalized ordinary pair distribution.
         do a=1,tModel%nSublattice1
             tSiteSum1=AddSO(tSiteSum1,tSiteAmount1(a))
         end do
@@ -1192,23 +1290,51 @@ contains
         end do
 
         ! S3: complete quadruplet-ordering correction relative to the pair model.
+        ! The derivative objects below retain every logarithm explicitly. SUBQ changes
+        ! only the fixed weights multiplying the pair and equivalent-fraction blocks.
+        dTheta=0D0
+        dPsi=0D0
+        select case(tModel%iModelType)
+        case(MQMQA_MODEL_SUBG)
+            dTheta=1D0
+            dPsi=1D0
+        case(MQMQA_MODEL_SUBQ)
+            dTheta=3D0/4D0
+            dPsi=1D0/2D0
+        end select
         tS3=ConstantSO(0D0,nQuad)
         do q=1,nQuad
+            ! TODO Markus: Confirm whether production intentionally evaluates
+            ! SUBQ S3 with ordinary pair fractions, rather than the zeta-weighted
+            ! pair fractions implied by published Eqs. 29--31. This derivative
+            ! path follows the production-aligned scalar path until clarified.
             iWeight=1
             if (tModel%iQuadruplet(q,1)/=tModel%iQuadruplet(q,2)) iWeight=2*iWeight
             if (tModel%iQuadruplet(q,3)/=tModel%iQuadruplet(q,4)) iWeight=2*iWeight
-            tDen=ConstantSO(DFLOAT(iWeight),nQuad)
+            tPairLogBlock=ConstantSO(0D0,nQuad)
             do iPosition=1,2
                 do jPosition=3,4
-                    tDen=MultiplySO(tDen,tPairFraction(tModel%iQuadruplet(q,iPosition), &
-                        tModel%iQuadruplet(q,jPosition)))
+                    tDen=tPairFraction(tModel%iQuadruplet(q,iPosition),tModel%iQuadruplet(q,jPosition))
+                    if (tDen%dValue<=0D0) then; iInfo=42; return; end if
+                    tPairLogBlock=AddSO(tPairLogBlock,LogSO(tDen))
                 end do
             end do
-            tDen=DivideSO(tDen,MultiplySO(MultiplySO(tEquivalent1(tModel%iQuadruplet(q,1)), &
-                tEquivalent1(tModel%iQuadruplet(q,2))),MultiplySO(tEquivalent2(tModel%iQuadruplet(q,3)), &
-                tEquivalent2(tModel%iQuadruplet(q,4)))))
-            if ((tQuadFraction(q)%dValue<=0D0).OR.(tDen%dValue<=0D0)) then; iInfo=42; return; end if
-            tS3=AddSO(tS3,MultiplySO(tMoles(q),LogSO(DivideSO(tQuadFraction(q),tDen))))
+            if ((tQuadFraction(q)%dValue<=0D0).OR. &
+                (tEquivalent1(tModel%iQuadruplet(q,1))%dValue<=0D0).OR. &
+                (tEquivalent1(tModel%iQuadruplet(q,2))%dValue<=0D0).OR. &
+                (tEquivalent2(tModel%iQuadruplet(q,3))%dValue<=0D0).OR. &
+                (tEquivalent2(tModel%iQuadruplet(q,4))%dValue<=0D0)) then
+                iInfo=42
+                return
+            end if
+            tEquivalentLogBlock=AddSO(AddSO(LogSO(tEquivalent1(tModel%iQuadruplet(q,1))), &
+                LogSO(tEquivalent1(tModel%iQuadruplet(q,2)))), &
+                AddSO(LogSO(tEquivalent2(tModel%iQuadruplet(q,3))), &
+                LogSO(tEquivalent2(tModel%iQuadruplet(q,4)))))
+            tLogRatio=SubtractSO(LogSO(tQuadFraction(q)),ConstantSO(DLOG(DFLOAT(iWeight)),nQuad))
+            tLogRatio=SubtractSO(tLogRatio,ScaleSO(tPairLogBlock,dTheta))
+            tLogRatio=AddSO(tLogRatio,ScaleSO(tEquivalentLogBlock,dPsi))
+            tS3=AddSO(tS3,MultiplySO(tMoles(q),tLogRatio))
         end do
         tIdeal=ScaleSO(AddSO(AddSO(tS1,tS2),tS3),dIdealScale)
 
@@ -1306,6 +1432,7 @@ contains
         integer, intent(inout) :: iInfo
 
         integer :: q,a,b,x,y,nFixed,nQuad
+        real(8) :: dEnvironmentWeight
         type(SecondOrderScalar) :: tChi1,tChi2,tChiDen,tXi1,tXi2,tXiDen,tTernary
 
         nQuad=SIZE(tQuadFraction)
@@ -1315,12 +1442,23 @@ contains
             a=tModel%iQuadruplet(q,1); b=tModel%iQuadruplet(q,2)
             x=tModel%iQuadruplet(q,3); y=tModel%iQuadruplet(q,4)
             if (tTerm%iX==tTerm%iY) then
-                ! Fixed X-X environment: differentiate A/B chi and xi coordinates.
-                if ((x==tTerm%iX).AND.(y==tTerm%iX)) then
-                    if (tTerm%lGroup1(a).AND.tTerm%lGroup1(b)) tChi1=AddSO(tChi1,tQuadFraction(q))
-                    if (tTerm%lGroup2(a).AND.tTerm%lGroup2(b)) tChi2=AddSO(tChi2,tQuadFraction(q))
+                ! Fixed X-X environment: only the incidence coefficient differs
+                ! between SUBG and SUBQ; DivideSO retains the quotient derivatives.
+                dEnvironmentWeight=0D0
+                if ((tTerm%iX==x).AND.(tTerm%iX==y)) then
+                    dEnvironmentWeight=1D0
+                else if ((tModel%iModelType==MQMQA_MODEL_SUBQ).AND. &
+                    ((tTerm%iX==x).OR.(tTerm%iX==y))) then
+                    dEnvironmentWeight=0.5D0
+                end if
+                if (dEnvironmentWeight>0D0) then
+                    if (tTerm%lGroup1(a).AND.tTerm%lGroup1(b)) &
+                        tChi1=AddSO(tChi1,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
+                    if (tTerm%lGroup2(a).AND.tTerm%lGroup2(b)) &
+                        tChi2=AddSO(tChi2,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
                     if ((tTerm%lGroup1(a).OR.tTerm%lGroup2(a)).AND. &
-                        (tTerm%lGroup1(b).OR.tTerm%lGroup2(b))) tChiDen=AddSO(tChiDen,tQuadFraction(q))
+                        (tTerm%lGroup1(b).OR.tTerm%lGroup2(b))) &
+                        tChiDen=AddSO(tChiDen,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
                 end if
                 nFixed=MERGE(1,0,x==tTerm%iX)+MERGE(1,0,y==tTerm%iX)
                 if (tTerm%lGroup1(a)) tXi1=AddSO(tXi1,ScaleSO(tQuadFraction(q),0.25D0*nFixed))
@@ -1329,11 +1467,21 @@ contains
                 if (tTerm%lGroup2(b)) tXi2=AddSO(tXi2,ScaleSO(tQuadFraction(q),0.25D0*nFixed))
             else
                 ! Fixed A-A environment: differentiate the sublattice-swapped X/Y coordinates.
-                if ((a==tTerm%iA).AND.(b==tTerm%iA)) then
-                    if (tTerm%lGroup1(x).AND.tTerm%lGroup1(y)) tChi1=AddSO(tChi1,tQuadFraction(q))
-                    if (tTerm%lGroup2(x).AND.tTerm%lGroup2(y)) tChi2=AddSO(tChi2,tQuadFraction(q))
+                dEnvironmentWeight=0D0
+                if ((tTerm%iA==a).AND.(tTerm%iA==b)) then
+                    dEnvironmentWeight=1D0
+                else if ((tModel%iModelType==MQMQA_MODEL_SUBQ).AND. &
+                    ((tTerm%iA==a).OR.(tTerm%iA==b))) then
+                    dEnvironmentWeight=0.5D0
+                end if
+                if (dEnvironmentWeight>0D0) then
+                    if (tTerm%lGroup1(x).AND.tTerm%lGroup1(y)) &
+                        tChi1=AddSO(tChi1,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
+                    if (tTerm%lGroup2(x).AND.tTerm%lGroup2(y)) &
+                        tChi2=AddSO(tChi2,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
                     if ((tTerm%lGroup1(x).OR.tTerm%lGroup2(x)).AND. &
-                        (tTerm%lGroup1(y).OR.tTerm%lGroup2(y))) tChiDen=AddSO(tChiDen,tQuadFraction(q))
+                        (tTerm%lGroup1(y).OR.tTerm%lGroup2(y))) &
+                        tChiDen=AddSO(tChiDen,ScaleSO(tQuadFraction(q),dEnvironmentWeight))
                 end if
                 nFixed=MERGE(1,0,a==tTerm%iA)+MERGE(1,0,b==tTerm%iA)
                 if (tTerm%lGroup1(x)) tXi1=AddSO(tXi1,ScaleSO(tQuadFraction(q),0.25D0*nFixed))
