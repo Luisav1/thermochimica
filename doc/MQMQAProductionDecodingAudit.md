@@ -14,11 +14,20 @@ native first derivatives and Hessian-vector products. `GEMNewton`, reciprocal
 `R` terms, magnetic energy, and unsupported parameter orientations remain
 outside this decoding and local-verification scope.
 
+The repeated stage names belong to separate model tracks:
+
+| Track | MQ-2A | MQ-2B |
+| --- | --- | --- |
+| Plain `SUBG` | Production scalar decoding | Native derivative verification |
+| `SUBQ` extension | FeTiVO `G/Q` scalar parity | Native gradient and Hessian verification |
+
 The production data flow is:
 
-1. `ParseCSDataBlock.f90` reads the plain-`SUBG` zeta value and pair counts.
-2. `ParseCSDataBlockSUBG.f90` reads constituents, chemical groups,
-   quadruplet topology, coordination numbers, and excess parameters.
+1. `ParseCSDataBlock.f90` reads the model-dependent `SUBG` or `SUBQ` zeta and
+   pair-count records.
+2. `ParseCSDataBlockSUBG.f90` provides the shared parser machinery for both
+   model labels, reading constituents, chemical groups, quadruplet topology,
+   coordination numbers, and excess parameters.
 3. `CheckSystemExcess.f90` removes constituents and quadruplets that are not
    present in the selected chemical system and renumbers the survivors.
 4. `CompThermoData.f90` evaluates temperature-dependent reference and excess
@@ -397,17 +406,20 @@ is `2.98E-17`, raw Hessian symmetry is `1.20E-16`, and homogeneity is
 `2.12E-17`. All 14 independent total-preserving mole-transfer directions show
 the expected second-order production-partial-molar finite-difference region;
 the worst-best normwise error is `7.22E-10`, and the worst componentwise scaled
-error at the normwise-best steps is `5.51E-10`. The database contains no B or R records, and its uniform zeta does
-not provide native evidence for the nonuniform pair-specific-zeta branch. It is
-therefore a native assessed SUBQ G/Q case, not native verification of every
-SUBQ feature.
+error at the normwise-best steps is `5.51E-10`. The database contains no `B` or
+`R` records, and its uniform zeta does not provide native evidence for the
+nonuniform pair-specific-zeta branch. It is therefore a native assessed SUBQ
+G/Q case, not native verification of every SUBQ feature.
 
-MQ-3A is recorded in `doc/MQMQAResponseMappingAudit.md`. The source audit finds
-that production plain-`SUBG` uses quadruplet fractions with one normalization
-constraint for the uncharged prototype; site, pair, coordination, zeta, and
-ternary quantities are derived functions rather than additional constrained
-unknowns. It identifies the bordered diagonal `1/x` response as the candidate
-Thermochimica local/GEM baseline for an uncharged normalized interior state.
-MQ-3B must establish that baseline numerically and verify the corrected
-`N*H_SUBG` local response independently before any reduced GEM contribution is
-implemented.
+`doc/MQMQAResponseMappingAudit.md` records both development tracks. The
+plain-`SUBG` track has progressed through the verified constrained response,
+reduced mapping, and reusable diagnostic-only MQ-4B correction builder. The
+new SUBQ MQ-3A audit finds that production SUBQ retains the same quadruplet
+variables, phase-amount scaling, normalization constraint, generic charge
+machinery, per-particle element forcing, and diagonal `1/x` GEM baseline.
+Current production SUBQ phases are normalization-only because electron IDs are
+assigned only to `SUBL`/`SUBLM`. Currently supported production SUBQ phases
+change the decoded thermodynamic gradient and curvature, not the response
+coordinate system. SUBQ MQ-3B must now re-establish the baseline and
+independently verify the corrected `N*H_SUBQ` constrained response before the
+existing SUBG-only builder can be broadened.

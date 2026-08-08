@@ -1,4 +1,10 @@
-# MQ-3A: Plain-SUBG Local Response and GEM Baseline Audit
+# MQMQA Local Response and GEM Mapping Audit
+
+This document records two related development tracks. The first sections trace
+the completed plain-`SUBG` path from MQ-3A through the reusable MQ-4B correction
+builder. The final section records the separate SUBQ MQ-3A audit that decides
+which response and mapping concepts may be reused and which require new native
+evidence.
 
 ## Scope
 
@@ -679,3 +685,315 @@ MQ-4C may call this builder from an experimental solver path and decide when a
 correction is trustworthy. That future stage must add controls, phase-by-phase
 aggregation in the live iteration, alpha-zero reference solves, and nonlinear
 globalization tests. MQ-4B does none of those things.
+
+## SUBQ MQ-3A Local Response Reuse Audit
+
+### Scope
+
+SUBQ MQ-3A determines whether the completed plain-`SUBG` local-response
+derivation applies to production `SUBQ`, now that the SUBQ scalar energy,
+gradient, Hessian, production decoder, and native FeTiVO derivative comparison
+have passed. This is a source-and-equation audit only. It does not broaden
+`BuildMQMQAGEMCorrection`, modify `GEMNewton`, or claim constrained-response
+verification for SUBQ.
+
+The audit distinguishes three questions that must not be collapsed:
+
+1. Does production `SUBQ` use the same local unknowns and constraints as
+   production `SUBG`?
+2. Does the verified SUBQ mole Hessian enter that response with the same
+   mole-to-composition scaling?
+3. Has the resulting constrained SUBQ response been independently verified?
+
+The source answers the first two questions affirmatively. The third remains
+SUBQ MQ-3B work.
+
+### Shared production path
+
+There is no separate production `CompExcessGibbsEnergySUBQ` routine.
+`CompExcessGibbsEnergy` dispatches both model labels through
+`CompExcessGibbsEnergySUBG`, which selects the SUBG or SUBQ thermodynamic
+formula internally. Outside that model evaluator, the production response path
+does not branch on `SUBG` versus `SUBQ`:
+
+```text
+CompMolFraction / Subminimization
+    -> solution-species mole fractions
+    -> per-particle element-potential forcing
+    -> generic normalization and optional charge rows
+
+GEMNewton
+    -> generic solution-species element block and residual
+    -> generic solution-phase amount row and column
+```
+
+`SubMinNewton` constructs the same diagonal local approximation
+`diag(1/x)` for every nonideal solution model. `GEMNewton` similarly assembles
+its baseline from `dMolFraction`, `dMolesPhase`, `dStoichSpecies`, and
+`iParticlesPerMole` without a SUBG/SUBQ branch. SUBQ therefore does not require
+a new baseline formula merely because its thermodynamic curvature differs.
+
+### Local variables and amount scaling
+
+For an active SUBQ phase, the independent local thermodynamic variables remain
+the moles of its quadruplet solution species:
+
+```text
+x_q = normalized dMolFraction for quadruplet q,
+N   = dMolesPhase(activeSlot),
+n_q = N*x_q.
+```
+
+The standalone SUBQ routine and the native MQ-2B comparison use the same
+unconstrained quadruplet-mole coordinates. The complete production partial
+molar is the derivative with respect to `n_q`; no reference-species or gauge
+transformation is required. Consequently,
+
+```text
+Hn = d(mu)/d(n),
+dn = N*dx at fixed N,
+Hx = N*Hn.
+```
+
+These units and chain-rule relations are model-independent. Pair-specific
+zeta changes values inside `mu`, `Hn`, and `Hx`; it does not change the
+independent mole coordinate or introduce a second phase-amount scale.
+
+As in the SUBG audit, `N*x` is the authoritative interior thermodynamic state.
+The species amounts floored by `GEMNewton` are an assembly safeguard and must
+be compared with, rather than silently substituted for, `N*x`.
+
+### Equality constraints and derived quantities
+
+The mandatory fixed-amount constraint remains quadruplet normalization:
+
+```text
+C_normalization = [1, 1, ..., 1],
+C_normalization*dx = sum_q dx_q = 0.
+```
+
+`SubMinNewton` has generic machinery to add a charge-neutrality row when
+`iPhaseElectronID(iPhase) /= 0`. Current `CompThermoData`, however, assigns a
+nonzero phase electron ID only to `SUBL` and `SUBLM`. The current production
+implementation therefore treats SUBQ phases as normalization-only; this is an
+implementation fact, not a claim that charged SUBQ is mathematically
+impossible. The assessed FeTiVO response test must still assert
+`iPhaseElectronID(SlagBsoln)==0` so the current behavior is recorded as
+executable evidence rather than silently inherited.
+
+SUBQ changes several derived thermodynamic quantities:
+
+- the `S3` pair-log and equivalent-fraction exponents;
+- the fixed environment incidence weights used by `chi`;
+- the pair-specific zeta-weighted populations and their propagated marginals;
+- the assessed production-family `Q` contributions in FeTiVO;
+- potentially other supported decoded terms in future databases.
+
+All remain deterministic functions of the quadruplet moles and fixed model
+data. They enter the verified gradient and Hessian through the chain rule. They
+are not independent response unknowns and do not receive separate Lagrange
+multipliers. Site fractions, pair fractions, zeta-weighted pair distributions,
+equivalent fractions, `chi`, `xi`, and `F` quantities therefore add no rows to
+the KKT constraint matrix.
+
+Positivity remains an inequality/domain requirement. Global element balance
+remains the GEM equation that supplies forcing. The phase assemblage remains
+unconstrained by this work.
+
+### Element-potential forcing and baseline response
+
+The SUBQ forcing matrix is the same production per-particle stoichiometric
+matrix used for SUBG:
+
+```text
+S(q,e) = dStoichSpecies(iFirst+q-1,e)
+         / iParticlesPerMole(iFirst+q-1).
+```
+
+Thus the candidate corrected response continues to satisfy
+
+```text
+[ Hx  C^T ] [ Rcorr   ] = [ S ]
+[ C    0  ] [ LambdaS ]   [ 0 ],
+```
+
+while the production baseline uses `Hbase=diag(1/x)`. Define the closed-form
+normalization-only species-response operator
+
+```text
+Mbase = diag(x) - x*x^T.
+```
+
+For the element-potential right-hand side used above, the corresponding
+composition response is
+
+```text
+Rbase = Mbase*S.
+```
+
+After mapping through the per-particle stoichiometry, the candidate phase-local
+response delta retains the completed SUBG form
+
+```text
+deltaA = N*S^T*(Rcorr-Rbase).
+```
+
+For the element residual, define the current off-stationary species forcing
+
+```text
+fMu = mu - 1.
+```
+
+The corrected residual response is obtained from
+
+```text
+[ Hx  C^T ] [ rMuCorr ] = [ fMu ]
+[ C    0  ] [ lambdaMu ]   [  0  ],
+```
+
+and the analogous baseline solve replaces `Hx` by `Hbase=diag(1/x)` to obtain
+`rMuBase`. The candidate residual correction is therefore
+
+```text
+deltaB = N*S^T*(rMuCorr-rMuBase).
+```
+
+This freezes the forcing, sign, phase-amount factor, and `mu-1` convention.
+Adding a constant-one vector to the forcing changes only the normalization
+multiplier, not the tangent composition response, but the subsequent SUBQ
+mapping test must reverify that cancellation and the combined affine identity
+before the live builder is broadened.
+
+The ordinary positive-interior baseline is the only baseline path in the first
+SUBQ response test. `SubMinNewton` also clamps or bounds diagonal entries in a
+fallback solve after its arrow solver fails or compositions become extremely
+small. MQ-3B deliberately excludes that fallback behavior: every stationary
+and perturbed composition must remain strictly positive and the ordinary
+`1/x` solve must succeed. Boundary and fallback support belongs to later
+eligibility or globalization work.
+
+### Production chemical-potential convention
+
+The same convention applies to both production model labels:
+
+- after the normal `CompChemicalPotential` path, `dChemicalPotential` already
+  contains the complete SUBQ partial molar because `CompExcessGibbsEnergy`
+  adds `dPartialExcessGibbs`;
+- immediately after a direct low-level call to
+  `CompExcessGibbsEnergySUBG`, the complete SUBQ partial molar is
+  `dChemicalPotential+dPartialExcessGibbs`.
+
+MQ-2B verified the second convention against the standalone analytic gradient.
+A future live builder must use the first convention and must not add the excess
+array again.
+
+### Evidence already available
+
+The assessed FeTiVO `SlagBsoln` case provides the following SUBQ evidence
+before constrained response is attempted:
+
+- 15 quadruplet species and a 14-dimensional normalization tangent space;
+- strict production SUBQ decoding with six `G` and eight `Q` records;
+- machine-level scalar and direct-gradient parity;
+- raw Hessian symmetry and radial homogeneity;
+- second-order finite differences of production partial molars in all 14
+  independent total-preserving directions;
+- a positive interior seed obtained by blending the converged composition
+  without changing total phase amount.
+
+This evidence establishes the local derivative object and production coordinate
+contract. It does not establish tangent-space positive definiteness, response
+to element-potential forcing, the rank of the supported forcing subspace, or
+nonlinear response agreement. Those are MQ-3B gates.
+
+FeTiVO has uniform zeta `2.4` and no `B` or `R` records. The first response test
+is therefore an assessed SUBQ `G/Q` test, not native response verification of
+every SUBQ feature. The documented paper-versus-production `S3` discrepancy is
+also not adjudicated here: the response path must follow current production
+Thermochimica until that model-definition question is resolved.
+
+### Reuse decision
+
+| Response component | SUBQ MQ-3A decision |
+| --- | --- |
+| Quadruplet-mole variables and `n=N*x` state | Reuse |
+| Mole-to-composition scaling `Hx=N*Hn` | Reuse |
+| Normalization constraint and generic charge machinery | Reuse; current SUBQ is normalization-only and must assert that state |
+| General bordered KKT solver | Reuse unchanged |
+| Null-space and forcing-basis construction | Reuse unchanged |
+| Per-particle stoichiometric forcing `S` | Reuse construction, rebuild from FeTiVO arrays |
+| Diagonal `diag(1/x)` GEM baseline and `Mbase=diag(x)-x*x^T` operator | Reuse formulas, reverify numerically for SUBQ |
+| Nonlinear finite-difference oracle architecture | Reuse structure; converge production SUBQ stationarity at every forcing |
+| Production decoder | Use strict `DecodeProductionSUBQPhase` |
+| Analytic curvature | Use verified SUBQ `CompMQMQAHessianUnconstrained` result |
+| Live MQ-4B builder | Do not reuse yet; it explicitly accepts only plain `SUBG` |
+| `GEMNewton` activation | Out of scope until SUBQ response and mapping pass |
+
+### SUBQ MQ-3B requirements
+
+The next stage should add a dedicated native SUBQ response test rather than
+silently routing SUBQ through the completed SUBG test:
+
+1. Reproduce the assessed FeTiVO state and construct the same strictly positive
+   20%-blended `SlagBsoln` composition used by MQ-2B. Treat this composition as
+   a nonlinear-solve seed, not automatically as the response-verification
+   state.
+2. Assert the model label, active phase, zero electron ID, 15-quadruplet
+   topology, six `G` records, eight `Q` records, uniform zeta, and preserved
+   phase amount.
+3. Decode with `DecodeProductionSUBQPhase`, reconstruct `S` from production
+   stoichiometry and particle counts, and retain the converged production
+   element potentials `Gamma`.
+4. At fixed `T`, `P`, `N`, `Gamma`, model, topology, parameters, and phase
+   identity, solve the production SUBQ partial-molar stationarity equations
+   from the blended seed to a nearby stationary composition `x0`. Report the
+   seed-to-root change, final stationarity residual, and `MINVAL(x0)`.
+5. Recompute the complete production partial molars and analytic SUBQ Hessian
+   at `n0=N*x0`, then form `Hx=N*Hn`. Build an orthonormal
+   normalization-tangent basis `Z` and report the inertia/eigenvalues of
+   `Z^T*Hx*Z`. Positive definiteness is required to claim that `x0` is a stable
+   local minimum. Otherwise classify the stationary point and do not complete
+   the first stable-response prototype with that state.
+6. Determine the independent rank of `Z^T*S` and construct the supported
+   element-potential forcing basis `P`. Report rank and null forcing directions.
+7. Pass the three-way ordinary-interior baseline comparison among the bordered
+   `diag(1/x0)` solve, `[diag(x0)-x0*x0^T]*S`, and a source-faithful phase-local
+   reconstruction from the FeTiVO arrays consumed by `GEMNewton`. Do not invoke
+   or claim coverage of the clamped fallback baseline.
+8. Solve corrected and baseline responses on the independent forcing basis.
+   Gate the KKT top-block residual, constraint residual, projected residual,
+   KKT-versus-null-space agreement, and normwise and componentwise response
+   residuals. Include a synthetic null forcing in `range(C^T)` and require zero
+   composition response.
+9. For every supported direction `P(:,j)` and perturbation size `h`, hold the
+   quantities listed in step 4 fixed except the forcing, set
+   `GammaPlus=Gamma+h*P(:,j)` and `GammaMinus=Gamma-h*P(:,j)`, and re-solve the
+   same nonlinear production SUBQ stationarity equations from `x0` to obtain
+   `xPlus` and `xMinus`. Do not globally re-equilibrate or permit a phase,
+   topology, parameter, or model-branch change.
+10. Use `(xPlus-xMinus)/(2*h)` as the independent nonlinear response oracle.
+    Require every nonlinear root and every intermediate accepted state to
+    remain strictly positive; clipping is not permitted.
+11. Estimate the oracle uncertainty from the nonlinear stationarity residual
+    and classify a point as resolved only when `u(h) <= 0.5*e(h)`. Apply
+    convergence-order gates only to resolved points. Require and report the
+    best resolved normwise error, maximum scaled component error and worst
+    quadruplet, observed order, and the raw minimum separately.
+12. Keep MQ-3B diagnostic-only. Do not broaden the MQ-4B builder, construct live
+    GEM corrections, or alter `GEMNewton` in the same stage.
+
+### SUBQ MQ-3A exit decision
+
+SUBQ uses the same production response coordinates, amount scaling, equality
+constraints, element-potential forcing, and historical GEM baseline as plain
+SUBG. Its pair-specific zeta, revised configurational powers, chi incidence,
+and `Q` terms change the thermodynamic gradient and curvature but do not create
+new independent constraints. The verified unconstrained SUBQ Hessian therefore
+has the correct variable space for the existing constrained-response
+architecture.
+
+SUBQ MQ-3A is complete as a derivation and source audit. SUBQ MQ-3B may now use
+the assessed FeTiVO `G/Q` case to converge and classify a positive stationary
+root, then verify its native constrained response. The existing live correction
+builder must remain SUBG-only until that response and the subsequent
+reduced-mapping evidence pass.
