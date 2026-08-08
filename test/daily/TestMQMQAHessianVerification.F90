@@ -442,12 +442,12 @@ contains
     !> \brief Quantify the published-versus-production SUBQ S3 formulation difference.
     !>
     !> \details Current production evaluates the S3 quadruplet term with ordinary
-    !!          pair fractions, while published Equations 29--31 appear to imply
-    !!          zeta-weighted pair fractions. At one deliberately nonuniform-zeta
-    !!          state, this diagnostic evaluates both scalar definitions and then
-    !!          finite-differences their signed difference. Stable, nonzero energy,
-    !!          gradient, and Hessian differences prove that the formulations are
-    !!          genuinely distinct without deciding which convention is intended.
+    !!          pair fractions. Published Equations (5)--(6) define X_i/k from
+    !!          pair amounts containing 1/zeta_i/k; Equations (16) and (29) use
+    !!          those normalized zeta-weighted fractions in S3, while Equation
+    !!          (31) retains the corresponding zeta-dependent derivative. This
+    !!          diagnostic evaluates both definitions and finite-differences their
+    !!          signed difference without deciding why production diverges.
     !---------------------------------------------------------------------------------------------------------
     subroutine VerifyS3FormulationDifference(tData,dState,lAllPass,lVerbose)
 

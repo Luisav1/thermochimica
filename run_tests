@@ -28,6 +28,7 @@ tail -1 test12out.txt
 ./TestCEFHessianVerification
 ./TestMQMQAHessianVerification
 ./TestMQMQANativeHessianVerification
+./TestMQMQASUBQNativeEnergyVerification
 ./TestConstrainedResponseSolver
 ./TestMQMQAResponseVerification
 ./TestMQMQAGEMMappingVerification

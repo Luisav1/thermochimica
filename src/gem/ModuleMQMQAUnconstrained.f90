@@ -680,10 +680,11 @@ contains
         end select
         dS3 = 0D0
         do q = 1, SIZE(dMoles)
-            ! TODO Markus: Confirm whether production intentionally evaluates
-            ! SUBQ S3 with ordinary pair fractions, rather than the zeta-weighted
-            ! pair fractions implied by published Eqs. 29--31. This standalone
-            ! scalar path follows current production pending that clarification.
+            ! TODO Markus: Confirm why production evaluates SUBQ S3 with ordinary
+            ! pair fractions. Published Eqs. (5)--(6) define X_i/k from amounts
+            ! containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
+            ! zeta-weighted fractions in S3, and Eq. (31) retains the same zeta
+            ! dependence in its derivative. This path follows current production.
             iWeight = 1
             if (tModel%iQuadruplet(q,1) /= tModel%iQuadruplet(q,2)) iWeight = 2*iWeight
             if (tModel%iQuadruplet(q,3) /= tModel%iQuadruplet(q,4)) iWeight = 2*iWeight
@@ -1304,10 +1305,11 @@ contains
         end select
         tS3=ConstantSO(0D0,nQuad)
         do q=1,nQuad
-            ! TODO Markus: Confirm whether production intentionally evaluates
-            ! SUBQ S3 with ordinary pair fractions, rather than the zeta-weighted
-            ! pair fractions implied by published Eqs. 29--31. This derivative
-            ! path follows the production-aligned scalar path until clarified.
+            ! TODO Markus: Confirm why production evaluates SUBQ S3 with ordinary
+            ! pair fractions. Published Eqs. (5)--(6) define X_i/k from amounts
+            ! containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
+            ! zeta-weighted fractions in S3, and Eq. (31) retains the same zeta
+            ! dependence in its derivative. This path mirrors production.
             iWeight=1
             if (tModel%iQuadruplet(q,1)/=tModel%iQuadruplet(q,2)) iWeight=2*iWeight
             if (tModel%iQuadruplet(q,3)/=tModel%iQuadruplet(q,4)) iWeight=2*iWeight

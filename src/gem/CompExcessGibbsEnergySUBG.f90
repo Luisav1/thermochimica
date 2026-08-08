@@ -322,9 +322,11 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
             dPowYi  = 0.5D0
         end if
 
-        ! TODO Markus: Confirm whether SUBQ intentionally uses the ordinary
-        ! pair fractions dXij in S3. Published Eqs. 29--31 appear to imply the
-        ! zeta-weighted dXsij pair fractions when zeta is pair-specific.
+        ! TODO Markus: Confirm why production SUBQ uses ordinary pair fractions
+        ! dXij in S3. Poschmann et al. Eqs. (5)--(6) define X_i/k from pair
+        ! amounts containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
+        ! zeta-weighted fractions in S3, and Eq. (31) retains the corresponding
+        ! 1/zeta_m/z derivative. See doc/MQMQAProductionDecodingAudit.md.
         if (.NOT. (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll) == 0D0)) then
             dSum = iWeight * (dXij(ii,ka) * dXij(ii,la) * dXij(jj,ka) * dXij(jj,la))**dPowXij &
                             / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi

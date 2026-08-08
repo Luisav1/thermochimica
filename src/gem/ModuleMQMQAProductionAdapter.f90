@@ -1,6 +1,6 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    ModuleMQMQAProductionAdapter.f90
-!> \brief   Decode one production plain-SUBG phase into the generic MQMQA Hessian interface.
+!> \brief   Decode production plain-SUBG or SUBQ phases into the generic MQMQA interface.
 !>
 !> \details Thermochimica stores MQMQA topology, coefficients, and constituent
 !!          grouping rules in filtered runtime arrays owned by ModuleThermo.
@@ -9,10 +9,10 @@
 !!          the production state.
 !!
 !!          The adapter is deliberately narrower than the generic mathematics:
-!!          - plain nonmagnetic SUBG local data only;
+!!          - plain nonmagnetic SUBG and SUBQ local data only;
 !!          - production G, Q, and B parameter labels;
 !!          - the traced first-sublattice ternary orientation;
-!!          - no SUBQ, reciprocal R, magnetic, or solver coupling behavior.
+!!          - no reciprocal R, magnetic, or solver coupling behavior.
 !!
 !!          Keeping this translation separate lets native tests prove that the
 !!          disconnected Hessian consumes the same topology and parameters as
@@ -27,12 +27,12 @@ module ModuleMQMQAProductionAdapter
         iPairID, iPhaseSublattice, iRegularParam, nConstituentSublattice, nInterpolationOverride, &
         nPairsSRO, nParamPhase, nSpeciesPhase
     USE ModuleMQMQAUnconstrained, ONLY: MQMQAModelData, MQMQAInteractionTerm, &
-        MQMQA_TERM_G, MQMQA_TERM_Q, MQMQA_TERM_B
+        MQMQA_MODEL_SUBG, MQMQA_MODEL_SUBQ, MQMQA_TERM_G, MQMQA_TERM_Q, MQMQA_TERM_B
 
     implicit none
     private
 
-    public :: DecodeProductionSUBGPhase
+    public :: DecodeProductionSUBGPhase, DecodeProductionSUBQPhase
 
 contains
 
@@ -57,6 +57,54 @@ contains
         type(MQMQAInteractionTerm), allocatable, intent(out) :: tInteraction(:)
         integer, intent(out) :: iInfo
 
+        call DecodeProductionPhase(iPhase,'SUBG',MQMQA_MODEL_SUBG,tModel,tInteraction,iInfo)
+
+    end subroutine DecodeProductionSUBGPhase
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Translate one filtered production plain-SUBQ phase.
+    !>
+    !> \param[in]  iPhase       Runtime solution-phase index.
+    !> \param[out] tModel       Generic quadruplet topology and constant data.
+    !> \param[out] tInteraction Active, supported excess-interaction records.
+    !> \param[out] iInfo        Zero on success; nonzero when production data fall outside the traced scope.
+    !>
+    !> \details SUBQ uses the same production topology and parameter records as
+    !!          SUBG. The model selector activates the SUBQ configurational
+    !!          exponents and environment weights and permits the decoded database
+    !!          to supply pair-specific zeta values. Keeping this entry point
+    !!          distinct prevents existing SUBG-only solver paths from becoming
+    !!          SUBQ-enabled accidentally.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine DecodeProductionSUBQPhase(iPhase,tModel,tInteraction,iInfo)
+
+        integer, intent(in) :: iPhase
+        type(MQMQAModelData), intent(out) :: tModel
+        type(MQMQAInteractionTerm), allocatable, intent(out) :: tInteraction(:)
+        integer, intent(out) :: iInfo
+
+        call DecodeProductionPhase(iPhase,'SUBQ',MQMQA_MODEL_SUBQ,tModel,tInteraction,iInfo)
+
+    end subroutine DecodeProductionSUBQPhase
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Shared production-array translation used by the strict SUBG and SUBQ entry points.
+    !>
+    !> \details The caller supplies both the required production phase label and
+    !!          the corresponding generic formulation selector. All remaining
+    !!          topology, zeta, reference-energy, and interaction decoding is
+    !!          intentionally identical so the two public paths cannot drift.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine DecodeProductionPhase(iPhase,cRequiredType,iModelType,tModel,tInteraction,iInfo)
+
+        integer, intent(in) :: iPhase, iModelType
+        character(len=*), intent(in) :: cRequiredType
+        type(MQMQAModelData), intent(out) :: tModel
+        type(MQMQAInteractionTerm), allocatable, intent(out) :: tInteraction(:)
+        integer, intent(out) :: iInfo
+
         integer :: a, iFirst, iInteraction, iPair, iParam, iSPI
         integer :: nActive, nQuad, nSub1, nSub2, x
         integer, allocatable :: iZetaCount(:,:)
@@ -66,7 +114,7 @@ contains
             iInfo = 1
             return
         end if
-        if (cSolnPhaseType(iPhase) /= 'SUBG') then
+        if (cSolnPhaseType(iPhase) /= cRequiredType) then
             iInfo = 2
             return
         end if
@@ -82,6 +130,7 @@ contains
             return
         end if
 
+        tModel%iModelType = iModelType
         tModel%nSublattice1 = nSub1
         tModel%nSublattice2 = nSub2
         allocate(tModel%iQuadruplet(nQuad,4),tModel%dCoordination(nQuad,4), &
@@ -134,7 +183,7 @@ contains
             return
         end if
 
-    end subroutine DecodeProductionSUBGPhase
+    end subroutine DecodeProductionPhase
 
 
     !---------------------------------------------------------------------------------------------------------
