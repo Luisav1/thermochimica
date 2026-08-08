@@ -15,6 +15,7 @@ import argparse
 import math
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 try:
@@ -452,7 +453,7 @@ def write_plot(
         fig.text(
             0.5,
             0.025,
-            display_caption,
+            textwrap.fill(display_caption, width=135),
             ha="center",
             va="bottom",
             fontsize=9,
@@ -1071,6 +1072,82 @@ def plot_standalone_mqmqa(lines: list[str], output_dir: Path) -> None:
     )
 
 
+def plot_standalone_subq(lines: list[str], output_dir: Path) -> None:
+    """Plot controlled SUBQ cases without conflating them with native decoding."""
+    plot_series = []
+    guide_data: tuple[list[float], list[float]] | None = None
+    summary_series: list[tuple[list[float], list[float]]] = []
+    cases = (
+        ("SUBQ configurational", "SUBQ nonuniform-zeta configurational"),
+        ("SUBQ G chi incidence", "SUBQ G binary chi incidence"),
+        ("SUBQ G swapped incidence", "SUBQ G binary swapped chi incidence"),
+        ("SUBQ configurational + B", "SUBQ nonuniform-zeta configurational + B"),
+    )
+    for label, report_name in cases:
+        marker = next(i for i, line in enumerate(lines) if line.strip() == report_name)
+        header = next(i for i in range(marker, len(lines)) if "3pt abs" in lines[i])
+        rows = numeric_rows(lines, header, 7)
+        h = [row[0] for row in rows]
+        error = [row[5] for row in rows]
+        plot_series.append((label, h, error, False))
+        summary_series.append((h, error))
+        guide_data = guide_data or (h, error)
+
+    displayed_h = [step for h_values, _ in summary_series for step in h_values]
+    if guide_data:
+        guide = slope_guide(
+            *guide_data,
+            4,
+            r"Extrapolated theoretical $O(h^4)$ truncation trend",
+            3.2,
+            4.8,
+            extrapolation_h=displayed_h,
+        )
+        if guide:
+            plot_series.append((*guide, True))
+
+    onset_values = [
+        onset
+        for h_values, error_values in summary_series
+        if (onset := small_h_upturn_onset(h_values, error_values)) is not None
+    ]
+    order_values = [
+        bounds
+        for h_values, error_values in summary_series
+        if (bounds := in_range_order_bounds(h_values, error_values, 3.2, 4.8)) is not None
+    ]
+    best_values = [
+        min(value for value in error_values if value > 0.0 and math.isfinite(value))
+        for _, error_values in summary_series
+    ]
+    if onset_values and math.isclose(min(onset_values), max(onset_values), rel_tol=1e-12):
+        onset_summary = f"small-$h$ upturn at $h$={onset_values[0]:.2e}"
+    elif onset_values:
+        onset_summary = (
+            f"small-$h$ upturn at $h$={min(onset_values):.2e}-{max(onset_values):.2e}"
+        )
+    else:
+        onset_summary = "no small-$h$ upturn observed in retained sweeps"
+
+    write_plot(
+        output_dir / "mqmqa_subq_standalone",
+        "Standalone SUBQ scalar-energy verification",
+        plot_series,
+        "Controlled nonuniform-zeta SUBQ configurational, chi-incidence, and B-family cases",
+        summary=[
+            f"5-point p={min(item[0] for item in order_values):.2f}-"
+            f"{max(item[1] for item in order_values):.2f}",
+            f"best scaled error={min(best_values):.2e}-{max(best_values):.2e}",
+            onset_summary,
+        ],
+        caption="The controlled cases verify the SUBQ configurational exponents, "
+        "mixed-environment chi weights, pair-specific zeta propagation, and B-family "
+        "curvature. They use synthetic interior states and do not constitute native "
+        "database-backed Thermochimica comparison.",
+        small_h_upturn_start=max(onset_values) if onset_values else None,
+    )
+
+
 def plot_native_mqmqa(lines: list[str], output_dir: Path) -> None:
     header = next(i for i, line in enumerate(lines) if line.startswith("dir  h"))
     rows = []
@@ -1155,6 +1232,7 @@ def main() -> None:
         cef_controlled,
     )
     plot_standalone_mqmqa(reports["standalone"], args.output_dir)
+    plot_standalone_subq(reports["standalone"], args.output_dir)
     plot_native_mqmqa(reports["native"], args.output_dir)
     print(f"Wrote reports and plots to {args.output_dir}")
 

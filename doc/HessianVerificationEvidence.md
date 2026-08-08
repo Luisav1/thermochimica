@@ -84,6 +84,7 @@ consistent with finite-precision cancellation**.
 | Native CEF partial molars | `3.2268E-10` worst-best | controlled and admissible converged states covered |
 | Standalone MQMQA scalar, three point | below `2.59E-8` in reported cases | raw symmetry below `5.13E-16` |
 | Standalone MQMQA scalar, five point | below `1.03E-10` in reported cases | homogeneity below `6.93E-16` |
+| Controlled SUBQ scalar, five point | `3.99E-11` to `1.42E-10` across plotted cases | observed orders `4.00` to `4.09`; nonuniform zeta, chi incidence, and B covered |
 | Native MQMQA partial molars | `1.1640E-10` worst-best | symmetry `7.5047E-20`; homogeneity `7.3714E-24` |
 
 The RKMP scalar order fixture uses TestThermo30's parsed plain-RKMP model but
@@ -143,6 +144,10 @@ into the RKMP stencil experiment:
 - The standalone MQMQA figure shows controlled nonmagnetic `SUBG` `G`, `Q`, and
   `B` cases. It verifies the standalone scalar forms and derivative propagation,
   not native database decoding.
+- The standalone SUBQ figure shows controlled nonuniform-zeta configurational,
+  mixed-environment chi-incidence, and `B` cases. It verifies the staged SUBQ
+  scalar forms and derivative propagation independently of the existing SUBG
+  figure. It is not yet a native `FeTiVO.dat` comparison.
 - The native MQMQA figure compares analytic Hessian-vector products with
   central finite differences of production partial molars along five
   total-preserving directions at a converged `CuFeC-Kang.dat` state. It is not
@@ -244,9 +249,14 @@ establish that exact curvature reduces iteration count or wall-clock time.
   coupled interaction families. CEF is not mapped into GEMNewton.
 - Standalone MQMQA evidence covers controlled nonmagnetic SUBG reference,
   configurational, G, Q, B, and traced ternary formulas.
+- Standalone SUBQ evidence covers controlled nonmagnetic SUBQ configurational
+  exponents, mixed-environment chi weights, pair-specific zeta propagation
+  through weighted-pair quantities, and B-family curvature. The separate
+  paper-versus-production S3 diagnostic characterizes, but does not adjudicate,
+  the ordinary-versus-zeta-weighted pair-fraction discrepancy.
 - Native MQMQA evidence covers nonmagnetic plain SUBG reference,
   configurational, and G-family behavior from `CuFeC-Kang.dat`.
-- Native SUBQ, Q-family parameters, B-family parameters, reciprocal R terms,
+- Native SUBQ, native Q-family parameters, B-family parameters, reciprocal R terms,
   magnetism, constrained MQMQA response, and MQMQA GEM integration remain
   outside the demonstrated scope.
 
