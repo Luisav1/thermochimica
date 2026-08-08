@@ -1,14 +1,18 @@
-# MQ-2A: MQMQA Production Decoding Audit
+# MQMQA Production Decoding Audit
 
 ## Scope
 
 This document freezes the translation from Thermochimica's current plain
-`SUBG` production state into the generic inputs accepted by
+`SUBG` and `SUBQ` production states into the generic inputs accepted by
 `ModuleMQMQAUnconstrained`.
 
-MQ-2A is a source audit only. It does not add a production adapter, call the
-new Hessian from a Thermochimica calculation, modify `GEMNewton`, or support
-`SUBQ`, reciprocal `R` terms, or magnetic energy.
+The original MQ-2A source audit covered plain `SUBG`; MQ-2B subsequently added
+and verified that adapter path. The later SUBQ MQ-2A extension reuses the same
+runtime-array translation, selects the SUBQ scalar formulation explicitly, and
+adds native scalar-energy parity. The SUBQ MQ-2B extension now also verifies
+native first derivatives and Hessian-vector products. `GEMNewton`, reciprocal
+`R` terms, magnetic energy, and unsupported parameter orientations remain
+outside this decoding and local-verification scope.
 
 The production data flow is:
 
@@ -21,8 +25,8 @@ The production data flow is:
    coefficients and converts them to Thermochimica's dimensionless units.
 5. `CompExcessGibbsEnergySUBG.f90` consumes the resulting runtime arrays.
 
-A future adapter must consume the **runtime arrays after steps 3 and 4**. It
-must not mix original parser indices with filtered runtime indices.
+The production adapter consumes the **runtime arrays after steps 3 and 4**. It
+does not mix original parser indices with filtered runtime indices.
 
 ## What Zeta Means
 
@@ -39,19 +43,48 @@ The weighted pair distribution is used by the configurational `S2` term and
 the production `B` interaction family.
 
 For plain `SUBG`, the current database format reads one zeta value and applies
-it to every A-X pair. The generic module stores `dZeta(A,X)` as a matrix so the
-mathematics remains explicit. The production adapter will fill every matrix
-entry from the corresponding runtime A-X pair record and will verify that all
-entries are present and positive. Pair-dependent zeta values occur in
-Thermochimica's `SUBQ` format, which is outside the current scope.
+it to every A-X pair. SUBQ can instead provide pair-dependent values. The
+generic module stores `dZeta(A,X)` as a matrix, and the production adapter fills
+every entry from the corresponding runtime A-X pair record while verifying that
+all entries are present and positive.
+
+### Published SUBQ S3 versus current production
+
+The published updated-MQMQA formulation is unambiguous about the pair fractions
+used by SUBQ `S3`:
+
+1. Poschmann et al. Eq. (5) defines each pair amount with a
+   `1/zeta(i,k)` factor.
+2. Eq. (6) normalizes those amounts to define `X(i,k)`, so `X(i,k)` is the
+   normalized zeta-weighted pair distribution.
+3. Eqs. (16) and (29) use those same `X(i,k)` quantities in the quadruplet
+   configurational term, with `phi=3/4` and `psi=1/2` for SUBQ.
+4. Eq. (31) retains `1/zeta(m,z)` in the corresponding pair-amount derivative.
+
+Current `CompExcessGibbsEnergySUBG.f90` instead uses the ordinary pair-fraction
+array `dXij` in the SUBQ `S3` block. The controlled paper-versus-production
+diagnostic proves that these definitions differ for nonuniform zeta. What
+remains unresolved is why production follows the ordinary-pair convention: an
+intentional later convention, database compatibility, an undocumented model
+decision, or an implementation discrepancy are all still possible. Until that
+history is adjudicated, the standalone production-aligned path continues to
+reproduce current Thermochimica and records the discrepancy explicitly. The
+complete-model derivative differences measured in the controlled synthetic
+states are modest but resolved and state-dependent; they do not establish that
+the discrepancy is globally small for all SUBQ states or databases.
 
 ## Phase and Array Boundaries
 
-For a candidate production phase `iSolnIndex`, the adapter must first require:
+The two public entry points enforce distinct phase-model contracts:
 
 ```fortran
-cSolnPhaseType(iSolnIndex) == 'SUBG'
+DecodeProductionSUBGPhase: cSolnPhaseType(iSolnIndex) == 'SUBG'
+DecodeProductionSUBQPhase: cSolnPhaseType(iSolnIndex) == 'SUBQ'
 ```
+
+Neither entry point accepts the other model type. Both then reuse the same
+filtered runtime ranges and topology translation while selecting their own
+standalone model formulation.
 
 The relevant runtime ranges are:
 
@@ -114,8 +147,8 @@ amount must be retained because an extensive-energy Hessian scales as the
 inverse phase amount.
 
 Only strictly positive interior states are admissible to the current generic
-Hessian. A future native test must report and skip a boundary state rather
-than clipping its composition.
+Hessian. Native tests must report and skip a boundary state rather than
+clipping its composition.
 
 ## Units
 
@@ -124,7 +157,7 @@ coefficients at the current temperature, then multiplies them by
 `1/(R*T)`. The local production routine consequently works in dimensionless
 energy units.
 
-The native adapter must therefore use:
+The production adapter therefore uses:
 
 ```text
 dIdealScale = 1
@@ -202,10 +235,13 @@ Supported ternary decoding is currently narrower than the parser storage:
 
 ## Explicit Scope Rejections
 
-The future MQ-2 adapter must reject, not approximate:
+The strict phase-type contract is entry-point-specific:
 
-- `cSolnPhaseType == 'SUBQ'`, whose configurational exponents and pair
-  treatment differ from plain `SUBG`;
+- `DecodeProductionSUBGPhase` accepts only plain `SUBG` and rejects `SUBQ`;
+- `DecodeProductionSUBQPhase` accepts only `SUBQ` and rejects plain `SUBG`.
+
+After that model selection, both entry points reject, rather than approximate:
+
 - production-family `R`, whose extensive scalar energy remains untraced;
 - parser-unreachable `H`;
 - second-sublattice ternary index slot 11;
@@ -234,11 +270,10 @@ record. The locally added `data/bergeron_Th-U-Pu-O_.dat` likewise contains no
 
 Therefore, `Q` is not absent from Thermochimica's available databases:
 `FeTiVO.dat` supplies eight real `Q` records, and Tests 57--60 exercise its
-stable `SlagBsoln` `SUBQ` phase. Those records do not provide a fixture for
-the present adapter because MQ-2 is intentionally restricted to plain
-`SUBG`; `SUBQ` uses different configurational exponents, pair treatment, and
-zeta storage. This is a scope distinction, not evidence that the `Q` family
-is unavailable in Thermochimica.
+stable `SlagBsoln` `SUBQ` phase. Those records now feed the strict
+`DecodeProductionSUBQPhase` path and provide native assessed G/Q evidence.
+They do not provide plain-`SUBG` Q coverage because the SUBG and SUBQ
+configurational exponents, pair treatment, and zeta contracts remain distinct.
 
 The parser accepts `R`, and the production evaluator contains an `R` branch,
 but the database search finds zero `R` records. The evaluator resets `dGex`
@@ -279,22 +314,21 @@ The added assessed Bergeron database,
 solution phases use `IDMX`, `SUBI`, `RKMP`, and `SUBL`, so it cannot provide
 native MQMQA parameter coverage.
 
-MQ-2B should use `CuFeC-Kang.dat` for the first converged plain-`SUBG`
-production comparison. It must not copy `SUBQ` parameters into a `SUBG`
-fixture or invent `Q` or `B` coefficients and present them as physical or
-thermodynamic evidence. Until an authoritative assessed plain-`SUBG` database
-containing those parameter families is available, the evidence must be
-reported in two distinct categories:
+For the original plain-`SUBG` MQ-2B milestone, `CuFeC-Kang.dat` supplied the
+first converged production comparison. The implementation did not copy `SUBQ`
+parameters into a `SUBG` fixture or invent `Q` or `B` coefficients and present
+them as physical or thermodynamic evidence. The resulting evidence remains
+reported in distinct model-specific categories:
 
 - `Q` and `B` mathematical implementation: covered by the independent
   standalone MQ-1 tests;
 - plain-`SUBG` production parser/data decoding for `Q` and `B`: not yet
-  demonstrated with an assessed database. Existing `SUBQ` `Q` coverage is a
-  separate future adapter target.
+  demonstrated with an assessed database;
+- `SUBQ` G/Q production decoding and local derivatives: demonstrated with the
+  assessed `FeTiVO.dat` case through the strict SUBQ adapter.
 
 A search for additional native plain-`SUBG` `Q` or `B` cases is not a gate for
-MQ-2B. Reassess whether that evidence is needed only after the standalone
-SUBG Hessian and the available native `G` comparison both pass.
+the completed SUBQ work. It remains a separate database-coverage question.
 
 A synthetic parser fixture could test software mechanics only if it were
 clearly labelled as nonphysical test data. It is not required for MQ-2B and
@@ -302,14 +336,14 @@ must never be described as thermodynamic verification. The current project
 decision is to defer such a fixture and preserve the production-data coverage
 gap explicitly.
 
-## MQ-2A Exit Decision
+## Historical Plain-SUBG MQ-2A Exit Decision
 
 All fields required by `MQMQAModelData` and `MQMQAInteractionTerm` have a
 specific runtime source and conversion rule. The current plain-`SUBG` units
 and filtered-index boundary are identified, and unsupported production
 branches have explicit rejection rules.
 
-## MQ-2B Exit Result
+## Plain-SUBG MQ-2B Exit Result
 
 MQ-2B implements the audited conversion in
 `ModuleMQMQAProductionAdapter.f90` and exercises it in
@@ -331,6 +365,42 @@ These results verify the available assessed plain-`SUBG` `G` path from parsed
 data through runtime decoding and local derivatives. They do not create
 database-backed evidence for `Q` or `B`, extend the result to `SUBQ`, or
 connect the Hessian to `GEMNewton`.
+
+## Native SUBQ MQ-2A Extension Result
+
+`DecodeProductionSUBQPhase` now translates an eligible production SUBQ phase
+through the same filtered-runtime-array rules while setting
+`MQMQA_MODEL_SUBQ`. The existing `DecodeProductionSUBGPhase` remains strict, so
+the already-verified SUBG response and mapping paths are not broadened
+implicitly.
+
+`TestMQMQASUBQNativeEnergyVerification.F90` reproduces the TestThermo57
+Fe-Ti-V-O state, selects the active `SlagBsoln` phase from `FeTiVO.dat`, and
+compares standalone and production scalar energy blocks. The decoded native
+case contains 15 quadruplets, 6 active G-family terms, and 8 active Q-family
+terms, with uniform `zeta=2.4`. These fixture properties are executable
+regression gates rather than report-only observations. The measured scaled
+differences are:
+
+- reference plus configurational energy: `4.69E-16`;
+- combined G/Q excess energy: `2.78E-17`;
+- total energy: `4.68E-16`.
+
+This completes native SUBQ production decoding and scalar-energy parity for the
+uniform-zeta FeTiVO G/Q case. MQ-2B adds direct first-derivative parity and
+order-aware finite differences of production partial molars at a fixed interior
+composition of the same assessed phase. The source trace establishes that
+`dChemicalPotential + dPartialExcessGibbs` is the complete unconstrained
+quadruplet-mole gradient, so no gauge or reference-species transformation is
+required. At the fixed interior verification state, the direct gradient error
+is `2.98E-17`, raw Hessian symmetry is `1.20E-16`, and homogeneity is
+`2.12E-17`. All 14 independent total-preserving mole-transfer directions show
+the expected second-order production-partial-molar finite-difference region;
+the worst-best normwise error is `7.22E-10`, and the worst componentwise scaled
+error at the normwise-best steps is `5.51E-10`. The database contains no B or R records, and its uniform zeta does
+not provide native evidence for the nonuniform pair-specific-zeta branch. It is
+therefore a native assessed SUBQ G/Q case, not native verification of every
+SUBQ feature.
 
 MQ-3A is recorded in `doc/MQMQAResponseMappingAudit.md`. The source audit finds
 that production plain-`SUBG` uses quadruplet fractions with one normalization

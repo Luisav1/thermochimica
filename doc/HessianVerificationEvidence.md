@@ -86,6 +86,7 @@ consistent with finite-precision cancellation**.
 | Standalone MQMQA scalar, five point | below `1.03E-10` in reported cases | homogeneity below `6.93E-16` |
 | Controlled SUBQ scalar, five point | `3.99E-11` to `1.42E-10` across plotted cases | observed orders `4.00` to `4.09`; nonuniform zeta, chi incidence, and B covered |
 | Native MQMQA partial molars | `1.1640E-10` worst-best | symmetry `7.5047E-20`; homogeneity `7.3714E-24` |
+| Native SUBQ partial molars | `7.2228E-10` worst-best | direct gradient `2.9756E-17`; all 14 tangent directions show second-order convergence |
 
 The RKMP scalar order fixture uses TestThermo30's parsed plain-RKMP model but
 temporarily evaluates its binary interaction at exponent four. This supplies
@@ -152,6 +153,10 @@ into the RKMP stencil experiment:
   central finite differences of production partial molars along five
   total-preserving directions at a converged `CuFeC-Kang.dat` state. It is not
   shaded because no small-`h` upturn is observed in the retained sweep.
+- The native SUBQ figure performs the production-partial-molar comparison along
+  all 14 independent total-preserving directions at a fixed interior
+  composition of the assessed `FeTiVO.dat` `SlagBsoln` phase. Its scope is
+  uniform-zeta reference/configurational/G/Q behavior, not every SUBQ feature.
 - Every figure reports descriptive in-range observed orders and best scaled
   errors in the plot, while the Fortran executables remain the sole owners of
   automated acceptance.
@@ -252,13 +257,27 @@ establish that exact curvature reduces iteration count or wall-clock time.
 - Standalone SUBQ evidence covers controlled nonmagnetic SUBQ configurational
   exponents, mixed-environment chi weights, pair-specific zeta propagation
   through weighted-pair quantities, and B-family curvature. The separate
-  paper-versus-production S3 diagnostic characterizes, but does not adjudicate,
-  the ordinary-versus-zeta-weighted pair-fraction discrepancy.
-- Native MQMQA evidence covers nonmagnetic plain SUBG reference,
+  paper-versus-production S3 diagnostic follows the published Eqs. (5), (6),
+  (16), (29), and (31) in identifying the paper's normalized zeta-weighted pair
+  fractions. It quantifies, but does not explain or adjudicate, production's
+  different ordinary-pair convention. The resulting complete-model derivative
+  differences are modest but resolved and state-dependent in the controlled
+  states tested; this is not a claim that the discrepancy is globally small.
+- Native MQMQA Hessian evidence covers nonmagnetic plain SUBG reference,
   configurational, and G-family behavior from `CuFeC-Kang.dat`.
-- Native SUBQ, native Q-family parameters, B-family parameters, reciprocal R terms,
-  magnetism, constrained MQMQA response, and MQMQA GEM integration remain
-  outside the demonstrated scope.
+- Native SUBQ scalar-energy evidence covers reference/configurational and G/Q
+  behavior for the uniform-zeta `SlagBsoln` phase from `FeTiVO.dat`. Native SUBQ
+  MQ-2B evidence compares the standalone unconstrained gradient directly with
+  complete production partial molars, then compares the analytic Hessian with
+  order-aware finite differences of those partial molars at a fixed interior
+  composition. The direct gradient error is `2.9756E-17`; the worst-best
+  Hessian-vector error is `7.2228E-10`; the worst componentwise scaled error at
+  the normwise-best steps is `5.5123E-10`, with second-order convergence in all
+  14 independent total-preserving directions. This is a native assessed SUBQ
+  G/Q case, not native verification of every SUBQ feature.
+- Native B-family parameters, reciprocal R terms, nonuniform-zeta SUBQ data,
+  magnetism, constrained SUBQ response, and SUBQ GEM integration remain outside
+  the demonstrated scope.
 
 ## Reproduction
 

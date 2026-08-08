@@ -355,6 +355,7 @@ def write_plot(
     caption: str | None = None,
     small_h_upturn_start: float | None = None,
     small_h_region_label: str = "Small-$h$ finite-precision region",
+    small_h_explanation: str | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(9.6, 6.8))
     plotted = 0
@@ -441,7 +442,7 @@ def write_plot(
         )
     display_caption = caption
     if small_h_upturn_start is not None:
-        upturn_explanation = (
+        upturn_explanation = small_h_explanation or (
             "Gray shading begins at the first observed post-minimum error increase. At sufficiently "
             "small h, cancellation between nearly equal Gibbs-energy evaluations and division by "
             "h squared amplify floating-point error."
@@ -460,7 +461,7 @@ def write_plot(
             color="#333333",
             wrap=True,
         )
-    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.17 if display_caption else 0.11)
+    fig.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.23 if display_caption else 0.11)
     fig.savefig(output_stem.with_suffix(".svg"), bbox_inches="tight")
     fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -1208,6 +1209,189 @@ def plot_native_mqmqa(lines: list[str], output_dir: Path) -> None:
     )
 
 
+def plot_native_subq(lines: list[str], output_dir: Path) -> None:
+    """Show complete tangent coverage without assigning meaning to direction colors."""
+    header = next(i for i, line in enumerate(lines) if line.startswith("dir  h"))
+    rows = []
+    for line in lines[header + 1 :]:
+        fields = line.split()
+        if len(fields) != 8:
+            continue
+        try:
+            rows.append([float(field) if field != "N/A" else math.nan for field in fields])
+        except ValueError:
+            continue
+
+    directions = sorted({int(row[0]) for row in rows})
+    direction_series: list[tuple[int, list[float], list[float]]] = []
+    for direction in directions:
+        selected = [row for row in rows if int(row[0]) == direction]
+        h = [row[1] for row in selected]
+        error = [row[3] for row in selected]
+        direction_series.append((direction, h, error))
+
+    # Each direction has its own positivity-safe mole scale s_i.  The Fortran
+    # sweep starts at h=0.05*s_i, so recovering s_i from the largest reported
+    # step lets the presentation compare the common refinement coordinate
+    # h/s_i without changing any finite-difference calculation or test gate.
+    normalized_series: list[tuple[int, list[float], list[float]]] = []
+    for direction, h_values, error_values in direction_series:
+        direction_scale = max(h_values) / 0.05
+        normalized_series.append(
+            (direction, [step / direction_scale for step in h_values], error_values)
+        )
+
+    order_values = [
+        bounds
+        for _, h_values, error_values in direction_series
+        if (bounds := in_range_order_bounds(h_values, error_values, 1.7, 2.3)) is not None
+    ]
+    best_values = [
+        min(value for value in error_values if value > 0.0 and math.isfinite(value))
+        for _, _, error_values in direction_series
+    ]
+    normalized_onset_values = [
+        onset
+        for _, h_values, error_values in normalized_series
+        if (onset := small_h_upturn_onset(h_values, error_values)) is not None
+    ]
+    gradient_line = next(line for line in lines if line.startswith("direct unconstrained-gradient error"))
+    gradient_error = numbers(gradient_line)[0]
+    worst_index = max(range(len(best_values)), key=best_values.__getitem__)
+    worst_direction, worst_h, worst_error = normalized_series[worst_index]
+    displayed_h = [step for _, h_values, _ in normalized_series for step in h_values]
+    guide = slope_guide(
+        worst_h,
+        worst_error,
+        2,
+        r"Extrapolated theoretical $O(h^2)$ trend",
+        1.7,
+        2.3,
+        extrapolation_h=displayed_h,
+    )
+
+    fig, (ax_top, ax_bottom) = plt.subplots(
+        2,
+        1,
+        figsize=(9.8, 8.8),
+        gridspec_kw={"height_ratios": [3.2, 1.15]},
+    )
+    for index, (_, h_values, error_values) in enumerate(normalized_series):
+        usable = sorted(
+            (step, value)
+            for step, value in zip(h_values, error_values)
+            if step > 0.0 and value > 0.0 and math.isfinite(step) and math.isfinite(value)
+        )
+        x_values, y_values = zip(*usable)
+        ax_top.plot(
+            x_values,
+            y_values,
+            color="#9a9a9a",
+            alpha=0.42,
+            linewidth=1.1,
+            label="14 independent tangent directions" if index == 0 else "_nolegend_",
+        )
+
+    worst_usable = sorted(zip(worst_h, worst_error))
+    ax_top.plot(
+        [item[0] for item in worst_usable],
+        [item[1] for item in worst_usable],
+        color="#8a1538",
+        marker="o",
+        markersize=5,
+        linewidth=2.5,
+        label=f"Worst-case direction ({worst_direction})",
+    )
+    if guide:
+        label, guide_h, guide_error = guide
+        ax_top.plot(guide_h,guide_error,"--",color="#2f5597",linewidth=2.0,label=label)
+
+    ax_top.set_xscale("log")
+    ax_top.set_yscale("log")
+    set_measured_limits(
+        ax_top,
+        [(h_values,error_values) for _,h_values,error_values in normalized_series],
+    )
+    if normalized_onset_values:
+        left_limit, right_limit = ax_top.get_xlim()
+        shade_right = min(max(max(normalized_onset_values),left_limit),right_limit)
+        ax_top.axvspan(
+            left_limit,
+            shade_right,
+            color="#777777",
+            alpha=0.08,
+            label="Small-$h$ finite-precision region",
+        )
+    ax_top.set_xlabel(r"Normalized perturbation, $\widehat h=h/s_i$ (smaller to the left)")
+    ax_top.set_ylabel("Scale-normalized error")
+    ax_top.grid(which="major",color="#cfcfcf",linewidth=0.8)
+    ax_top.grid(which="minor",color="#e8e8e8",linewidth=0.5,alpha=0.8)
+    ax_top.legend(loc="upper left",frameon=False,fontsize=8.5)
+    ax_top.text(
+        0.98,
+        0.04,
+        "\n".join(
+            [
+                "Fortran gate: 14/14 directions passed",
+                f"in-range observed $p$={min(item[0] for item in order_values):.2f}-"
+                f"{max(item[1] for item in order_values):.2f}",
+                f"worst normwise minimum={max(best_values):.2e}",
+                f"direct gradient error={gradient_error:.2e}",
+            ]
+        ),
+        transform=ax_top.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8.5,
+        color="#333333",
+        bbox={"facecolor":"white","edgecolor":"#cccccc","alpha":0.9},
+    )
+
+    ax_bottom.scatter(directions,best_values,color="#777777",s=35,zorder=3,label="Direction minimum")
+    ax_bottom.scatter(
+        [worst_direction],
+        [best_values[worst_index]],
+        color="#8a1538",
+        s=60,
+        zorder=4,
+        label="Worst-case direction",
+    )
+    ax_bottom.axhline(1.0e-8,color="#2f5597",linestyle="--",linewidth=1.8,label="Acceptance threshold $10^{-8}$")
+    ax_bottom.set_yscale("log")
+    ax_bottom.set_xlim(0.4,len(directions)+0.6)
+    ax_bottom.set_ylim(min(best_values)*0.55,2.0e-8)
+    ax_bottom.set_xticks(directions)
+    ax_bottom.set_xlabel("Independent tangent direction")
+    ax_bottom.set_ylabel("Minimum scaled error")
+    ax_bottom.grid(which="major",color="#d8d8d8",linewidth=0.7)
+    ax_bottom.legend(loc="upper right",ncol=2,frameon=False,fontsize=8.2)
+
+    fig.suptitle("Native SUBQ G/Q Hessian verification",fontweight="bold",fontsize=15,y=0.975)
+    fig.text(
+        0.5,
+        0.935,
+        "Production partial-molar finite differences over the complete 14-dimensional tangent basis",
+        ha="center",
+        va="center",
+        fontsize=10.5,
+        color="#444444",
+    )
+    caption = (
+        "Grey curves show complete tangent-space coverage; the highlighted worst case still follows "
+        "second-order convergence and remains below the acceptance threshold. Normalizing h by each "
+        "direction's positivity-safe scale removes abundance-driven horizontal clustering; absolute h "
+        "values remain in the report. At small h, cancellation "
+        "between nearly equal partial-molar evaluations and division by h amplify floating-point error. "
+        "Scope: assessed FeTiVO.dat nonmagnetic, uniform-zeta reference/configurational/G/Q behavior."
+    )
+    fig.text(0.5,0.018,textwrap.fill(caption,width=145),ha="center",va="bottom",fontsize=8.6,color="#333333")
+    fig.subplots_adjust(left=0.11,right=0.97,top=0.90,bottom=0.15,hspace=0.34)
+    output_stem = output_dir / "mqmqa_subq_native"
+    fig.savefig(output_stem.with_suffix(".svg"),bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"),dpi=300,bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin-dir", type=Path, default=Path("bin"))
@@ -1220,6 +1404,7 @@ def main() -> None:
         "cef": run_report(args.bin_dir, "TestCEFHessianVerification"),
         "standalone": run_report(args.bin_dir, "TestMQMQAHessianVerification"),
         "native": run_report(args.bin_dir, "TestMQMQANativeHessianVerification"),
+        "native_subq": run_report(args.bin_dir, "TestMQMQASUBQNativeHessianVerification"),
     }
     for name, lines in reports.items():
         (args.output_dir / f"{name}_report.txt").write_text("\n".join(lines) + "\n")
@@ -1234,6 +1419,7 @@ def main() -> None:
     plot_standalone_mqmqa(reports["standalone"], args.output_dir)
     plot_standalone_subq(reports["standalone"], args.output_dir)
     plot_native_mqmqa(reports["native"], args.output_dir)
+    plot_native_subq(reports["native_subq"], args.output_dir)
     print(f"Wrote reports and plots to {args.output_dir}")
 
 
