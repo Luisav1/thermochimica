@@ -425,5 +425,10 @@ and independently verifies the corrected `N*H_SUBQ` constrained response in
 all four supported FeTiVO element-potential directions. The worst
 oracle-resolved response error is `4.98E-10`, with a positive-definite but
 strongly ill-conditioned tangent Hessian. The existing SUBG-only builder
-remains intentionally unchanged until a dedicated SUBQ reduced-mapping test
-verifies `deltaA`, `deltaB`, and their affine identity.
+remains intentionally unchanged. The dedicated SUBQ MQ-4A test now verifies
+the off-equilibrium reduced `deltaA`, `deltaB`, and combined affine identity
+against independently reconverged production partial-molar oracles, while
+also reproducing the selected phase's live GEM baseline at the same state.
+This clears the mathematical mapping gate for a later strict SUBQ MQ-4B
+builder extension; it does not itself broaden the builder or activate the
+correction in `GEMNewton`.

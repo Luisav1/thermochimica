@@ -1065,3 +1065,74 @@ correction builder, or `GEMNewton` activation. The next SUBQ stage is a
 diagnostic reduced-mapping verification analogous to MQ-4A; the existing
 production correction builder remains strict plain-`SUBG` until that gate
 passes.
+
+### SUBQ MQ-4A exit result
+
+`TestMQMQASUBQGEMMappingVerification.F90` now verifies the complete
+phase-local reduced mapping for the assessed FeTiVO `SlagBsoln` SUBQ `G/Q`
+case. The test uses a strictly positive, deliberately off-equilibrium
+composition while holding temperature, pressure, phase amount, topology,
+decoded parameters, and model branch fixed. It does not call the existing
+plain-`SUBG` correction builder and does not modify `GEMNewton` behavior.
+
+At that same off-equilibrium state, the diagnostic capture around
+`GEMNewton` agrees with a source-faithful reconstruction of the selected
+phase's historical baseline contribution. The scaled differences are
+`3.477985E-16` for the element block, `1.464734E-15` for the element residual,
+and exactly zero for both the element-to-phase column and solution-phase
+residual. The authoritative `N*x` species amounts and GEM's floored species
+amounts are identical in this state.
+
+The corrected and historical constrained responses use the same normalization
+constraint and forcing conventions. The candidate corrections are
+
+```text
+deltaA = N*S^T*(R_corrected - R_baseline)
+deltaB = N*S^T*(r_mu,corrected - r_mu,baseline),
+```
+
+where the off-equilibrium residual forcing is `mu-1`. A constant-one forcing
+produces no normalized composition response. The constrained corrected and
+baseline responses to `mu` and `mu-1` agree to `8.869314E-16` and
+`1.751567E-15`, respectively.
+
+The complete KKT equations are checked independently for corrected and
+baseline element forcing and corrected and baseline `mu-1` forcing. The four
+scaled top-equation residuals are `1.468099E-15`, `3.058540E-17`,
+`8.581426E-16`, and exactly zero. Their normalization-constraint residuals are
+`9.714451E-17`, `1.266348E-16`, `1.665335E-15`, and `1.104672E-14`. The
+candidate `deltaA` symmetry residual is `2.143770E-16`, and `deltaB` is
+non-vacuous with maximum magnitude `7.104417E+00`.
+
+Independent nonlinear production-partial-molar oracles verify the full
+reduced mapping. Every perturbed state is reconverged without using the
+analytic response as the nonlinear solver Jacobian. Oracle uncertainty is
+estimated from a production-partial-molar finite-difference tangent rebuilt at
+each converged plus/minus state. The results are:
+
+- complete columnwise-reconstructed `deltaA` matrix error: `2.597968E-09`;
+- complete `deltaA` matrix maximum scaled component error: `1.509257E-09`;
+- worst oracle-resolved `deltaA` column error: `2.062968E-09`, with uncertainty
+  `1.100866E-10` for that column;
+- best resolved mixed-forcing `deltaA*dGamma` error: `3.195113E-10`, with
+  corresponding maximum scaled component error `2.110043E-10`;
+- complete off-equilibrium `deltaB` error: `4.188294E-09` at its best resolved
+  step;
+- combined affine identity error for `deltaA*dGamma-deltaB`: `4.520129E-09`
+  at its best resolved step;
+- best-resolved maximum scaled component errors of `4.786684E-09` and
+  `5.142649E-09` for `deltaB` and the affine identity, respectively.
+
+All three sweeps contain the expected resolved second-order region. Smaller
+steps that fall below the independent oracle's resolving power are reported
+but excluded from acceptance. Each reconstructed `deltaA` column is gated
+against its own stored uncertainty, preventing an unresolved column from being
+hidden by the full-matrix norm.
+
+SUBQ MQ-4A therefore establishes the signs, amount scaling, `mu-1` convention,
+affine reduced-GEM interpretation, and live phase-local baseline for this
+assessed SUBQ `G/Q` case. It does not establish a reusable SUBQ correction
+builder, correction application, multiple active SUBQ phase aggregation,
+trust/globalization, or live solver activation. The next stage is SUBQ MQ-4B:
+extend the reusable correction-builder contract only after preserving the
+strict plain-`SUBG` path and all current rejection behavior.
