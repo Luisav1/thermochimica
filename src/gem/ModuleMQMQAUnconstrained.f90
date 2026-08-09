@@ -75,6 +75,7 @@ module ModuleMQMQAUnconstrained
     ! disconnected thermodynamic mathematics implemented below.
     !=========================================================================================================
 
+    integer, parameter, public :: MQMQA_MODEL_UNSET = 0
     integer, parameter, public :: MQMQA_MODEL_SUBG = 1
     integer, parameter, public :: MQMQA_MODEL_SUBQ = 2
 
@@ -90,8 +91,8 @@ module ModuleMQMQAUnconstrained
     !> convert quadruplet amounts into site amounts. Zeta values provide the
     !> pair weighting used by the modified quasichemical composition variables.
     type, public :: MQMQAModelData
-        !> Configurational formulation. SUBG is the default retained by existing callers.
-        integer :: iModelType = MQMQA_MODEL_SUBG
+        !> Configurational formulation. Callers must explicitly select SUBG or SUBQ.
+        integer :: iModelType = MQMQA_MODEL_UNSET
         !> Number of constituents available on the cation-like sublattice.
         integer :: nSublattice1 = 0
         !> Number of constituents available on the anion-like sublattice.

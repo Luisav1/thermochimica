@@ -322,6 +322,14 @@ program TestMQMQAGEMMappingVerification
     lPass = lPass .AND. (.NOT. lFailureApplicable) .AND. (iFailureStatus == MQMQA_MAP_NOT_APPLICABLE) .AND. &
         (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
 
+    ! The SUBQ entry point must not reinterpret this eligible plain-SUBG phase through the other model decoder.
+    dACandidate = 1D0
+    dBCandidate = 1D0
+    call BuildMQMQASUBQGEMCorrection(iPhaseIndex,iSlot,dACandidate,dBCandidate, &
+        lFailureApplicable,iFailureStatus)
+    lPass = lPass .AND. (.NOT. lFailureApplicable) .AND. (iFailureStatus == MQMQA_MAP_NOT_APPLICABLE) .AND. &
+        (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
+
     dACandidate = 1D0
     dBCandidate = 1D0
     call BuildMQMQAReducedCorrection(0D0,dXOff,dMu,dS,dHx,dACandidate,dBCandidate,iFailureStatus)

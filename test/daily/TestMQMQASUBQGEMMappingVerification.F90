@@ -1,17 +1,14 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    TestMQMQASUBQGEMMappingVerification.F90
-!> \brief   Diagnostic-only verification of the SUBQ reduced GEM response correction.
+!> \brief   Verify the SUBQ reduced GEM correction builder without activating it in GEMNewton.
 !>
-!> \details SUBQ MQ-4A constructs the candidate reduced element-block and
-!!          residual corrections directly from the verified SUBQ constrained
-!!          response. Independent nonlinear finite differences of production
-!!          SUBQ partial molars verify deltaA, deltaB, and their combined affine
-!!          sign convention before the production builder is broadened.
+!> \details SUBQ MQ-4A constructs the candidate reduced element-block and residual corrections directly from
+!!          the verified SUBQ constrained response. Independent nonlinear finite differences of production SUBQ
+!!          partial molars verify deltaA, deltaB, and their combined affine sign convention.
 !!
-!!          The test uses a positive interior FeTiVO composition and captures
-!!          GEMNewton's live baseline at that same off-equilibrium state. It
-!!          does not call the SUBG-only builder, apply a correction, or change
-!!          any solver control, assemblage, or thermodynamic formula.
+!!          MQ-4B then calls the strict SUBQ production builder and compares its output with that independent
+!!          construction. The correction is applied only to caller-owned copies of captured GEM arrays. No live
+!!          matrix, solver control, assemblage, or thermodynamic formula is changed.
 !-------------------------------------------------------------------------------------------------------------
 program TestMQMQASUBQGEMMappingVerification
 
@@ -21,6 +18,7 @@ program TestMQMQASUBQGEMMappingVerification
     USE ModuleGEMSolver
     USE ModuleMQMQAUnconstrained
     USE ModuleMQMQAProductionAdapter
+    USE ModuleMQMQAResponseMapping
     USE ModuleConstrainedResponse
     USE ModuleFiniteDifferenceVerification
     USE ModuleGEMNewtonDiagnosticCapture
@@ -44,12 +42,13 @@ program TestMQMQASUBQGEMMappingVerification
 
     integer, parameter :: nSteps = 8
     character(len=32) :: cArgument
-    integer :: e, f, i, iBestA, iBestAffine, iBestB
-    integer :: iColumn, iDonor, iInfo, iNewtonInfo
+    integer :: e, f, i, iApplyStatus, iBestA, iBestAffine, iBestB, iBuilderStatus
+    integer :: iColumn, iDonor, iElectronSave, iFailureStatus, iInfo, iNewtonInfo
     integer :: iFirst, iLast, iPhaseIndex, iReceiver, iSlot, iStep, nQuad
-    logical :: lMinus, lPass, lPlus, lReport
+    logical :: lBuilderApplicable, lFailureApplicable, lMinus, lPass, lPlus, lReport
     real(8) :: dAComponent, dAError, dBComponent, dBError
     real(8) :: dBaselineAError, dBaselineBError, dBaselineColumnError, dBaselinePhaseError
+    real(8) :: dAggregationError, dApplyError, dBuilderAError, dBuilderBError, dBuilderStateDifference
     real(8) :: dCaptureControlA(1,1), dCaptureControlB(1)
     real(8) :: dBaselineConstantForceError, dConstantForceError, dConstraintResidual
     real(8) :: dConstraintElementCorrected, dConstraintElementBaseline
@@ -57,26 +56,30 @@ program TestMQMQASUBQGEMMappingVerification
     real(8) :: dAffineComponent, dAffineError, dH, dHColumn
     real(8) :: dHMaximumA, dHMaximumAffine, dHMaximumB, dN, dOffEquilibriumResidual, dSymmetryResidual
     real(8) :: dTopElementCorrected, dTopElementBaseline, dTopMuCorrected, dTopMuBaseline
-    real(8) :: dWorstColumnError, dWorstColumnUncertainty
-    real(8), allocatable :: dABaseline(:,:), dACandidate(:,:), dADirect(:,:)
+    real(8) :: dWorstColumnError, dWorstColumnUncertainty, dZeroApplyError
+    real(8), allocatable :: dABaseline(:,:), dABaseCopy(:,:), dACandidate(:,:), dADirect(:,:)
+    real(8), allocatable :: dAApplyExpected(:,:), dABuilder(:,:), dATrial(:,:)
     real(8), allocatable :: dAExtracted(:,:), dAOther(:,:), dAep(:), dAErrors(:), dAOrders(:)
     real(8), allocatable :: dAComponents(:), dAUncertainties(:), dAffineComponents(:), dAffineErrors(:)
     real(8), allocatable :: dAffineOrders(:), dAffineSteps(:), dAffineUncertainties(:)
-    real(8), allocatable :: dBBaseline(:), dBCandidate(:)
+    real(8), allocatable :: dBBaseCopy(:), dBBaseline(:), dBBuilder(:), dBCandidate(:), dBTrial(:)
     real(8), allocatable :: dBComponents(:), dBDirect(:), dBErrors(:), dBOrders(:), dBUncertainties(:)
     real(8), allocatable :: dBestColumnErrors(:), dBestColumnSteps(:), dBestColumnUncertainties(:)
     real(8), allocatable :: dColumnComponents(:,:), dColumnErrors(:,:), dColumnUncertainties(:,:)
-    real(8), allocatable :: dChemicalSave(:), dEffStoichSave(:,:), dFractionSave(:), dGibbsSave(:)
+    real(8), allocatable :: dChemicalBuilderSave(:), dChemicalSave(:), dEffStoichSave(:,:)
+    real(8), allocatable :: dElementBuilderSave(:), dFractionBuilderSave(:), dFractionSave(:)
+    real(8), allocatable :: dGibbsBuilderSave(:), dGibbsSave(:)
     real(8), allocatable :: dConstraint(:,:), dDeltaA(:,:), dDeltaB(:), dFDDeltaA(:,:)
     real(8), allocatable :: dAffineReference(:), dFDDeltaB(:), dForceAffine(:), dForcing(:,:)
     real(8), allocatable :: dForceMixed(:), dForceMu(:,:)
     real(8), allocatable :: dForceMuShifted(:,:), dHbase(:,:), dHessian(:,:), dHx(:,:)
     real(8), allocatable :: dLambdaElement(:,:), dLambdaElementBase(:,:)
     real(8), allocatable :: dLambdaMu(:,:), dLambdaMuBase(:,:), dLambdaMuShift(:,:), dLambdaMuShiftBase(:,:)
-    real(8), allocatable :: dMoles(:), dMolesSave(:), dMu(:), dMuLowLevel(:)
+    real(8), allocatable :: dMoles(:), dMolesBuilderSave(:), dMolesSave(:), dMu(:), dMuLowLevel(:)
     real(8), allocatable :: dMuResponse(:,:), dMuResponseBase(:,:)
     real(8), allocatable :: dMuShiftResponse(:,:), dMuShiftResponseBase(:,:)
-    real(8), allocatable :: dOracleUncertainty(:), dPartialSave(:), dTrialGamma(:), dUpdateSave(:)
+    real(8), allocatable :: dOracleUncertainty(:), dPartialBuilderSave(:), dPartialSave(:)
+    real(8), allocatable :: dPhaseMolesBuilderSave(:), dTrialGamma(:), dUpdateSave(:)
     real(8), allocatable :: dResponse(:,:), dResponseBase(:,:), dResponseMinus(:), dResponsePlus(:)
     real(8), allocatable :: dS(:,:), dStepsA(:), dStepsB(:), dX(:), dXMinus(:), dXOff(:), dXPlus(:)
     real(8), allocatable :: dZ(:,:)
@@ -146,9 +149,14 @@ program TestMQMQASUBQGEMMappingVerification
         dMuLowLevel(nQuad),dS(nQuad,nElements),dADirect(nElements,nElements), &
         dAExtracted(nElements,nElements),dAOther(nElements,nElements),dAep(nElements), &
         dBDirect(nElements),dABaseline(nElements,nElements),dBBaseline(nElements), &
+        dABuilder(nElements,nElements),dBBuilder(nElements), &
         dChemicalSave(SIZE(dChemicalPotential)),dEffStoichSave(SIZE(dEffStoichSolnPhase,1), &
         SIZE(dEffStoichSolnPhase,2)),dFractionSave(SIZE(dMolFraction)),dGibbsSave(SIZE(dGibbsSolnPhase)), &
-        dMolesSave(SIZE(dMolesSpecies)),dPartialSave(SIZE(dPartialExcessGibbs)),dUpdateSave(SIZE(dUpdateVar)))
+        dMolesSave(SIZE(dMolesSpecies)),dPartialSave(SIZE(dPartialExcessGibbs)),dUpdateSave(SIZE(dUpdateVar)), &
+        dChemicalBuilderSave(SIZE(dChemicalPotential)),dElementBuilderSave(SIZE(dElementPotential)), &
+        dFractionBuilderSave(SIZE(dMolFraction)),dGibbsBuilderSave(SIZE(dGibbsSolnPhase)), &
+        dMolesBuilderSave(SIZE(dMolesSpecies)),dPartialBuilderSave(SIZE(dPartialExcessGibbs)), &
+        dPhaseMolesBuilderSave(SIZE(dMolesPhase)))
     dX = dMolFraction(iFirst:iLast)
     dX = dX/SUM(dX)
     ! The assessed equilibrium contains very small quadruplet fractions. Blend
@@ -192,6 +200,24 @@ program TestMQMQASUBQGEMMappingVerification
     if ((iNewtonInfo /= 0) .OR. (.NOT. lGEMNewtonSystemCaptured)) call FinishTest(.FALSE.)
     dFloorDifference = MAXVAL(DABS(dMolesSpecies(iFirst:iLast)-dN*dXOff))/ &
         DMAX1(1D0,MAXVAL(DABS(dN*dXOff)))
+
+    ! MQ-4B packages the verified MQ-4A equations without mutating live state. Snapshot every global array read
+    ! by the production path, then compare the returned correction with the independent construction below.
+    dChemicalBuilderSave = dChemicalPotential
+    dElementBuilderSave = dElementPotential
+    dFractionBuilderSave = dMolFraction
+    dGibbsBuilderSave = dGibbsSolnPhase
+    dMolesBuilderSave = dMolesSpecies
+    dPartialBuilderSave = dPartialExcessGibbs
+    dPhaseMolesBuilderSave = dMolesPhase
+    call BuildMQMQASUBQGEMCorrection(iPhaseIndex,iSlot,dABuilder,dBBuilder,lBuilderApplicable,iBuilderStatus)
+    dBuilderStateDifference = DMAX1(VectorError(dChemicalPotential,dChemicalBuilderSave), &
+        VectorError(dElementPotential,dElementBuilderSave),VectorError(dMolFraction,dFractionBuilderSave), &
+        VectorError(dGibbsSolnPhase,dGibbsBuilderSave),VectorError(dMolesSpecies,dMolesBuilderSave), &
+        VectorError(dPartialExcessGibbs,dPartialBuilderSave),VectorError(dMolesPhase,dPhaseMolesBuilderSave))
+    lPass = lPass .AND. lBuilderApplicable .AND. (iBuilderStatus == MQMQA_MAP_SUCCESS) .AND. &
+        (dBuilderStateDifference == 0D0) .AND. &
+        (MAXVAL(ABS(dABuilder-TRANSPOSE(dABuilder))) == 0D0)
 
     ! Remove every other active solution-phase contribution from the captured element equations. The remainder
     ! is a true live snapshot of the selected Liquid contribution, including GEMNewton's species-mole floor.
@@ -284,6 +310,9 @@ program TestMQMQASUBQGEMMappingVerification
 
     dDeltaA = dN*MATMUL(TRANSPOSE(dS),dResponse-dResponseBase)
     dDeltaB = dN*MATMUL(TRANSPOSE(dS),dMuResponse(:,1)-dMuResponseBase(:,1))
+    dBuilderAError = MatrixError(dABuilder,dDeltaA)
+    dBuilderBError = VectorError(dBBuilder,dDeltaB)
+    lPass = lPass .AND. (dBuilderAError <= 1D-12) .AND. (dBuilderBError <= 1D-12)
     dSymmetryResidual = SQRT(SUM((dDeltaA-TRANSPOSE(dDeltaA))**2))/ &
         DMAX1(1D0,SQRT(SUM(dDeltaA*dDeltaA)))
     dTopElementCorrected = KKTTopError(dHx,dConstraint,dResponse,dLambdaElement,dForcing)
@@ -311,6 +340,92 @@ program TestMQMQASUBQGEMMappingVerification
         (dBaselineConstantForceError <= 1D-10) .AND. &
         (dDeltaBMagnitude > 1D-10) .AND. (dOffEquilibriumResidual > 1D-8) .AND. &
         ALL(IEEE_IS_FINITE(dDeltaA)) .AND. ALL(IEEE_IS_FINITE(dDeltaB))
+
+    ! Strict model entry points must not reinterpret one MQMQA formulation as another. The plain-SUBG entry
+    ! point therefore rejects this eligible SUBQ phase while leaving safe zero outputs.
+    dACandidate = 1D0
+    dBCandidate = 1D0
+    call BuildMQMQAGEMCorrection(iPhaseIndex,iSlot,dACandidate,dBCandidate,lFailureApplicable,iFailureStatus)
+    lPass = lPass .AND. (.NOT. lFailureApplicable) .AND. (iFailureStatus == MQMQA_MAP_NOT_APPLICABLE) .AND. &
+        (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
+
+    ! Invalid, unsupported, and singular-response paths must return a precise status and no partial correction.
+    dACandidate = 1D0
+    dBCandidate = 1D0
+    call BuildMQMQAReducedCorrection(0D0,dXOff,dMu,dS,dHx,dACandidate,dBCandidate,iFailureStatus)
+    lPass = lPass .AND. (iFailureStatus == MQMQA_MAP_INVALID_INPUT) .AND. &
+        (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
+
+    iElectronSave = iPhaseElectronID(iPhaseIndex)
+    iPhaseElectronID(iPhaseIndex) = 1
+    dACandidate = 1D0
+    dBCandidate = 1D0
+    call BuildMQMQASUBQGEMCorrection(iPhaseIndex,iSlot,dACandidate,dBCandidate, &
+        lFailureApplicable,iFailureStatus)
+    iPhaseElectronID(iPhaseIndex) = iElectronSave
+    lPass = lPass .AND. (.NOT. lFailureApplicable) .AND. &
+        (iFailureStatus == MQMQA_MAP_UNSUPPORTED_CHARGED_PHASE) .AND. &
+        (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
+
+    dACandidate = 1D0
+    dBCandidate = 1D0
+    call BuildMQMQAReducedCorrection(dN,dXOff,dMu,dS,0D0*dHx,dACandidate,dBCandidate,iFailureStatus)
+    lPass = lPass .AND. (iFailureStatus == MQMQA_MAP_CORRECTED_ELEMENT_RESPONSE_FAILURE) .AND. &
+        (MAXVAL(ABS(dACandidate)) == 0D0) .AND. (MAXVAL(ABS(dBCandidate)) == 0D0)
+
+    ! The applicator operates only on caller-owned copies. It may change the element block and element residual,
+    ! but no phase row, phase column, or phase residual. Alpha remains an application/globalization choice.
+    allocate(dABaseCopy(nCapturedGEMNewtonVariables,nCapturedGEMNewtonVariables), &
+        dAApplyExpected(nCapturedGEMNewtonVariables,nCapturedGEMNewtonVariables), &
+        dATrial(nCapturedGEMNewtonVariables,nCapturedGEMNewtonVariables), &
+        dBBaseCopy(nCapturedGEMNewtonVariables),dBTrial(nCapturedGEMNewtonVariables))
+    dABaseCopy = dCapturedGEMNewtonA
+    dBBaseCopy = dCapturedGEMNewtonB
+    dAApplyExpected = dABaseCopy
+    dAApplyExpected(1:nElements,1:nElements) = dAApplyExpected(1:nElements,1:nElements)+dABuilder
+
+    dATrial = dABaseCopy
+    dBTrial = dBBaseCopy
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dABuilder,dBBuilder,1D0,iApplyStatus)
+    dApplyError = DMAX1(MatrixError(dATrial,dAApplyExpected), &
+        VectorError(dBTrial(1:nElements),dBBaseCopy(1:nElements)+dBBuilder), &
+        VectorError(dBTrial(nElements+1:),dBBaseCopy(nElements+1:)))
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_SUCCESS) .AND. (dApplyError <= 1D-14)
+
+    dATrial = dABaseCopy
+    dBTrial = dBBaseCopy
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dABuilder,dBBuilder,0D0,iApplyStatus)
+    dZeroApplyError = DMAX1(MatrixError(dATrial,dABaseCopy),VectorError(dBTrial,dBBaseCopy))
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_SUCCESS) .AND. (dZeroApplyError == 0D0)
+
+    dATrial = dABaseCopy
+    dBTrial = dBBaseCopy
+    dACandidate = -0.25D0*dABuilder
+    dBCandidate = 0.40D0*dBBuilder
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dABuilder,dBBuilder,1D0,iApplyStatus)
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_SUCCESS)
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dACandidate,dBCandidate,1D0,iApplyStatus)
+    dAApplyExpected = dABaseCopy
+    dAApplyExpected(1:nElements,1:nElements) = dAApplyExpected(1:nElements,1:nElements)+ &
+        dABuilder+dACandidate
+    dAggregationError = DMAX1(MatrixError(dATrial,dAApplyExpected), &
+        VectorError(dBTrial(1:nElements),dBBaseCopy(1:nElements)+dBBuilder+dBCandidate), &
+        VectorError(dBTrial(nElements+1:),dBBaseCopy(nElements+1:)))
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_SUCCESS) .AND. (dAggregationError <= 1D-14)
+
+    dATrial = dABaseCopy
+    dBTrial = dBBaseCopy
+    dACandidate = dABuilder
+    dACandidate(1,2) = dACandidate(1,2)+1D0
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dACandidate,dBBuilder,1D0,iApplyStatus)
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_INVALID_APPLICATION) .AND. &
+        (MatrixError(dATrial,dABaseCopy) == 0D0) .AND. (VectorError(dBTrial,dBBaseCopy) == 0D0)
+
+    dATrial = dABaseCopy
+    dBTrial = dBBaseCopy
+    call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElements,dABuilder,dBBuilder,1.5D0,iApplyStatus)
+    lPass = lPass .AND. (iApplyStatus == MQMQA_MAP_INVALID_APPLICATION) .AND. &
+        (MatrixError(dATrial,dABaseCopy) == 0D0) .AND. (VectorError(dBTrial,dBBaseCopy) == 0D0)
 
     !=========================================================================================================
     ! SECTION 3: INDEPENDENT NONLINEAR FINITE-DIFFERENCE ORACLES
@@ -436,8 +551,8 @@ program TestMQMQASUBQGEMMappingVerification
     lPass = lPass .AND. (dAError <= 1D-6) .AND. (dAComponent <= 1D-6)
 
     if (lReport) then
-        write(*,'(A)') 'SUBQ MQ-4A diagnostic reduced GEM mapping verification'
-        write(*,'(A)') 'scope: assessed FeTiVO SUBQ G/Q mapping; no builder, application, or GEM activation'
+        write(*,'(A)') 'SUBQ MQ-4A/4B reduced GEM mapping verification'
+        write(*,'(A)') 'scope: reusable SUBQ builder and copied-array applicator; no live GEM activation'
         write(*,'(A,A)') 'phase = ',TRIM(cSolnPhaseName(iPhaseIndex))
         write(*,'(A,ES14.6)') 'authoritative/floored mole discrepancy = ',dFloorDifference
         write(*,'(A,ES14.6)') 'off-equilibrium live phase-local element-block capture error = ',dBaselineAError
@@ -459,6 +574,13 @@ program TestMQMQASUBQGEMMappingVerification
         write(*,'(A,ES14.6)') 'candidate deltaA symmetry residual = ',dSymmetryResidual
         write(*,'(A,ES14.6)') 'maximum candidate response constraint residual = ',dConstraintResidual
         write(*,'(A,ES14.6)') 'maximum absolute candidate deltaB = ',dDeltaBMagnitude
+        write(*,'(A,I0,A,L1)') 'builder status = ',iBuilderStatus,', applicable = ',lBuilderApplicable
+        write(*,'(A,ES14.6)') 'builder versus independent deltaA error = ',dBuilderAError
+        write(*,'(A,ES14.6)') 'builder versus independent deltaB error = ',dBuilderBError
+        write(*,'(A,ES14.6)') 'builder production-state mutation metric = ',dBuilderStateDifference
+        write(*,'(A,ES14.6)') 'copied-array full-application error = ',dApplyError
+        write(*,'(A,ES14.6)') 'copied-array alpha-zero error = ',dZeroApplyError
+        write(*,'(A,ES14.6)') 'copied-array sequential correction-pair additivity error = ',dAggregationError
         write(*,'(A,ES14.6)') 'columnwise-reconstructed complete deltaA matrix error = ',dAError
         write(*,'(A,ES14.6)') 'complete deltaA matrix maximum scaled component error = ',dAComponent
         write(*,'(A,ES14.6)') 'worst oracle-resolved deltaA column error = ',dWorstColumnError

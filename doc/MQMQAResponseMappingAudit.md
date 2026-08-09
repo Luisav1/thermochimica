@@ -928,7 +928,7 @@ Thermochimica until that model-definition question is resolved.
 | Nonlinear finite-difference oracle architecture | Reuse structure; converge production SUBQ stationarity at every forcing |
 | Production decoder | Use strict `DecodeProductionSUBQPhase` |
 | Analytic curvature | Use verified SUBQ `CompMQMQAHessianUnconstrained` result |
-| Live MQ-4B builder | Do not reuse yet; it explicitly accepts only plain `SUBG` |
+| Live MQ-4B builder | Not reused during MQ-3A; a strict SUBQ entry point was added only after MQ-4A passed |
 | `GEMNewton` activation | Out of scope until SUBQ response and mapping pass |
 
 ### SUBQ MQ-3B requirements
@@ -1136,3 +1136,45 @@ builder, correction application, multiple active SUBQ phase aggregation,
 trust/globalization, or live solver activation. The next stage is SUBQ MQ-4B:
 extend the reusable correction-builder contract only after preserving the
 strict plain-`SUBG` path and all current rejection behavior.
+
+### SUBQ MQ-4B exit result
+
+`ModuleMQMQAResponseMapping.f90` now exposes two strict production entry
+points. `BuildMQMQAGEMCorrection` continues to accept only plain `SUBG`, while
+`BuildMQMQASUBQGEMCorrection` accepts only `SUBQ`. Both use the same verified
+reduced-response kernel after dispatching through their own production decoder;
+neither entry point can silently reinterpret the other MQMQA model type.
+
+The SUBQ builder packages the MQ-4A equations as a reusable, state-preserving
+operation. It reads the active FeTiVO `SlagBsoln` state, decodes its assessed
+`G/Q` model, evaluates the complete local Hessian, constructs corrected and
+historical constrained responses, and returns the unscaled phase-local
+`deltaA` and `deltaB`. It does not mutate global thermodynamic state or any live
+GEM array. The existing applicator remains model-independent and changes only
+caller-owned copies of the element block and element residual.
+
+The extended `TestMQMQASUBQGEMMappingVerification.F90` compares this reusable
+builder against the independent MQ-4A construction at the same positive,
+off-equilibrium state. The measured results are:
+
+- builder status `MQMQA_MAP_SUCCESS`, with the phase marked applicable;
+- builder versus independent `deltaA` error: `1.095489E-16`;
+- builder versus independent `deltaB` error: exactly zero;
+- production-state mutation metric: exactly zero;
+- copied-array full-application error at alpha one: exactly zero;
+- copied-array alpha-zero no-op error: exactly zero;
+- sequential correction-pair additivity error: exactly zero.
+
+The test also verifies safe zero outputs and distinct status behavior for
+invalid input, charged phases, singular corrected responses, nonsymmetric
+application data, and alpha outside `[0,1]`. Both model-specific entry points
+are tested against the opposite phase type and return `NOT_APPLICABLE` without
+producing a correction. The builder returns an exactly symmetric `deltaA` only
+after the raw matrix passes its symmetry gate.
+
+This completes the diagnostic-only SUBQ MQ-4B software contract for the
+assessed uniform-zeta FeTiVO `G/Q` case. It does not activate the correction in
+`GEMNewton`, select alpha, define trust/globalization policy, prove physical
+aggregation of multiple active SUBQ phases, or extend native evidence to `B`,
+`R`, magnetism, or nonuniform-zeta assessed data. Those are MQ-4C or later
+questions.

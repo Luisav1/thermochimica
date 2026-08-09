@@ -124,6 +124,7 @@ contains
         real(8), allocatable, intent(out) :: dState(:)
         integer :: a,b,x,y,q,nQuad
 
+        tData%iModelType=MQMQA_MODEL_SUBG
         tData%nSublattice1=4
         tData%nSublattice2=2
         nQuad=(4*5/2)*(2*3/2)
@@ -958,7 +959,7 @@ contains
         logical, intent(inout) :: lAllPass
         logical, intent(in) :: lVerbose
 
-        type(MQMQAModelData) :: tBadModel
+        type(MQMQAModelData) :: tBadModel, tDefaultModel
         type(MQMQAInteractionTerm) :: tBad(1)
         real(8), allocatable :: dBadState(:)
         real(8) :: dG,dRef,dIdeal,dEx
@@ -977,9 +978,17 @@ contains
         tBadModel%dZeta(1,1)=1.25D0*tBadModel%dZeta(1,1)
         call CompMQMQAGibbsEnergyUnconstrained(tBadModel,dState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
         lAllPass=lAllPass.AND.(iInfo==7)
-        tBadModel=tData
-        tBadModel%iModelType=0
-        call CompMQMQAGibbsEnergyUnconstrained(tBadModel,dState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
+        ! A newly constructed model remains unset even after its other data are
+        ! populated. This freezes the public contract that callers must choose
+        ! SUBG or SUBQ explicitly instead of inheriting a silent SUBG default.
+        tDefaultModel%nSublattice1=tData%nSublattice1
+        tDefaultModel%nSublattice2=tData%nSublattice2
+        tDefaultModel%iQuadruplet=tData%iQuadruplet
+        tDefaultModel%dCoordination=tData%dCoordination
+        tDefaultModel%dZeta=tData%dZeta
+        tDefaultModel%dReferenceEnergy=tData%dReferenceEnergy
+        lAllPass=lAllPass.AND.(tDefaultModel%iModelType==MQMQA_MODEL_UNSET)
+        call CompMQMQAGibbsEnergyUnconstrained(tDefaultModel,dState,1D0,tBad,dG,dRef,dIdeal,dEx,iInfo)
         lAllPass=lAllPass.AND.(iInfo==6)
         if (lVerbose) write(*,'(/,A)') &
             'failure checks: R, boundary state, nonuniform SUBG zeta, and unknown formulation rejected'

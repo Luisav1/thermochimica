@@ -3,8 +3,9 @@
 !> \brief   Build and apply the verified phase-local MQMQA correction to the reduced GEM equations.
 !>
 !> \details MQ-4B packages the diagnostic MQ-4A derivation as reusable software without activating it in
-!!          GEMNewton. For one active, uncharged, interior plain-SUBG phase, the builder upgrades the historical
-!!          ideal composition response to the complete supported MQMQA response and returns only their difference:
+!!          GEMNewton. For one active, uncharged, interior plain-SUBG or SUBQ phase, a model-specific builder
+!!          upgrades the historical ideal composition response to the complete supported MQMQA response and
+!!          returns only their difference:
 !!
 !!              deltaA = N*S^T*(Rcorr-Rbase)
 !!              deltaB = N*S^T*(rMuCorr-rMuBase).
@@ -21,7 +22,7 @@ module ModuleMQMQAResponseMapping
         iAssemblage, iParticlesPerMole, iPhaseElectronID, nElements, nSpeciesPhase
     USE ModuleMQMQAUnconstrained, ONLY: MQMQAModelData, MQMQAInteractionTerm, &
         CompMQMQAHessianUnconstrained
-    USE ModuleMQMQAProductionAdapter, ONLY: DecodeProductionSUBGPhase
+    USE ModuleMQMQAProductionAdapter, ONLY: DecodeProductionSUBGPhase, DecodeProductionSUBQPhase
     USE ModuleConstrainedResponse, ONLY: SolveConstrainedResponse
 
     implicit none
@@ -40,7 +41,8 @@ module ModuleMQMQAResponseMapping
     integer, parameter, public :: MQMQA_MAP_INVALID_CORRECTION = 10
     integer, parameter, public :: MQMQA_MAP_INVALID_APPLICATION = 11
 
-    public :: BuildMQMQAGEMCorrection, BuildMQMQAReducedCorrection, ApplyMQMQAGEMCorrection
+    public :: BuildMQMQAGEMCorrection, BuildMQMQASUBQGEMCorrection
+    public :: BuildMQMQAReducedCorrection, ApplyMQMQAGEMCorrection
 
 contains
 
@@ -61,6 +63,55 @@ contains
     subroutine BuildMQMQAGEMCorrection(iPhaseIndex,iPhaseSlot,dDeltaA,dDeltaB,lApplicable,iStatus)
 
         integer, intent(in) :: iPhaseIndex, iPhaseSlot
+        real(8), intent(out) :: dDeltaA(:,:), dDeltaB(:)
+        logical, intent(out) :: lApplicable
+        integer, intent(out) :: iStatus
+
+        call BuildMQMQAProductionCorrection(iPhaseIndex,iPhaseSlot,'SUBG',dDeltaA,dDeltaB, &
+            lApplicable,iStatus)
+
+    end subroutine BuildMQMQAGEMCorrection
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Build the unscaled reduced-GEM correction for one live SUBQ phase.
+    !>
+    !> \param[in]  iPhaseIndex Absolute production solution-phase index.
+    !> \param[in]  iPhaseSlot  Slot in `iAssemblage` and `dMolesPhase` containing this active phase.
+    !> \param[out] dDeltaA     Element-by-element response correction.
+    !> \param[out] dDeltaB     Element residual correction.
+    !> \param[out] lApplicable True once the phase passes model/domain eligibility, even if mapping later fails.
+    !> \param[out] iStatus     `MQMQA_MAP_SUCCESS`, an inapplicability code, or the precise failed stage.
+    !>
+    !> \details This entry point has the same output-clearing, eligibility, state-preservation, and response
+    !!          contract as the plain-SUBG builder, but requires `cSolnPhaseType == 'SUBQ'` and invokes only
+    !!          `DecodeProductionSUBQPhase`. It cannot silently reinterpret a SUBG phase as SUBQ.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine BuildMQMQASUBQGEMCorrection(iPhaseIndex,iPhaseSlot,dDeltaA,dDeltaB,lApplicable,iStatus)
+
+        integer, intent(in) :: iPhaseIndex, iPhaseSlot
+        real(8), intent(out) :: dDeltaA(:,:), dDeltaB(:)
+        logical, intent(out) :: lApplicable
+        integer, intent(out) :: iStatus
+
+        call BuildMQMQAProductionCorrection(iPhaseIndex,iPhaseSlot,'SUBQ',dDeltaA,dDeltaB, &
+            lApplicable,iStatus)
+
+    end subroutine BuildMQMQASUBQGEMCorrection
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Perform model-independent live-state checks and dispatch to one strict production decoder.
+    !>
+    !> \details `dChemicalPotential` must already contain the complete production partial molars produced by
+    !!          `CompChemicalPotential`; adding `dPartialExcessGibbs` here would double count excess terms.
+    !!          Outputs are cleared before every check, so no failure can expose a partial correction.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine BuildMQMQAProductionCorrection(iPhaseIndex,iPhaseSlot,cExpectedType,dDeltaA,dDeltaB, &
+        lApplicable,iStatus)
+
+        integer, intent(in) :: iPhaseIndex, iPhaseSlot
+        character(len=*), intent(in) :: cExpectedType
         real(8), intent(out) :: dDeltaA(:,:), dDeltaB(:)
         logical, intent(out) :: lApplicable
         integer, intent(out) :: iStatus
@@ -92,7 +143,11 @@ contains
         if ((iPhaseIndex < 1) .OR. (iPhaseIndex > SIZE(cSolnPhaseType)) .OR. &
             (iPhaseSlot < 1) .OR. (iPhaseSlot > SIZE(iAssemblage))) return
         if (iAssemblage(iPhaseSlot) /= -iPhaseIndex) return
-        if (cSolnPhaseType(iPhaseIndex) /= 'SUBG') return
+        if ((cExpectedType /= 'SUBG') .AND. (cExpectedType /= 'SUBQ')) then
+            iStatus = MQMQA_MAP_INVALID_INPUT
+            return
+        end if
+        if (cSolnPhaseType(iPhaseIndex) /= cExpectedType) return
         if (iPhaseElectronID(iPhaseIndex) /= 0) then
             iStatus = MQMQA_MAP_UNSUPPORTED_CHARGED_PHASE
             return
@@ -130,7 +185,12 @@ contains
             return
         end if
 
-        call DecodeProductionSUBGPhase(iPhaseIndex,tModel,tInteraction,iInfo)
+        select case (cExpectedType)
+        case ('SUBG')
+            call DecodeProductionSUBGPhase(iPhaseIndex,tModel,tInteraction,iInfo)
+        case ('SUBQ')
+            call DecodeProductionSUBQPhase(iPhaseIndex,tModel,tInteraction,iInfo)
+        end select
         if (iInfo /= 0) then
             iStatus = MQMQA_MAP_DECODE_FAILURE
             return
@@ -148,7 +208,7 @@ contains
         call BuildMQMQAReducedCorrection(dN,dX,dChemicalPotential(iFirst:iLast),dS,dHx, &
             dDeltaA,dDeltaB,iStatus)
 
-    end subroutine BuildMQMQAGEMCorrection
+    end subroutine BuildMQMQAProductionCorrection
 
 
     !---------------------------------------------------------------------------------------------------------

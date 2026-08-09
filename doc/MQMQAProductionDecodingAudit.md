@@ -95,6 +95,13 @@ Neither entry point accepts the other model type. Both then reuse the same
 filtered runtime ranges and topology translation while selecting their own
 standalone model formulation.
 
+This mirrors production Thermochimica's fail-closed model selection: the data
+file must identify a phase explicitly as `SUBG` or `SUBQ`, and production
+dispatches on that exact phase type rather than treating an unspecified type as
+plain `SUBG`. Accordingly, a default-constructed `MQMQAModelData` has
+`iModelType = MQMQA_MODEL_UNSET` and is intentionally invalid until its caller
+selects `MQMQA_MODEL_SUBG` or `MQMQA_MODEL_SUBQ` explicitly.
+
 The relevant runtime ranges are:
 
 ```text
@@ -424,11 +431,16 @@ coordinate system. SUBQ MQ-3B now re-establishes the ordinary `1/x` baseline
 and independently verifies the corrected `N*H_SUBQ` constrained response in
 all four supported FeTiVO element-potential directions. The worst
 oracle-resolved response error is `4.98E-10`, with a positive-definite but
-strongly ill-conditioned tangent Hessian. The existing SUBG-only builder
-remains intentionally unchanged. The dedicated SUBQ MQ-4A test now verifies
+strongly ill-conditioned tangent Hessian. The original plain-SUBG builder
+remains strict. The dedicated SUBQ MQ-4A test verifies
 the off-equilibrium reduced `deltaA`, `deltaB`, and combined affine identity
 against independently reconverged production partial-molar oracles, while
 also reproducing the selected phase's live GEM baseline at the same state.
-This clears the mathematical mapping gate for a later strict SUBQ MQ-4B
-builder extension; it does not itself broaden the builder or activate the
-correction in `GEMNewton`.
+The subsequent SUBQ MQ-4B extension adds the strict
+`BuildMQMQASUBQGEMCorrection` entry point without broadening the plain-SUBG
+entry point or decoder. At the verified off-equilibrium state, the reusable
+builder agrees with the independent MQ-4A construction to `1.10E-16` for
+`deltaA` and exactly for `deltaB`, leaves production state unchanged, and
+passes copied-array application and rejection-path checks. This packages the
+supported SUBQ mapping as diagnostic software; it still does not activate the
+correction in `GEMNewton` or define MQMQA trust/globalization.
