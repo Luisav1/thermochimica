@@ -13,7 +13,7 @@
 !!          2. Build one complete positive synthetic topology and exercise SUBQ S3, chi, and pair zeta changes.
 !!          3. Define isolated G, Q, ternary, and B interaction cases.
 !!          4. Apply the scalar/gradient/Hessian verification ladder to each case.
-!!          5. Quantify the known paper-versus-production SUBQ S3 distinction.
+!!          5. Quantify the corrected-weighted versus legacy-unweighted SUBQ S3 distinction.
 !!          6. Measure that distinction relative to complete controlled SUBQ
 !!             energy, chemical-potential, and Hessian scales.
 !!          7. Check the independently derived extensive B identity.
@@ -440,15 +440,13 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Quantify the published-versus-production SUBQ S3 formulation difference.
+    !> \brief Quantify the corrected-weighted versus legacy-unweighted SUBQ S3 difference.
     !>
-    !> \details Current production evaluates the S3 quadruplet term with ordinary
-    !!          pair fractions. Published Equations (5)--(6) define X_i/k from
-    !!          pair amounts containing 1/zeta_i/k; Equations (16) and (29) use
-    !!          those normalized zeta-weighted fractions in S3, while Equation
-    !!          (31) retains the corresponding zeta-dependent derivative. This
-    !!          diagnostic evaluates both definitions and finite-differences their
-    !!          signed difference without deciding why production diverges.
+    !> \details Published Equations (5)--(6) define X_i/k from pair amounts
+    !!          containing 1/zeta_i/k; Equations (16) and (29) use those normalized
+    !!          zeta-weighted fractions in S3, while Equation (31) retains the
+    !!          corresponding zeta-dependent derivative. This diagnostic compares
+    !!          the corrected weighted definition with the legacy unweighted one.
     !---------------------------------------------------------------------------------------------------------
     subroutine VerifyS3FormulationDifference(tData,dState,lAllPass,lVerbose)
 
@@ -459,14 +457,14 @@ contains
 
         real(8), allocatable :: dGradientCoarse(:),dGradientFine(:)
         real(8), allocatable :: dHessianCoarse(:,:),dHessianFine(:,:)
-        real(8) :: dProduction,dPaper,dDelta,dEnergyScaled,dGradientScaled,dHessianScaled
+        real(8) :: dLegacy,dWeighted,dDelta,dEnergyScaled,dGradientScaled,dHessianScaled
         real(8) :: dGradientUncertainty,dHessianUncertainty,dStep,dGradientMax,dHessianMax
         integer :: n,iInfo,iGradientWorst,iHessianRow,iHessianColumn,i,j
         logical :: lCasePass
 
         n=SIZE(dState)
         allocate(dGradientCoarse(n),dGradientFine(n),dHessianCoarse(n,n),dHessianFine(n,n))
-        call EvaluateS3Definitions(tData,dState,dProduction,dPaper,iInfo)
+        call EvaluateS3Definitions(tData,dState,dLegacy,dWeighted,iInfo)
         lCasePass=iInfo==0
         if (.NOT.lCasePass) then
             if (lVerbose) write(*,'(/,A,I0)') 'SUBQ S3 formulation diagnostic iInfo = ',iInfo
@@ -474,8 +472,8 @@ contains
             return
         end if
 
-        dDelta=dPaper-dProduction
-        dEnergyScaled=ABS(dDelta)/MAX(1D0,ABS(dPaper),ABS(dProduction))
+        dDelta=dWeighted-dLegacy
+        dEnergyScaled=ABS(dDelta)/MAX(1D0,ABS(dWeighted),ABS(dLegacy))
         dStep=1D-3*MINVAL(dState)
         call NumericalS3DifferenceDerivatives(tData,dState,dStep,dGradientCoarse,dHessianCoarse,iInfo)
         lCasePass=lCasePass.AND.(iInfo==0)
@@ -501,8 +499,7 @@ contains
             end do
         end do
 
-        ! The diagnostic must be non-vacuous and numerically resolved. These
-        ! gates do not choose between the paper and production conventions.
+        ! The diagnostic must be non-vacuous and numerically resolved.
         lCasePass=lCasePass.AND.ALL(IEEE_IS_FINITE(dGradientFine)) &
             .AND.ALL(IEEE_IS_FINITE(dHessianFine))
         lCasePass=lCasePass.AND.(dEnergyScaled>1D-10).AND.(dGradientScaled>1D-10) &
@@ -512,11 +509,10 @@ contains
         lAllPass=lAllPass.AND.lCasePass
 
         if (lVerbose) then
-            write(*,'(/,A)') 'SUBQ S3 paper-versus-production formulation diagnostic'
-            write(*,'(A)') 'production S3 uses ordinary pair fractions; paper S3 uses zeta-weighted fractions'
-            write(*,'(A,ES14.6)') 'production S3 = ',dProduction
-            write(*,'(A,ES14.6)') 'paper S3 = ',dPaper
-            write(*,'(A,ES14.6)') 'signed Delta S3 (paper-production) = ',dDelta
+            write(*,'(/,A)') 'SUBQ S3 corrected-weighted versus legacy-unweighted diagnostic'
+            write(*,'(A,ES14.6)') 'legacy unweighted S3 = ',dLegacy
+            write(*,'(A,ES14.6)') 'corrected weighted S3 = ',dWeighted
+            write(*,'(A,ES14.6)') 'signed Delta S3 (weighted-legacy) = ',dDelta
             write(*,'(A,ES12.4)') 'scaled energy difference = ',dEnergyScaled
             write(*,'(A,ES12.4)') 'gradient difference norm (scaled) = ',dGradientScaled
             write(*,'(A,ES12.4,A,I0)') 'maximum gradient difference = ',dGradientMax, &
@@ -533,25 +529,25 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Evaluate production-style and paper-style SUBQ S3 scalars independently.
+    !> \brief Evaluate legacy-unweighted and corrected-weighted SUBQ S3 scalars independently.
     !>
     !> \details The two expressions differ only in the four pair fractions inside
     !!          each quadruplet logarithm. Both use SUBQ theta=3/4, psi=1/2,
     !!          identical equivalent fractions, and the same quadruplet multiplicity.
     !---------------------------------------------------------------------------------------------------------
-    subroutine EvaluateS3Definitions(tData,dState,dProduction,dPaper,iInfo)
+    subroutine EvaluateS3Definitions(tData,dState,dLegacy,dWeighted,iInfo)
 
         type(MQMQAModelData), intent(in) :: tData
         real(8), intent(in) :: dState(:)
-        real(8), intent(out) :: dProduction,dPaper
+        real(8), intent(out) :: dLegacy,dWeighted
         integer, intent(out) :: iInfo
 
         integer :: n,q,i,j,a,b,x,y,nA,nX,iPosition,jPosition,iWeight
         real(8) :: dN,dOrdinarySum,dWeightedSum,dProdPairLog,dPaperPairLog,dEquivalentLog
         real(8), allocatable :: dFraction(:),dEquivalent1(:),dEquivalent2(:)
-        real(8), allocatable :: dOrdinary(:,:),dWeighted(:,:),dXOrdinary(:,:),dXWeighted(:,:)
+        real(8), allocatable :: dOrdinary(:,:),dWeightedAmount(:,:),dXOrdinary(:,:),dXWeighted(:,:)
 
-        iInfo=0; dProduction=0D0; dPaper=0D0
+        iInfo=0; dLegacy=0D0; dWeighted=0D0
         n=SIZE(dState)
         if ((tData%iModelType/=MQMQA_MODEL_SUBQ).OR.(n/=SIZE(tData%iQuadruplet,1)) &
             .OR.ANY(dState<=0D0)) then
@@ -560,12 +556,12 @@ contains
         end if
         allocate(dFraction(n),dEquivalent1(tData%nSublattice1),dEquivalent2(tData%nSublattice2), &
             dOrdinary(tData%nSublattice1,tData%nSublattice2), &
-            dWeighted(tData%nSublattice1,tData%nSublattice2), &
+            dWeightedAmount(tData%nSublattice1,tData%nSublattice2), &
             dXOrdinary(tData%nSublattice1,tData%nSublattice2), &
             dXWeighted(tData%nSublattice1,tData%nSublattice2))
 
         dN=SUM(dState); dFraction=dState/dN
-        dEquivalent1=0D0; dEquivalent2=0D0; dOrdinary=0D0; dWeighted=0D0
+        dEquivalent1=0D0; dEquivalent2=0D0; dOrdinary=0D0; dWeightedAmount=0D0
         do q=1,n
             a=tData%iQuadruplet(q,1); b=tData%iQuadruplet(q,2)
             x=tData%iQuadruplet(q,3); y=tData%iQuadruplet(q,4)
@@ -578,18 +574,19 @@ contains
                 do j=1,tData%nSublattice2
                     nX=MERGE(1,0,x==j)+MERGE(1,0,y==j)
                     dOrdinary(i,j)=dOrdinary(i,j)+dState(q)*DFLOAT(nA*nX)
-                    dWeighted(i,j)=dWeighted(i,j)+dState(q)*DFLOAT(nA*nX)/tData%dZeta(i,j)
+                    dWeightedAmount(i,j)=dWeightedAmount(i,j)+ &
+                        dState(q)*DFLOAT(nA*nX)/tData%dZeta(i,j)
                 end do
             end do
         end do
-        dOrdinarySum=SUM(dOrdinary); dWeightedSum=SUM(dWeighted)
+        dOrdinarySum=SUM(dOrdinary); dWeightedSum=SUM(dWeightedAmount)
         if ((dOrdinarySum<=0D0).OR.(dWeightedSum<=0D0).OR.ANY(dEquivalent1<=0D0) &
             .OR.ANY(dEquivalent2<=0D0)) then
             iInfo=2
             return
         end if
         dXOrdinary=dOrdinary/dOrdinarySum
-        dXWeighted=dWeighted/dWeightedSum
+        dXWeighted=dWeightedAmount/dWeightedSum
 
         do q=1,n
             a=tData%iQuadruplet(q,1); b=tData%iQuadruplet(q,2)
@@ -612,9 +609,9 @@ contains
             end do
             dEquivalentLog=DLOG(dEquivalent1(a))+DLOG(dEquivalent1(b))+ &
                 DLOG(dEquivalent2(x))+DLOG(dEquivalent2(y))
-            dProduction=dProduction+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
+            dLegacy=dLegacy+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
                 -0.75D0*dProdPairLog+0.5D0*dEquivalentLog)
-            dPaper=dPaper+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
+            dWeighted=dWeighted+dState(q)*(DLOG(dFraction(q))-DLOG(DFLOAT(iWeight)) &
                 -0.75D0*dPaperPairLog+0.5D0*dEquivalentLog)
         end do
 
@@ -622,7 +619,7 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
-    !> \brief Finite-difference the signed paper-minus-production S3 discrepancy.
+    !> \brief Finite-difference the signed weighted-minus-legacy S3 difference.
     !---------------------------------------------------------------------------------------------------------
     subroutine NumericalS3DifferenceDerivatives(tData,dState,dH,dGradient,dHessian,iInfo)
 
@@ -672,11 +669,11 @@ contains
     !>
     !> \details Three strictly positive states with the same total phase amount
     !!          probe the baseline composition and two deterministic composition
-    !!          skews. The production-style total is evaluated by the complete
-    !!          standalone SUBQ model. Because the paper-style interpretation
-    !!          changes only S3, its complete energy, gradient, and Hessian equal
-    !!          the production totals plus the independently finite-differenced
-    !!          paper-minus-production S3 difference.
+    !!          skews. The corrected weighted total is evaluated by the complete
+    !!          standalone SUBQ model. Because the legacy definition changes only
+    !!          S3, its complete energy, gradient, and Hessian equal the corrected
+    !!          totals minus the independently finite-differenced weighted-minus-
+    !!          legacy S3 difference.
     !!
     !!          These ratios measure numerical significance within this controlled
     !!          model. They do not measure equilibrium or phase-stability effects
@@ -693,10 +690,10 @@ contains
         integer, parameter :: nCases=3
         character(len=24), parameter :: cCaseName(nCases)=[character(len=24) :: &
             'baseline composition','graded composition skew','alternating composition']
-        real(8), allocatable :: dState(:,:),dGradientProduction(:),dGradientDeltaCoarse(:)
-        real(8), allocatable :: dGradientDelta(:),dHessianProduction(:,:),dHessianDeltaCoarse(:,:)
-        real(8), allocatable :: dHessianDelta(:,:),dGradientPaper(:),dHessianPaper(:,:)
-        real(8) :: dGProduction,dGPaper,dS3Production,dS3Paper,dDeltaG,dTotalAmount,dStep
+        real(8), allocatable :: dState(:,:),dGradientCorrected(:),dGradientDeltaCoarse(:)
+        real(8), allocatable :: dGradientDelta(:),dHessianCorrected(:,:),dHessianDeltaCoarse(:,:)
+        real(8), allocatable :: dHessianDelta(:,:),dGradientLegacy(:),dHessianLegacy(:,:)
+        real(8) :: dGCorrected,dGLegacy,dS3Legacy,dS3Weighted,dDeltaG,dTotalAmount,dStep
         real(8) :: dEnergyRatio,dGradientRatio,dHessianRatio,dGradientUncertainty,dHessianUncertainty
         real(8) :: dMinEnergyRatio,dMaxEnergyRatio,dMinGradientRatio,dMaxGradientRatio
         real(8) :: dMinHessianRatio,dMaxHessianRatio,dWeight
@@ -704,9 +701,9 @@ contains
         logical :: lCasePass,lAllCasesPass
 
         n=SIZE(dBaseState)
-        allocate(dState(n,nCases),dGradientProduction(n),dGradientDeltaCoarse(n), &
-            dGradientDelta(n),dHessianProduction(n,n),dHessianDeltaCoarse(n,n), &
-            dHessianDelta(n,n),dGradientPaper(n),dHessianPaper(n,n))
+        allocate(dState(n,nCases),dGradientCorrected(n),dGradientDeltaCoarse(n), &
+            dGradientDelta(n),dHessianCorrected(n,n),dHessianDeltaCoarse(n,n), &
+            dHessianDelta(n,n),dGradientLegacy(n),dHessianLegacy(n,n))
 
         dTotalAmount=SUM(dBaseState)
         dState(:,1)=dBaseState
@@ -731,19 +728,19 @@ contains
         if (lVerbose) then
             write(*,'(/,A)') 'SUBQ S3 significance relative to the complete controlled model'
             write(*,'(A)') 'All states are synthetic, positive, nonuniform-zeta states with equal total phase amount.'
-            write(*,'(A)') 'Ratios compare paper-minus-production S3 changes with complete production-style totals.'
+            write(*,'(A)') 'Ratios compare weighted-minus-legacy S3 changes with complete corrected totals.'
             write(*,'(A)') 'The energy ratio depends on the chosen reference-energy zero; derivative ratios do not.'
-            write(*,'(A)') 'state                       G production       Delta G   |Delta G|/|G|  '// &
+            write(*,'(A)') 'state                        G corrected       Delta G   |Delta G|/|G|  '// &
                 '||Delta mu||/||mu||  ||Delta H||/||H||'
         end if
 
         do iCase=1,nCases
             call CompMQMQAHessianUnconstrained(tData,dState(:,iCase),1D0,tTerm, &
-                dHessianProduction,iInfo,dGibbs=dGProduction,dGradient=dGradientProduction)
+                dHessianCorrected,iInfo,dGibbs=dGCorrected,dGradient=dGradientCorrected)
             lCasePass=iInfo==0
-            call EvaluateS3Definitions(tData,dState(:,iCase),dS3Production,dS3Paper,iLocalInfo)
+            call EvaluateS3Definitions(tData,dState(:,iCase),dS3Legacy,dS3Weighted,iLocalInfo)
             lCasePass=lCasePass.AND.(iLocalInfo==0)
-            dDeltaG=dS3Paper-dS3Production
+            dDeltaG=dS3Weighted-dS3Legacy
 
             dStep=1D-3*MINVAL(dState(:,iCase))
             call NumericalS3DifferenceDerivatives(tData,dState(:,iCase),dStep, &
@@ -753,21 +750,21 @@ contains
                 dGradientDelta,dHessianDelta,iLocalInfo)
             lCasePass=lCasePass.AND.(iLocalInfo==0)
 
-            dGPaper=dGProduction+dDeltaG
-            dGradientPaper=dGradientProduction+dGradientDelta
-            dHessianPaper=dHessianProduction+dHessianDelta
-            dEnergyRatio=ABS(dDeltaG)/MAX(1D0,ABS(dGProduction),ABS(dGPaper))
+            dGLegacy=dGCorrected-dDeltaG
+            dGradientLegacy=dGradientCorrected-dGradientDelta
+            dHessianLegacy=dHessianCorrected-dHessianDelta
+            dEnergyRatio=ABS(dDeltaG)/MAX(1D0,ABS(dGCorrected),ABS(dGLegacy))
             dGradientRatio=VectorNorm(dGradientDelta)/ &
-                MAX(1D0,VectorNorm(dGradientProduction),VectorNorm(dGradientPaper))
+                MAX(1D0,VectorNorm(dGradientCorrected),VectorNorm(dGradientLegacy))
             dHessianRatio=FrobeniusNorm(dHessianDelta)/ &
-                MAX(1D0,FrobeniusNorm(dHessianProduction),FrobeniusNorm(dHessianPaper))
+                MAX(1D0,FrobeniusNorm(dHessianCorrected),FrobeniusNorm(dHessianLegacy))
             dGradientUncertainty=VectorNorm(dGradientDelta-dGradientDeltaCoarse)/ &
                 MAX(1D0,VectorNorm(dGradientDelta))
             dHessianUncertainty=FrobeniusNorm(dHessianDelta-dHessianDeltaCoarse)/ &
                 MAX(1D0,FrobeniusNorm(dHessianDelta))
 
-            lCasePass=lCasePass.AND.IEEE_IS_FINITE(dGProduction).AND.IEEE_IS_FINITE(dGPaper) &
-                .AND.ALL(IEEE_IS_FINITE(dGradientPaper)).AND.ALL(IEEE_IS_FINITE(dHessianPaper))
+            lCasePass=lCasePass.AND.IEEE_IS_FINITE(dGCorrected).AND.IEEE_IS_FINITE(dGLegacy) &
+                .AND.ALL(IEEE_IS_FINITE(dGradientLegacy)).AND.ALL(IEEE_IS_FINITE(dHessianLegacy))
             lCasePass=lCasePass.AND.(dEnergyRatio>1D-12).AND.(dGradientRatio>1D-12) &
                 .AND.(dHessianRatio>1D-12)
             lCasePass=lCasePass.AND.(dGradientUncertainty<=0.05D0*dGradientRatio) &
@@ -782,7 +779,7 @@ contains
             dMaxHessianRatio=MAX(dMaxHessianRatio,dHessianRatio)
 
             if (lVerbose) then
-                write(*,'(A24,5ES19.6)') cCaseName(iCase),dGProduction,dDeltaG,dEnergyRatio, &
+                write(*,'(A24,5ES19.6)') cCaseName(iCase),dGCorrected,dDeltaG,dEnergyRatio, &
                     dGradientRatio,dHessianRatio
                 write(*,'(A,2ES12.4,A,L1)') '  derivative refinement disagreements (mu,H) = ', &
                     dGradientUncertainty,dHessianUncertainty,' resolved = ',lCasePass

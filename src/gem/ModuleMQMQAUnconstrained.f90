@@ -32,8 +32,9 @@
 !!          - zeta is fixed model data with zero mole derivatives. SUBG supplies one
 !!            common zeta for every pair. SUBQ may supply a different zeta for each
 !!            pair, creating a second, normalized zeta-weighted pair distribution.
-!!            S2 and B use that weighted distribution; S3 retains ordinary pair
-!!            fractions and changes through its separate theta/psi exponents.
+!!            S2 and B use that weighted distribution. S3 uses ordinary pair
+!!            fractions for SUBG and the weighted distribution for SUBQ, together
+!!            with the model-specific theta/psi exponents.
 !!          - chi and xi are normalized composition coordinates used by the G
 !!            and Q parameter families; they are calculated from quadruplet
 !!            populations and are not additional independent solver variables.
@@ -681,18 +682,21 @@ contains
         end select
         dS3 = 0D0
         do q = 1, SIZE(dMoles)
-            ! TODO Markus: Confirm why production evaluates SUBQ S3 with ordinary
-            ! pair fractions. Published Eqs. (5)--(6) define X_i/k from amounts
-            ! containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
-            ! zeta-weighted fractions in S3, and Eq. (31) retains the same zeta
-            ! dependence in its derivative. This path follows current production.
             iWeight = 1
             if (tModel%iQuadruplet(q,1) /= tModel%iQuadruplet(q,2)) iWeight = 2*iWeight
             if (tModel%iQuadruplet(q,3) /= tModel%iQuadruplet(q,4)) iWeight = 2*iWeight
             dPairLogBlock = 0D0
             do iPosition = 1, 2
                 do jPosition = 3, 4
-                    dDen = dPairFraction(tModel%iQuadruplet(q,iPosition),tModel%iQuadruplet(q,jPosition))
+                    if (tModel%iModelType == MQMQA_MODEL_SUBG) then
+                        dDen = dPairFraction(tModel%iQuadruplet(q,iPosition), &
+                            tModel%iQuadruplet(q,jPosition))
+                    else
+                        ! SUBQ S3 uses the normalized zeta-weighted X_i/k
+                        ! distribution defined by the updated-MQMQA equations.
+                        dDen = dPairWeightedFraction(tModel%iQuadruplet(q,iPosition), &
+                            tModel%iQuadruplet(q,jPosition))
+                    end if
                     if (dDen <= 0D0) then
                         iInfo = 42
                         return
@@ -1234,8 +1238,8 @@ contains
         tSiteSum1=ConstantSO(0D0,nQuad); tSiteSum2=ConstantSO(0D0,nQuad)
         ! Normalize the weighted amounts and form their first- and second-
         ! sublattice marginals. These F values feed S2; the complete weighted
-        ! pair distribution also feeds B. S3 below intentionally uses the
-        ! separately normalized ordinary pair distribution.
+        ! pair distribution also feeds B and the SUBQ form of S3. SUBG S3 uses
+        ! the separately normalized ordinary pair distribution.
         do a=1,tModel%nSublattice1
             tSiteSum1=AddSO(tSiteSum1,tSiteAmount1(a))
         end do
@@ -1306,18 +1310,21 @@ contains
         end select
         tS3=ConstantSO(0D0,nQuad)
         do q=1,nQuad
-            ! TODO Markus: Confirm why production evaluates SUBQ S3 with ordinary
-            ! pair fractions. Published Eqs. (5)--(6) define X_i/k from amounts
-            ! containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
-            ! zeta-weighted fractions in S3, and Eq. (31) retains the same zeta
-            ! dependence in its derivative. This path mirrors production.
             iWeight=1
             if (tModel%iQuadruplet(q,1)/=tModel%iQuadruplet(q,2)) iWeight=2*iWeight
             if (tModel%iQuadruplet(q,3)/=tModel%iQuadruplet(q,4)) iWeight=2*iWeight
             tPairLogBlock=ConstantSO(0D0,nQuad)
             do iPosition=1,2
                 do jPosition=3,4
-                    tDen=tPairFraction(tModel%iQuadruplet(q,iPosition),tModel%iQuadruplet(q,jPosition))
+                    if (tModel%iModelType==MQMQA_MODEL_SUBG) then
+                        tDen=tPairFraction(tModel%iQuadruplet(q,iPosition), &
+                            tModel%iQuadruplet(q,jPosition))
+                    else
+                        ! Keep the derivative structure unchanged while selecting
+                        ! the weighted SUBQ pair distribution used by the scalar path.
+                        tDen=tPairWeightedFraction(tModel%iQuadruplet(q,iPosition), &
+                            tModel%iQuadruplet(q,jPosition))
+                    end if
                     if (tDen%dValue<=0D0) then; iInfo=42; return; end if
                     tPairLogBlock=AddSO(tPairLogBlock,LogSO(tDen))
                 end do

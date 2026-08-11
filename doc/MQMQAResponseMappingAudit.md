@@ -910,9 +910,12 @@ nonlinear response agreement. Those are MQ-3B gates.
 
 FeTiVO has uniform zeta `2.4` and no `B` or `R` records. The first response test
 is therefore an assessed SUBQ `G/Q` test, not native response verification of
-every SUBQ feature. The documented paper-versus-production `S3` discrepancy is
-also not adjudicated here: the response path must follow current production
-Thermochimica until that model-definition question is resolved.
+every SUBQ feature. Production and the analytic implementation now both use the
+published zeta-weighted SUBQ `S3` definition. A separate controlled modified-
+runtime regression distinguishes that selection from the legacy unweighted form
+and verifies the corresponding weighted-normalization derivative in production
+partial molars;
+FeTiVO itself remains unable to distinguish them because its zeta is uniform.
 
 ### Reuse decision
 
@@ -1059,9 +1062,11 @@ mapper should activate at every similarly small minimum fraction or condition
 number; MQ-4 eligibility and globalization must define and test that policy.
 
 This completes native constrained-response verification for the assessed
-uniform-zeta FeTiVO SUBQ `G/Q` case. It does not verify SUBQ `B`, `R`,
-nonuniform-zeta production data, reduced `deltaA/deltaB` mapping, the live
-correction builder, or `GEMNewton` activation. The next SUBQ stage is a
+uniform-zeta FeTiVO SUBQ `G/Q` case. It does not verify SUBQ `B`, `R`, an
+assessed database-native nonuniform-zeta response, reduced `deltaA/deltaB`
+mapping, the live correction builder, or `GEMNewton` activation. The separate
+controlled runtime regression covers the corrected nonuniform-zeta local
+thermodynamics, not constrained response. The next SUBQ stage is a
 diagnostic reduced-mapping verification analogous to MQ-4A; the existing
 production correction builder remains strict plain-`SUBG` until that gate
 passes.
@@ -1176,7 +1181,7 @@ This completes the diagnostic-only SUBQ MQ-4B software contract for the
 assessed uniform-zeta FeTiVO `G/Q` case. It does not activate the correction in
 `GEMNewton`, select alpha, define trust/globalization policy, prove physical
 aggregation of multiple active SUBQ phases, or extend native evidence to `B`,
-`R`, magnetism, or nonuniform-zeta assessed data. Those are MQ-4C or later
+`R`, magnetism, or nonuniform-zeta assessed response data. Those are MQ-4C or later
 questions.
 
 ## MQ-4C Default-Off GEM Integration
@@ -1314,6 +1319,7 @@ The MQ-4C claim is therefore **live default-off integration demonstrated and
 transactionally verified**, not finished MQMQA solver integration. MQ-4C does
 not promise alpha-one robustness across calculations. Native
 evidence remains limited to assessed plain-SUBG cases and the uniform-zeta
-FeTiVO SUBQ `G/Q` case. SUBQ `B`, `R`,
-magnetism, nonuniform-zeta assessed data, native simultaneous multi-MQMQA
+FeTiVO SUBQ `G/Q` case, plus a controlled modified-runtime production regression
+of the corrected nonuniform-zeta S3 selection. SUBQ `B`, `R`,
+magnetism, assessed database-native nonuniform-zeta data, native simultaneous multi-MQMQA
 assemblages, and combined RKMP/MQMQA corrections remain outside this claim.

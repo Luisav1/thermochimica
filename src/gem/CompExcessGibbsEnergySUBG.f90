@@ -80,6 +80,7 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
     logical, allocatable, dimension(:) :: lAsymmetric1, lAsymmetric2
     logical :: lIsException
     real(8) :: dSum, dConfEntropy, dRef, dPowXij, dPowYi, dSumNij, dSumNsij, p, q, r, s
+    real(8) :: dPairIncidence, dWeightedPairIncidence
     real(8) :: dZa, dZb, dZx, dZy, dGex, dDgex, dDgexBase, dXtot
     real(8) :: dXi1, dXi2, dChi1, dChi2, dXiDen, dChiDen, dTernaryFactorG, dTernaryFactorDG, dYik, dYjk, dYdk
     real(8) :: dTernarySum1, dTernarySum2, dChiFactor
@@ -267,7 +268,12 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
             end if
         end do
 
-        ! Loop over n_i/j contributions to entropy
+        ! Loop over n_i/j contributions to entropy. Retain the ordinary and
+        ! zeta-weighted incidence of this quadruplet as well: the latter is
+        ! needed when differentiating the normalized weighted pair fractions
+        ! used by the SUBQ S3 block.
+        dPairIncidence = 0D0
+        dWeightedPairIncidence = 0D0
         ! m = 0
         do i = 1, nSub1
             do j = 1, nSub2
@@ -294,6 +300,9 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
                 end do
                 dConfEntropy = dConfEntropy + (DLOG(dXsij(i,j) / (dFi(i) * dFi(j + nSub1))) &
                             * (nA * nX / dZetaSpecies(iSPI,m)))
+                dPairIncidence = dPairIncidence + DFLOAT(nA*nX)
+                dWeightedPairIncidence = dWeightedPairIncidence + &
+                    DFLOAT(nA*nX)/dZetaSpecies(iSPI,m)
             end do
         end do
 
@@ -322,18 +331,32 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
             dPowYi  = 0.5D0
         end if
 
-        ! TODO Markus: Confirm why production SUBQ uses ordinary pair fractions
-        ! dXij in S3. Poschmann et al. Eqs. (5)--(6) define X_i/k from pair
-        ! amounts containing 1/zeta_i/k; Eqs. (16) and (29) use those normalized
-        ! zeta-weighted fractions in S3, and Eq. (31) retains the corresponding
-        ! 1/zeta_m/z derivative. See doc/MQMQAProductionDecodingAudit.md.
         if (.NOT. (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll) == 0D0)) then
-            dSum = iWeight * (dXij(ii,ka) * dXij(ii,la) * dXij(jj,ka) * dXij(jj,la))**dPowXij &
-                            / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi
+            ! SUBG uses ordinary pair frequencies. Updated-MQMQA SUBQ uses the
+            ! normalized zeta-weighted pair amounts defined by Eqs. (5)--(6),
+            ! which are the X_i/k quantities appearing in its S3 term.
+            if (cSolnPhaseType(iSolnIndex) == 'SUBG') then
+                dSum = iWeight * (dXij(ii,ka) * dXij(ii,la) * dXij(jj,ka) * dXij(jj,la))**dPowXij &
+                                / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi
+            else
+                dSum = iWeight * (dXsij(ii,ka) * dXsij(ii,la) * dXsij(jj,ka) * dXsij(jj,la))**dPowXij &
+                                / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi
+            end if
             if (dSum == 0) then
                 dConfEntropy = 100D0
             else
                 dConfEntropy = dConfEntropy + DLOG(dMolFraction(l) / dSum)
+                if (cSolnPhaseType(iSolnIndex) == 'SUBQ') then
+                    ! The direct logarithm above is only part of the derivative
+                    ! when pair-specific zeta values make the normalization of
+                    ! dXsij composition dependent. Differentiating
+                    !   -theta*SUM_p N_p*LOG((N_p/zeta_p)/SUM_r(N_r/zeta_r))
+                    ! adds the term below. It is exactly zero for a common zeta,
+                    ! which explains why uniform-zeta assessed cases could not
+                    ! detect the original omission.
+                    dConfEntropy = dConfEntropy-dPowXij*(dPairIncidence- &
+                        dSumNij*dWeightedPairIncidence/dSumNsij)
+                end if
             end if
         end if
 

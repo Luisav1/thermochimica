@@ -48,8 +48,8 @@ statistical weight of an A-X pair:
 weighted A-X amount = ordinary A-X amount / zeta(A,X)
 ```
 
-The weighted pair distribution is used by the configurational `S2` term and
-the production `B` interaction family.
+The weighted pair distribution is used by the configurational `S2` term, the
+production `B` interaction family, and the corrected SUBQ form of `S3`.
 
 For plain `SUBG`, the current database format reads one zeta value and applies
 it to every A-X pair. SUBQ can instead provide pair-dependent values. The
@@ -57,7 +57,7 @@ generic module stores `dZeta(A,X)` as a matrix, and the production adapter fills
 every entry from the corresponding runtime A-X pair record while verifying that
 all entries are present and positive.
 
-### Published SUBQ S3 versus current production
+### Corrected SUBQ S3 pair distribution
 
 The published updated-MQMQA formulation is unambiguous about the pair fractions
 used by SUBQ `S3`:
@@ -70,17 +70,39 @@ used by SUBQ `S3`:
    configurational term, with `phi=3/4` and `psi=1/2` for SUBQ.
 4. Eq. (31) retains `1/zeta(m,z)` in the corresponding pair-amount derivative.
 
-Current `CompExcessGibbsEnergySUBG.f90` instead uses the ordinary pair-fraction
-array `dXij` in the SUBQ `S3` block. The controlled paper-versus-production
-diagnostic proves that these definitions differ for nonuniform zeta. What
-remains unresolved is why production follows the ordinary-pair convention: an
-intentional later convention, database compatibility, an undocumented model
-decision, or an implementation discrepancy are all still possible. Until that
-history is adjudicated, the standalone production-aligned path continues to
-reproduce current Thermochimica and records the discrepancy explicitly. The
-complete-model derivative differences measured in the controlled synthetic
-states are modest but resolved and state-dependent; they do not establish that
-the discrepancy is globally small for all SUBQ states or databases.
+Source-history review established that the production SUBQ `S3` reference to
+ordinary `dXij` was an omitted update when the original pair fraction was split
+into ordinary and zeta-weighted arrays. Production now selects `dXsij` for SUBQ
+and retains `dXij` for SUBG. The standalone scalar and derivative paths make the
+same explicit model selection.
+
+The controlled derivative check also exposed a consequence that is invisible
+when zeta is uniform. Because `dXsij` is normalized by the sum of all weighted
+pair amounts, differentiating SUBQ `S3` requires both the direct pair-log term
+and the derivative of that normalization. Production now includes the exact
+normalization contribution
+
+```text
+-theta * (ordinary incidence
+          - total ordinary pair amount * weighted incidence
+            / total weighted pair amount)
+```
+
+for each quadruplet partial molar. The contribution is identically zero when
+all pairs share one zeta, but is required for production partial molars to equal
+the gradient of the corrected weighted scalar energy when zeta is pair specific.
+
+FeTiVO's assessed zeta values are uniformly `2.4`, so ordinary and weighted
+normalized fractions coincide there. The assessed-state test gates their maximum
+direct difference (`1.11E-16`) as well as the resulting S3 identity. A controlled
+test therefore saves the parsed runtime zeta row, installs deterministic positive
+nonuniform values, checks production against the corrected weighted standalone
+reference/configurational, complete excess, complete total, and gradient results,
+and restores the original row exactly. It also reconstructs the legacy unweighted
+block and requires a resolved separation. This is controlled modified-runtime
+production coverage, not an assessed database-native nonuniform-zeta case. The
+measured complete-model derivative differences remain modest but resolved and
+state-dependent in the synthetic states tested.
 
 ## Phase and Array Boundaries
 
@@ -413,10 +435,12 @@ is `2.98E-17`, raw Hessian symmetry is `1.20E-16`, and homogeneity is
 `2.12E-17`. All 14 independent total-preserving mole-transfer directions show
 the expected second-order production-partial-molar finite-difference region;
 the worst-best normwise error is `7.22E-10`, and the worst componentwise scaled
-error at the normwise-best steps is `5.51E-10`. The database contains no `B` or
-`R` records, and its uniform zeta does not provide native evidence for the
-nonuniform pair-specific-zeta branch. It is therefore a native assessed SUBQ
-G/Q case, not native verification of every SUBQ feature.
+   error at the normwise-best steps is `5.51E-10`. The database contains no `B` or
+   `R` records, and its uniform zeta cannot distinguish ordinary from weighted
+   pair fractions. The separate controlled modified-runtime regression provides
+   production evidence for the corrected nonuniform-zeta `S3` selection without
+   changing the assessed database. FeTiVO itself remains a native assessed SUBQ
+   G/Q case, not native verification of every SUBQ feature.
 
 `doc/MQMQAResponseMappingAudit.md` records both development tracks. The
 plain-`SUBG` track has progressed through the verified constrained response,

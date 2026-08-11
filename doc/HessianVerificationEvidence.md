@@ -256,13 +256,12 @@ establish that exact curvature reduces iteration count or wall-clock time.
   configurational, G, Q, B, and traced ternary formulas.
 - Standalone SUBQ evidence covers controlled nonmagnetic SUBQ configurational
   exponents, mixed-environment chi weights, pair-specific zeta propagation
-  through weighted-pair quantities, and B-family curvature. The separate
-  paper-versus-production S3 diagnostic follows the published Eqs. (5), (6),
-  (16), (29), and (31) in identifying the paper's normalized zeta-weighted pair
-  fractions. It quantifies, but does not explain or adjudicate, production's
-  different ordinary-pair convention. The resulting complete-model derivative
-  differences are modest but resolved and state-dependent in the controlled
-  states tested; this is not a claim that the discrepancy is globally small.
+  through weighted-pair quantities, and B-family curvature. The corrected
+  weighted-versus-legacy-unweighted S3 diagnostic follows published Eqs. (5),
+  (6), (16), (29), and (31). Production and both standalone evaluators now use
+  the weighted definition for SUBQ. The resulting complete-model derivative
+  differences from the legacy definition are modest but resolved and
+  state-dependent in the controlled states tested.
 - Native MQMQA Hessian evidence covers nonmagnetic plain SUBG reference,
   configurational, and G-family behavior from `CuFeC-Kang.dat`.
 - Native SUBQ scalar-energy evidence covers reference/configurational and G/Q
@@ -275,9 +274,20 @@ establish that exact curvature reduces iteration count or wall-clock time.
   the normwise-best steps is `5.5123E-10`, with second-order convergence in all
   14 independent total-preserving directions. This is a native assessed SUBQ
   G/Q case, not native verification of every SUBQ feature.
-- Native B-family parameters, reciprocal R terms, nonuniform-zeta SUBQ data,
-  magnetism, constrained SUBQ response, and SUBQ GEM integration remain outside
-  the demonstrated scope.
+- A controlled modified-runtime production regression verifies the corrected
+  nonuniform-zeta SUBQ S3 selection, including the derivative of the weighted
+  normalization, and restores FeTiVO's parsed zeta row exactly. At its positive
+  interior state, the corrected reference/configurational, complete excess, and
+  complete total parity errors are `1.47E-16`, `8.33E-17`, and `1.47E-16`.
+  The complete-gradient normwise error is `6.66E-17`, and the worst componentwise
+  scaled gradient error is `5.95E-17`. The corrected production block remains
+  resolved from the reconstructed legacy block by `1.42E-4`. In the unchanged
+  assessed uniform-zeta state, the maximum direct weighted/ordinary pair-fraction
+  difference is `1.11E-16`, making explicit why that database cannot distinguish
+  the two S3 definitions.
+  No assessed database-native nonuniform-zeta case is available. Native B-family
+  parameters, reciprocal R terms, and magnetism remain outside the demonstrated
+  scope.
 
 ## Reproduction
 
