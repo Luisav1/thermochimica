@@ -1178,3 +1178,109 @@ assessed uniform-zeta FeTiVO `G/Q` case. It does not activate the correction in
 aggregation of multiple active SUBQ phases, or extend native evidence to `B`,
 `R`, magnetism, or nonuniform-zeta assessed data. Those are MQ-4C or later
 questions.
+
+## MQ-4C Default-Off GEM Integration
+
+MQ-4C connects both strict MQ-4B entry points to `GEMNewton` behind persistent,
+default-off controls. `SetMQMQAHessianControls` accepts only finite alpha in
+`[0,1]`; invalid calls leave the previous request unchanged. Reset restores
+`enable=false` and `alpha=0`. A generic `MQMQAModelData` remains intentionally
+invalid until its caller explicitly selects `SUBG` or `SUBQ`.
+
+The atomic setter contract is exercised separately for negative alpha, alpha
+greater than one, NaN, positive infinity, and negative infinity. Every invalid
+call preserves the previously accepted enable flag and alpha exactly.
+
+For every assembled Newton system, the live router inspects active solution
+phases and dispatches exact model types only:
+
+```text
+SUBG -> BuildMQMQAGEMCorrection
+SUBQ -> BuildMQMQASUBQGEMCorrection
+other model types -> ignored
+```
+
+Charged phases are deliberate exclusions. `MQMQA_MAP_OUTSIDE_INTERIOR`
+separates a well-formed state with `min(x)<=1E-12` from malformed or nonfinite
+`MQMQA_MAP_INVALID_INPUT` data; the threshold itself is unchanged. A successful uncharged phase adds
+one complete `(deltaA,deltaB)` pair to temporary aggregate arrays. Any other
+failure after strict routing erases the entire aggregate, so a partially
+corrected global system cannot survive. Controlled sequential correction-pair
+additivity verifies this aggregation algebra; it is not native evidence for an
+assessed equilibrium containing multiple simultaneous MQMQA phases.
+
+### Historical baseline and linear transaction
+
+The historical baseline is the standard, fully assembled Thermochimica `A/B`
+after existing charged-phase safeguards and before any MQMQA correction. Since
+`DGESV` overwrites its arguments, the corrected solve receives private trial
+copies only:
+
+```text
+Atrial = Abase + alpha*deltaA
+Btrial = Bbase + alpha*deltaB.
+```
+
+The original baseline arrays remain untouched until the trial has passed
+application validation, `DGESV`, and a finite-update check. Application,
+corrected-solve, or nonfinite-update failure solves fresh copies of the
+historical baseline. Alpha zero bypasses construction and application entirely,
+which gives bit-for-bit baseline `A/B`, solve, and final-output behavior.
+
+Alpha is therefore a fixed correction weight in MQ-4C. It multiplies the
+completed reduced matrix and residual corrections together; it is not a scale
+factor on the analytic Hessian. Adaptive alpha selection, nonlinear merit
+checks, and recovery from poor full-curvature steps remain MQ-4D.
+
+### RKMP ownership
+
+Enabling both experimental controls is not itself a conflict. A conflict exists
+only when an eligible active RKMP phase and a successfully built nonzero-alpha
+MQMQA aggregate occur in the same solve. The untouched historical `A/B` is then
+passed directly to `SolveRKMPAlphaTrust`; the MQMQA aggregate is discarded and
+no MQMQA trial reaches RKMP trust. The four dual-control cases are checked:
+only RKMP eligible, only MQMQA eligible, neither eligible, and both eligible.
+The conflict case uses controlled RKMP ownership around a real SUBQ state
+because no assessed simultaneous RKMP/MQMQA assemblage is available. Its
+resulting update agrees exactly with the equivalent RKMP-owned solve, and no
+MQMQA trial is captured. This does not claim native multiphase coverage.
+
+### Diagnostics and verification boundary
+
+The integration metrics distinguish control request, supported phases,
+successful phase corrections, completed aggregates, applications, accepted
+corrected solves, and fallbacks. They separately count aggregate, application,
+`DGESV`, nonfinite-update, charged-exclusion, strict-interior, and RKMP-conflict
+outcomes. The interior metric also retains the minimum rejected fraction. With
+the element block/residual denoted by subscripts `ee/e`, the reported ratios are
+
+```text
+rhoA = ||alpha*deltaA||F / max(||Abase,ee||F,1E-30)
+rhoB = ||alpha*deltaB||2 / max(||Bbase,e||2,1E-30).
+```
+
+`TestMQMQAGEMIntegration.F90` verifies control persistence and reset, exact
+alpha-zero identity, strict live SUBG and SUBQ routing, state-free pair
+additivity and aggregate erasure, charged exclusion, application/`DGESV`/
+nonfinite fallback, and the RKMP ownership rule. At a controlled positive
+interior FeTiVO state, the captured corrected pre-solve system differs from the
+captured historical baseline only by the requested element-block and element-
+residual corrections. The maximum application discrepancy is `9.7700E-15`,
+and the alpha-one corrected linear solve returns a finite update with `INFO=0`.
+Just-below and just-above threshold controls freeze the dedicated interior
+status at the unchanged `1E-12` boundary.
+
+The separate full FeTiVO fixed-alpha-one run is evidence rather than an MQ-4C
+gate. The observed run converges in 95 iterations with no reversions, 82
+accepted corrected linear solves, and no application, `DGESV`, or nonfinite
+fallback. All 16 early fallbacks are classified solely as
+`MQMQA_MAP_OUTSIDE_INTERIOR`, with zero malformed aggregate failures; the
+smallest rejected fraction is `1.7504E-19`. Relative to the historical
+run, the scaled final differences are `3.4540E-13` for total Gibbs energy,
+`5.0564E-09` for the complete mole-fraction array, `2.0179E-09` for species
+moles, and `8.3206E-10` for phase amounts. This is encouraging evidence, but
+MQ-4C does not promise alpha-one robustness across calculations. Native
+evidence remains limited to assessed plain-SUBG cases and the uniform-zeta
+FeTiVO SUBQ `G/Q` case. SUBQ `B`, `R`,
+magnetism, nonuniform-zeta assessed data, native simultaneous multi-MQMQA
+assemblages, and combined RKMP/MQMQA corrections remain outside this claim.

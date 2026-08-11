@@ -91,10 +91,16 @@
 
 subroutine GEMNewton(INFO)
 
+    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
     USE ModuleThermo
     USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
     USE ModuleGEMSolver
     USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureGEMNewtonSystem
+    USE ModuleMQMQAResponseMapping, ONLY: BuildActiveMQMQAGEMCorrection, SolveMQMQACorrectionTrial, &
+        MQMQA_AGGREGATE_SUCCESS, MQMQA_AGGREGATE_NO_APPLICABLE_PHASE, MQMQA_AGGREGATE_PHASE_FAILURE, &
+        MQMQA_MAP_OUTSIDE_INTERIOR, &
+        MQMQA_TRIAL_ACCEPTED, MQMQA_TRIAL_APPLICATION_FALLBACK, MQMQA_TRIAL_DGESV_FALLBACK, &
+        MQMQA_TRIAL_NONFINITE_FALLBACK, MQMQA_TRIAL_BASELINE_FAILURE
 
     implicit none
 
@@ -253,8 +259,13 @@ subroutine GEMNewton(INFO)
         if ((nConPhases > 1) .OR. (nSolnPhases > 0)) then
         
             ! The system is not purely elemental, so use the RKMP Hessian if it is active and enabled.
-            if (lUseRKMPExactHessian .AND. lRKMPHessianActive) then
+            if (lUseRKMPExactHessian .AND. lRKMPHessianActive .AND. &
+                lUseMQMQAExactHessian .AND. (dMQMQAHessianAlpha > 0D0)) then
+                call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.TRUE.)
+            else if (lUseRKMPExactHessian .AND. lRKMPHessianActive) then
                 call SolveRKMPAlphaTrust(A, B, nVar, IPIV, INFO)
+            else if (lUseMQMQAExactHessian .AND. (dMQMQAHessianAlpha > 0D0)) then
+                call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.FALSE.)
             else
                 call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
             end if
@@ -311,6 +322,125 @@ subroutine GEMNewton(INFO)
     return
 
 contains
+
+    !> \brief Apply one fixed-alpha MQMQA aggregate transactionally and solve, with baseline fallback.
+    !!
+    !> \details `AIn/BIn` remain the only surviving historical baseline until a corrected trial has passed both
+    !! application and `DGESV`. On a simultaneous eligible RKMP/MQMQA solve, the untouched baseline is passed
+    !! directly to the existing RKMP trust routine and no MQMQA-modified trial can enter that path.
+    subroutine SolveMQMQAFixedAlpha(AIn,BIn,nLocalVar,IPIVIn,INFOOut,lRKMPOwnsSolve)
+
+        integer, intent(in) :: nLocalVar
+        integer, intent(inout) :: IPIVIn(:)
+        integer, intent(out) :: INFOOut
+        real(8), intent(inout) :: AIn(:,:), BIn(:)
+        logical, intent(in) :: lRKMPOwnsSolve
+
+        integer :: iAggregateStatus, iFailurePhase, iFailureStatus, iTrialStatus
+        integer :: nAccepted, nCharged
+        integer, allocatable :: IPIVTrial(:)
+        logical :: lAccepted, lApplied, lEligible, lSupported
+        real(8) :: dAppliedNormA, dAppliedNormB, dBaseNormA, dBaseNormB, dFailureMinimumFraction
+        real(8), allocatable :: ATrial(:,:), BTrial(:), dDeltaA(:,:), dDeltaB(:)
+
+        INFOOut = 0
+        allocate(dDeltaA(nElements,nElements),dDeltaB(nElements))
+        call BuildActiveMQMQAGEMCorrection(nSolnPhases,dDeltaA,dDeltaB,lSupported,lEligible, &
+            nAccepted,nCharged,iFailurePhase,iFailureStatus,dFailureMinimumFraction,iAggregateStatus)
+        lMQMQAHessianSupportedPhaseFound = lMQMQAHessianSupportedPhaseFound .OR. lSupported
+        nMQMQAHessianChargedSkipCount = nMQMQAHessianChargedSkipCount+nCharged
+
+        if ((iAggregateStatus /= MQMQA_AGGREGATE_SUCCESS) .AND. &
+            (iAggregateStatus /= MQMQA_AGGREGATE_NO_APPLICABLE_PHASE)) then
+            if (iFailureStatus == MQMQA_MAP_OUTSIDE_INTERIOR) then
+                nMQMQAHessianInteriorFallbackCount = nMQMQAHessianInteriorFallbackCount+1
+                dMQMQAHessianMinimumRejectedFraction = DMIN1( &
+                    dMQMQAHessianMinimumRejectedFraction,dFailureMinimumFraction)
+            else
+                nMQMQAHessianAggregateFailureCount = nMQMQAHessianAggregateFailureCount+1
+            end if
+            lMQMQAHessianFallbackUsed = .TRUE.
+            iMQMQAHessianLastFailurePhase = iFailurePhase
+            if (iAggregateStatus == MQMQA_AGGREGATE_PHASE_FAILURE) then
+                iMQMQAHessianLastFailureStatus = iFailureStatus
+            else
+                iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_AGGREGATE_FAILURE
+            end if
+            if (lRKMPOwnsSolve) then
+                call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            else
+                call dgesv(nLocalVar,1,AIn,nLocalVar,IPIVIn,BIn,nLocalVar,INFOOut)
+            end if
+            return
+        end if
+        if ((iAggregateStatus == MQMQA_AGGREGATE_NO_APPLICABLE_PHASE) .OR. (.NOT. lEligible)) then
+            if (lRKMPOwnsSolve) then
+                call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            else
+                call dgesv(nLocalVar,1,AIn,nLocalVar,IPIVIn,BIn,nLocalVar,INFOOut)
+            end if
+            return
+        end if
+
+        lMQMQAHessianEligibleCorrectionBuilt = .TRUE.
+        lMQMQAHessianAggregateBuilt = .TRUE.
+        nMQMQAHessianPhaseCorrectionCount = nMQMQAHessianPhaseCorrectionCount+nAccepted
+        dMQMQAHessianMaxDeltaA = DMAX1(dMQMQAHessianMaxDeltaA,MAXVAL(DABS(dDeltaA)))
+        dMQMQAHessianMaxDeltaB = DMAX1(dMQMQAHessianMaxDeltaB,MAXVAL(DABS(dDeltaB)))
+
+        if (lRKMPOwnsSolve) then
+            nMQMQAHessianRKMPConflictCount = nMQMQAHessianRKMPConflictCount+1
+            lMQMQAHessianFallbackUsed = .TRUE.
+            iMQMQAHessianLastFailurePhase = 0
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_RKMP_CONFLICT
+            call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            return
+        end if
+
+        allocate(ATrial(nLocalVar,nLocalVar),BTrial(nLocalVar),IPIVTrial(nLocalVar))
+        call SolveMQMQACorrectionTrial(AIn,BIn,nElements,dDeltaA,dDeltaB,dMQMQAHessianAlpha, &
+            ATrial,BTrial,IPIVTrial,INFOOut,lApplied,lAccepted,iTrialStatus)
+        if (lApplied) then
+            lMQMQAHessianCorrectionApplied = .TRUE.
+            nMQMQAHessianApplyCount = nMQMQAHessianApplyCount+1
+            dMQMQAHessianMaxAppliedA = DMAX1(dMQMQAHessianMaxAppliedA, &
+                MAXVAL(DABS(dMQMQAHessianAlpha*dDeltaA)))
+            dMQMQAHessianMaxAppliedB = DMAX1(dMQMQAHessianMaxAppliedB, &
+                MAXVAL(DABS(dMQMQAHessianAlpha*dDeltaB)))
+            dAppliedNormA = DSQRT(SUM((dMQMQAHessianAlpha*dDeltaA)**2))
+            dAppliedNormB = DSQRT(SUM((dMQMQAHessianAlpha*dDeltaB)**2))
+            dBaseNormA = DSQRT(SUM(AIn(1:nElements,1:nElements)**2))
+            dBaseNormB = DSQRT(SUM(BIn(1:nElements)**2))
+            dMQMQAHessianMaxRatioA = DMAX1(dMQMQAHessianMaxRatioA,dAppliedNormA/DMAX1(dBaseNormA,1D-30))
+            dMQMQAHessianMaxRatioB = DMAX1(dMQMQAHessianMaxRatioB,dAppliedNormB/DMAX1(dBaseNormB,1D-30))
+        end if
+
+        select case(iTrialStatus)
+        case(MQMQA_TRIAL_APPLICATION_FALLBACK)
+            nMQMQAHessianApplicationFailureCount = nMQMQAHessianApplicationFailureCount+1
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_APPLICATION_FAILURE
+        case(MQMQA_TRIAL_DGESV_FALLBACK)
+            nMQMQAHessianDGESVFallbackCount = nMQMQAHessianDGESVFallbackCount+1
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_DGESV_FAILURE
+        case(MQMQA_TRIAL_NONFINITE_FALLBACK)
+            nMQMQAHessianNonfiniteFallbackCount = nMQMQAHessianNonfiniteFallbackCount+1
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_NONFINITE_UPDATE
+        case(MQMQA_TRIAL_BASELINE_FAILURE)
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_DGESV_FAILURE
+        end select
+
+        AIn = ATrial
+        BIn = BTrial
+        IPIVIn = IPIVTrial
+        if (iTrialStatus == MQMQA_TRIAL_ACCEPTED) then
+            lMQMQAHessianCorrectedSolveAccepted = .TRUE.
+            nMQMQAHessianAcceptedSolveCount = nMQMQAHessianAcceptedSolveCount+1
+        else
+            lMQMQAHessianFallbackUsed = .TRUE.
+            iMQMQAHessianLastFailurePhase = 0
+        end if
+
+    end subroutine SolveMQMQAFixedAlpha
 
     !> \brief Select the largest locally trustworthy RKMP response correction.
     !!

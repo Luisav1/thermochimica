@@ -207,6 +207,38 @@ subroutine InitGEMSolver
     lRKMPHessianNonlinearReady = .FALSE.
     lRKMPHessianActive     = .FALSE.
     lRKMPHessianWasActive  = .FALSE.
+    nMQMQAHessianApplyCount = 0
+    nMQMQAHessianAcceptedSolveCount = 0
+    nMQMQAHessianPhaseCorrectionCount = 0
+    nMQMQAHessianChargedSkipCount = 0
+    nMQMQAHessianAggregateFailureCount = 0
+    nMQMQAHessianApplicationFailureCount = 0
+    nMQMQAHessianDGESVFallbackCount = 0
+    nMQMQAHessianNonfiniteFallbackCount = 0
+    nMQMQAHessianRKMPConflictCount = 0
+    nMQMQAHessianInteriorFallbackCount = 0
+    iMQMQAHessianLastFailurePhase = 0
+    iMQMQAHessianLastFailureStatus = 0
+    dMQMQAHessianMaxDeltaA = 0D0
+    dMQMQAHessianMaxDeltaB = 0D0
+    dMQMQAHessianMaxAppliedA = 0D0
+    dMQMQAHessianMaxAppliedB = 0D0
+    dMQMQAHessianMaxRatioA = 0D0
+    dMQMQAHessianMaxRatioB = 0D0
+    dMQMQAHessianMinimumRejectedFraction = HUGE(1D0)
+    lMQMQAHessianSupportedPhaseFound = .FALSE.
+    lMQMQAHessianEligibleCorrectionBuilt = .FALSE.
+    lMQMQAHessianAggregateBuilt = .FALSE.
+    lMQMQAHessianCorrectionApplied = .FALSE.
+    lMQMQAHessianCorrectedSolveAccepted = .FALSE.
+    lMQMQAHessianFallbackUsed = .FALSE.
+    if (lMQMQAHessianControlsConfigured) then
+        lUseMQMQAExactHessian = lMQMQAHessianRequestedEnable
+        dMQMQAHessianAlpha = dMQMQAHessianRequestedAlpha
+    else
+        lUseMQMQAExactHessian = .FALSE.
+        dMQMQAHessianAlpha = 0D0
+    end if
     lCompEverything         = .FALSE.
     lConverged              = .FALSE.
     lRevertSystem           = .FALSE.

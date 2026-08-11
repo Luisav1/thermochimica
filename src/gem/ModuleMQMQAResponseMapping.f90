@@ -1,9 +1,11 @@
 !-------------------------------------------------------------------------------------------------------------
 !> \file    ModuleMQMQAResponseMapping.f90
-!> \brief   Build and apply the verified phase-local MQMQA correction to the reduced GEM equations.
+!> \brief   Build, aggregate, apply, and transactionally solve verified phase-local MQMQA GEM corrections.
 !>
-!> \details MQ-4B packages the diagnostic MQ-4A derivation as reusable software without activating it in
-!!          GEMNewton. For one active, uncharged, interior plain-SUBG or SUBQ phase, a model-specific builder
+!> \details MQ-4B packages the diagnostic MQ-4A derivation as reusable software. MQ-4C adds strict active-phase
+!!          routing, all-or-nothing aggregation, and a baseline-preserving fixed-alpha linear transaction used
+!!          by a default-off GEMNewton path. For one active, uncharged, interior plain-SUBG or SUBQ phase, a
+!!          model-specific builder
 !!          upgrades the historical ideal composition response to the complete supported MQMQA response and
 !!          returns only their difference:
 !!
@@ -11,8 +13,8 @@
 !!              deltaB = N*S^T*(rMuCorr-rMuBase).
 !!
 !!          The builder never changes Thermochimica global state or a GEM matrix. The separate applicator changes
-!!          only the caller-owned element block and element residual. Solver activation, trust selection, and
-!!          globalization remain MQ-4C work.
+!!          only the caller-owned element block and element residual. Alpha weights the completed correction,
+!!          never the local Hessian. Adaptive trust selection and nonlinear globalization remain MQ-4D work.
 !-------------------------------------------------------------------------------------------------------------
 
 module ModuleMQMQAResponseMapping
@@ -24,6 +26,7 @@ module ModuleMQMQAResponseMapping
         CompMQMQAHessianUnconstrained
     USE ModuleMQMQAProductionAdapter, ONLY: DecodeProductionSUBGPhase, DecodeProductionSUBQPhase
     USE ModuleConstrainedResponse, ONLY: SolveConstrainedResponse
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureGEMNewtonCorrectedSystem
 
     implicit none
     private
@@ -40,11 +43,178 @@ module ModuleMQMQAResponseMapping
     integer, parameter, public :: MQMQA_MAP_BASELINE_RESIDUAL_RESPONSE_FAILURE = 9
     integer, parameter, public :: MQMQA_MAP_INVALID_CORRECTION = 10
     integer, parameter, public :: MQMQA_MAP_INVALID_APPLICATION = 11
+    integer, parameter, public :: MQMQA_MAP_OUTSIDE_INTERIOR = 12
+    real(8), parameter, public :: MQMQA_INTERIOR_MINIMUM = 1D-12
+    integer, parameter, public :: MQMQA_AGGREGATE_SUCCESS = 0
+    integer, parameter, public :: MQMQA_AGGREGATE_NO_APPLICABLE_PHASE = 1
+    integer, parameter, public :: MQMQA_AGGREGATE_INVALID_INPUT = 2
+    integer, parameter, public :: MQMQA_AGGREGATE_PHASE_FAILURE = 3
+    integer, parameter, public :: MQMQA_TRIAL_ACCEPTED = 0
+    integer, parameter, public :: MQMQA_TRIAL_APPLICATION_FALLBACK = 1
+    integer, parameter, public :: MQMQA_TRIAL_DGESV_FALLBACK = 2
+    integer, parameter, public :: MQMQA_TRIAL_NONFINITE_FALLBACK = 3
+    integer, parameter, public :: MQMQA_TRIAL_BASELINE_FAILURE = 4
 
     public :: BuildMQMQAGEMCorrection, BuildMQMQASUBQGEMCorrection
     public :: BuildMQMQAReducedCorrection, ApplyMQMQAGEMCorrection
+    public :: BuildActiveMQMQAGEMCorrection, AggregateMQMQACorrectionPairs
+    public :: SolveMQMQACorrectionTrial
 
 contains
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Route every active SUBG/SUBQ phase and build one all-or-nothing reduced-GEM correction.
+    !>
+    !> \details Unrelated models are ignored before routing. Unsupported charged phases are counted as deliberate
+    !!          exclusions. Every other failure from a routed model invalidates the complete aggregate, preventing
+    !!          a partially corrected GEM system when one eligible phase cannot provide its response.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine BuildActiveMQMQAGEMCorrection(nActive,dDeltaA,dDeltaB,lSupportedFound,lEligible, &
+        nAccepted,nCharged,iFailurePhase,iFailureStatus,dFailureMinimumFraction,iStatus)
+
+        integer, intent(in) :: nActive
+        real(8), intent(out) :: dDeltaA(:,:), dDeltaB(:)
+        logical, intent(out) :: lSupportedFound, lEligible
+        integer, intent(out) :: nAccepted, nCharged, iFailurePhase, iFailureStatus, iStatus
+        real(8), intent(out) :: dFailureMinimumFraction
+
+        integer :: iPhase, iSlot, k, nRouted
+        integer, allocatable :: iPhaseID(:), iPhaseStatus(:)
+        logical, allocatable :: lApplicable(:)
+        real(8), allocatable :: dPhaseA(:,:,:), dPhaseB(:,:)
+
+        dDeltaA = 0D0
+        dDeltaB = 0D0
+        lSupportedFound = .FALSE.
+        lEligible = .FALSE.
+        nAccepted = 0
+        nCharged = 0
+        iFailurePhase = 0
+        iFailureStatus = MQMQA_MAP_SUCCESS
+        dFailureMinimumFraction = HUGE(1D0)
+        iStatus = MQMQA_AGGREGATE_INVALID_INPUT
+        if ((nActive < 0) .OR. (SIZE(dDeltaA,1) /= nElements) .OR. &
+            (SIZE(dDeltaA,2) /= nElements) .OR. (SIZE(dDeltaB) /= nElements)) return
+        if ((.NOT. ALLOCATED(iAssemblage)) .OR. (.NOT. ALLOCATED(cSolnPhaseType))) return
+
+        if (nActive == 0) then
+            iStatus = MQMQA_AGGREGATE_NO_APPLICABLE_PHASE
+            return
+        end if
+        allocate(dPhaseA(nElements,nElements,nActive),dPhaseB(nElements,nActive), &
+            lApplicable(nActive),iPhaseStatus(nActive),iPhaseID(nActive))
+        dPhaseA = 0D0
+        dPhaseB = 0D0
+        lApplicable = .FALSE.
+        iPhaseStatus = MQMQA_MAP_NOT_APPLICABLE
+        iPhaseID = 0
+
+        nRouted = 0
+        do k = 1, nActive
+            iSlot = nElements-k+1
+            if ((iSlot < 1) .OR. (iSlot > SIZE(iAssemblage))) cycle
+            iPhase = -iAssemblage(iSlot)
+            if ((iPhase < 1) .OR. (iPhase > SIZE(cSolnPhaseType))) cycle
+            if ((cSolnPhaseType(iPhase) /= 'SUBG') .AND. &
+                (cSolnPhaseType(iPhase) /= 'SUBQ')) cycle
+
+            lSupportedFound = .TRUE.
+            nRouted = nRouted+1
+            iPhaseID(nRouted) = iPhase
+            select case(cSolnPhaseType(iPhase))
+            case('SUBG')
+                call BuildMQMQAGEMCorrection(iPhase,iSlot,dPhaseA(:,:,nRouted),dPhaseB(:,nRouted), &
+                    lApplicable(nRouted),iPhaseStatus(nRouted))
+            case('SUBQ')
+                call BuildMQMQASUBQGEMCorrection(iPhase,iSlot,dPhaseA(:,:,nRouted),dPhaseB(:,nRouted), &
+                    lApplicable(nRouted),iPhaseStatus(nRouted))
+            end select
+        end do
+
+        if (nRouted == 0) then
+            iStatus = MQMQA_AGGREGATE_NO_APPLICABLE_PHASE
+            return
+        end if
+        call AggregateMQMQACorrectionPairs(dPhaseA(:,:,1:nRouted),dPhaseB(:,1:nRouted), &
+            lApplicable(1:nRouted),iPhaseStatus(1:nRouted),dDeltaA,dDeltaB,nAccepted,nCharged, &
+            k,iFailureStatus,iStatus)
+        if (iStatus == MQMQA_AGGREGATE_PHASE_FAILURE) then
+            iFailurePhase = iPhaseID(k)
+            if ((iFailureStatus == MQMQA_MAP_OUTSIDE_INTERIOR) .AND. (iFailurePhase > 0)) then
+                dFailureMinimumFraction = MINVAL(dMolFraction( &
+                    nSpeciesPhase(iFailurePhase-1)+1:nSpeciesPhase(iFailurePhase)))
+            end if
+        end if
+        lEligible = (iStatus == MQMQA_AGGREGATE_SUCCESS) .AND. (nAccepted > 0)
+
+    end subroutine BuildActiveMQMQAGEMCorrection
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Combine prebuilt phase-local correction pairs using MQ-4C transactional failure semantics.
+    !>
+    !> \details This state-free helper is shared by live routing and controlled aggregation tests. A charged
+    !!          exclusion is skipped deliberately; every other unsuccessful routed pair erases all prior sums.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine AggregateMQMQACorrectionPairs(dPhaseA,dPhaseB,lApplicable,iPhaseStatus,dDeltaA,dDeltaB, &
+        nAccepted,nCharged,iFailurePair,iFailureStatus,iStatus)
+
+        real(8), intent(in) :: dPhaseA(:,:,:), dPhaseB(:,:)
+        logical, intent(in) :: lApplicable(:)
+        integer, intent(in) :: iPhaseStatus(:)
+        real(8), intent(out) :: dDeltaA(:,:), dDeltaB(:)
+        integer, intent(out) :: nAccepted, nCharged, iFailurePair, iFailureStatus, iStatus
+
+        integer :: k, nPair
+
+        dDeltaA = 0D0
+        dDeltaB = 0D0
+        nAccepted = 0
+        nCharged = 0
+        iFailurePair = 0
+        iFailureStatus = MQMQA_MAP_SUCCESS
+        iStatus = MQMQA_AGGREGATE_INVALID_INPUT
+        nPair = SIZE(dPhaseA,3)
+        if ((nPair < 1) .OR. (SIZE(dPhaseA,1) /= SIZE(dDeltaA,1)) .OR. &
+            (SIZE(dPhaseA,2) /= SIZE(dDeltaA,2)) .OR. (SIZE(dPhaseB,1) /= SIZE(dDeltaB)) .OR. &
+            (SIZE(dPhaseB,2) /= nPair) .OR. (SIZE(lApplicable) /= nPair) .OR. &
+            (SIZE(iPhaseStatus) /= nPair)) return
+
+        do k = 1, nPair
+            if (lApplicable(k) .AND. (iPhaseStatus(k) == MQMQA_MAP_SUCCESS)) then
+                if ((.NOT. ALL(IEEE_IS_FINITE(dPhaseA(:,:,k)))) .OR. &
+                    (.NOT. ALL(IEEE_IS_FINITE(dPhaseB(:,k))))) then
+                    iFailurePair = k
+                    iFailureStatus = MQMQA_MAP_INVALID_CORRECTION
+                    iStatus = MQMQA_AGGREGATE_PHASE_FAILURE
+                    dDeltaA = 0D0
+                    dDeltaB = 0D0
+                    return
+                end if
+                dDeltaA = dDeltaA+dPhaseA(:,:,k)
+                dDeltaB = dDeltaB+dPhaseB(:,k)
+                nAccepted = nAccepted+1
+            else if ((.NOT. lApplicable(k)) .AND. &
+                (iPhaseStatus(k) == MQMQA_MAP_UNSUPPORTED_CHARGED_PHASE)) then
+                nCharged = nCharged+1
+            else
+                iFailurePair = k
+                iFailureStatus = iPhaseStatus(k)
+                iStatus = MQMQA_AGGREGATE_PHASE_FAILURE
+                dDeltaA = 0D0
+                dDeltaB = 0D0
+                nAccepted = 0
+                return
+            end if
+        end do
+
+        if (nAccepted > 0) then
+            iStatus = MQMQA_AGGREGATE_SUCCESS
+        else
+            iStatus = MQMQA_AGGREGATE_NO_APPLICABLE_PHASE
+        end if
+
+    end subroutine AggregateMQMQACorrectionPairs
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Build the unscaled reduced-GEM correction for one live plain-SUBG phase.
@@ -168,11 +338,15 @@ contains
         allocate(dX(nQuad),dMoles(nQuad),dS(nQuad,nElements))
         dX = dMolFraction(iFirst:iLast)
         if ((.NOT. IEEE_IS_FINITE(dN)) .OR. (dN <= 0D0) .OR. &
-            (.NOT. ALL(IEEE_IS_FINITE(dX))) .OR. (MINVAL(dX) <= 1D-12) .OR. &
+            (.NOT. ALL(IEEE_IS_FINITE(dX))) .OR. &
             (ABS(SUM(dX)-1D0) > 1D-10) .OR. &
             (.NOT. ALL(IEEE_IS_FINITE(dChemicalPotential(iFirst:iLast)))) .OR. &
             ANY(iParticlesPerMole(iFirst:iLast) <= 0)) then
             iStatus = MQMQA_MAP_INVALID_INPUT
+            return
+        end if
+        if (MINVAL(dX) <= MQMQA_INTERIOR_MINIMUM) then
+            iStatus = MQMQA_MAP_OUTSIDE_INTERIOR
             return
         end if
 
@@ -240,8 +414,12 @@ contains
             (SIZE(dDeltaB) /= nElement)) return
         if ((.NOT. IEEE_IS_FINITE(dN)) .OR. (dN <= 0D0) .OR. (.NOT. ALL(IEEE_IS_FINITE(dX))) .OR. &
             (.NOT. ALL(IEEE_IS_FINITE(dMu))) .OR. (.NOT. ALL(IEEE_IS_FINITE(dS))) .OR. &
-            (.NOT. ALL(IEEE_IS_FINITE(dHx))) .OR. (MINVAL(dX) <= 1D-12) .OR. &
+            (.NOT. ALL(IEEE_IS_FINITE(dHx))) .OR. &
             (ABS(SUM(dX)-1D0) > 1D-10)) return
+        if (MINVAL(dX) <= MQMQA_INTERIOR_MINIMUM) then
+            iStatus = MQMQA_MAP_OUTSIDE_INTERIOR
+            return
+        end if
 
         allocate(dHbase(nQuad,nQuad),dConstraint(1,nQuad),dResponse(nQuad,nElement), &
             dResponseBase(nQuad,nElement),dMultiplier(1,nElement),dForceMu(nQuad,1), &
@@ -355,6 +533,87 @@ contains
         iStatus = MQMQA_MAP_SUCCESS
 
     end subroutine ApplyMQMQAGEMCorrection
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Solve one fixed-alpha correction trial while preserving a complete historical fallback system.
+    !>
+    !> \details The supplied baseline arrays are never passed to the corrected `DGESV` call because LAPACK
+    !!          overwrites both matrix and right-hand side. A valid correction is first applied to private trial
+    !!          copies. If application fails, the corrected matrix is singular, or the resulting update is not
+    !!          finite, untouched baseline copies are solved instead. This state-free transaction is shared by
+    !!          live GEM integration and controlled failure-path tests; model routing remains outside it.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine SolveMQMQACorrectionTrial(dABase,dBBase,nElement,dDeltaA,dDeltaB,dAlpha, &
+        dASolved,dBSolved,iPiv,iInfo,lApplied,lAccepted,iStatus)
+
+        integer, intent(in) :: nElement
+        real(8), intent(in) :: dABase(:,:), dBBase(:), dDeltaA(:,:), dDeltaB(:), dAlpha
+        real(8), intent(out) :: dASolved(:,:), dBSolved(:)
+        integer, intent(out) :: iPiv(:), iInfo, iStatus
+        logical, intent(out) :: lApplied, lAccepted
+
+        integer :: iApplyStatus, iTrialInfo, nVar
+        integer, allocatable :: iTrialPiv(:)
+        real(8), allocatable :: dATrial(:,:), dBTrial(:)
+
+        nVar = SIZE(dBBase)
+        dASolved = 0D0
+        dBSolved = 0D0
+        iPiv = 0
+        iInfo = -1
+        iStatus = MQMQA_TRIAL_APPLICATION_FALLBACK
+        lApplied = .FALSE.
+        lAccepted = .FALSE.
+        if ((nVar < 1) .OR. (nElement < 1) .OR. (nElement > nVar) .OR. &
+            (SIZE(dABase,1) /= nVar) .OR. (SIZE(dABase,2) /= nVar) .OR. &
+            (SIZE(dASolved,1) /= nVar) .OR. (SIZE(dASolved,2) /= nVar) .OR. &
+            (SIZE(dBSolved) /= nVar) .OR. (SIZE(iPiv) /= nVar) .OR. &
+            (SIZE(dDeltaA,1) /= nElement) .OR. (SIZE(dDeltaA,2) /= nElement) .OR. &
+            (SIZE(dDeltaB) /= nElement) .OR. (.NOT. ALL(IEEE_IS_FINITE(dABase))) .OR. &
+            (.NOT. ALL(IEEE_IS_FINITE(dBBase)))) return
+
+        allocate(dATrial(nVar,nVar),dBTrial(nVar),iTrialPiv(nVar))
+        dASolved = dABase
+        dBSolved = dBBase
+        dATrial = dABase
+        dBTrial = dBBase
+        iTrialPiv = 0
+        call ApplyMQMQAGEMCorrection(dATrial,dBTrial,nElement,dDeltaA,dDeltaB,dAlpha,iApplyStatus)
+        if (iApplyStatus /= MQMQA_MAP_SUCCESS) then
+            iStatus = MQMQA_TRIAL_APPLICATION_FALLBACK
+            call dgesv(nVar,1,dASolved,nVar,iPiv,dBSolved,nVar,iInfo)
+            if ((iInfo /= 0) .OR. (.NOT. ALL(IEEE_IS_FINITE(dBSolved)))) &
+                iStatus = MQMQA_TRIAL_BASELINE_FAILURE
+            return
+        end if
+
+        lApplied = .TRUE.
+        call CaptureGEMNewtonCorrectedSystem(dATrial,dBTrial,nVar)
+        call dgesv(nVar,1,dATrial,nVar,iTrialPiv,dBTrial,nVar,iTrialInfo)
+        if (iTrialInfo /= 0) then
+            iStatus = MQMQA_TRIAL_DGESV_FALLBACK
+        else if (.NOT. ALL(IEEE_IS_FINITE(dBTrial))) then
+            iStatus = MQMQA_TRIAL_NONFINITE_FALLBACK
+        else
+            dASolved = dATrial
+            dBSolved = dBTrial
+            iPiv = iTrialPiv
+            iInfo = 0
+            iStatus = MQMQA_TRIAL_ACCEPTED
+            lAccepted = .TRUE.
+            return
+        end if
+
+        ! The corrected trial has consumed only private arrays, so fallback still sees the exact historical system.
+        dASolved = dABase
+        dBSolved = dBBase
+        iPiv = 0
+        call dgesv(nVar,1,dASolved,nVar,iPiv,dBSolved,nVar,iInfo)
+        if ((iInfo /= 0) .OR. (.NOT. ALL(IEEE_IS_FINITE(dBSolved)))) &
+            iStatus = MQMQA_TRIAL_BASELINE_FAILURE
+
+    end subroutine SolveMQMQACorrectionTrial
 
 
     !> Return a scale-normalized residual for the complete bordered response equations.

@@ -16,10 +16,13 @@ module ModuleGEMNewtonDiagnosticCapture
 
     logical, public :: lCaptureGEMNewtonSystem = .FALSE.
     logical, public :: lGEMNewtonSystemCaptured = .FALSE.
+    logical, public :: lCaptureGEMNewtonCorrectedSystem = .FALSE.
+    logical, public :: lGEMNewtonCorrectedSystemCaptured = .FALSE.
     integer, public :: nCapturedGEMNewtonVariables = 0
     real(8), allocatable, public :: dCapturedGEMNewtonA(:,:), dCapturedGEMNewtonB(:)
+    real(8), allocatable, public :: dCapturedGEMNewtonCorrectedA(:,:), dCapturedGEMNewtonCorrectedB(:)
 
-    public :: CaptureGEMNewtonSystem, ResetGEMNewtonDiagnosticCapture
+    public :: CaptureGEMNewtonSystem, CaptureGEMNewtonCorrectedSystem, ResetGEMNewtonDiagnosticCapture
 
 contains
 
@@ -47,14 +50,40 @@ contains
 
 
     !---------------------------------------------------------------------------------------------------------
+    !> \brief Copy the MQMQA-corrected trial system before its destructive linear solve.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureGEMNewtonCorrectedSystem(dA,dB,nVar)
+
+        integer, intent(in) :: nVar
+        real(8), intent(in) :: dA(:,:), dB(:)
+
+        if (.NOT. lCaptureGEMNewtonCorrectedSystem) return
+        if ((nVar <= 0) .OR. (SIZE(dA,1) < nVar) .OR. (SIZE(dA,2) < nVar) .OR. &
+            (SIZE(dB) < nVar)) return
+
+        if (allocated(dCapturedGEMNewtonCorrectedA)) deallocate(dCapturedGEMNewtonCorrectedA)
+        if (allocated(dCapturedGEMNewtonCorrectedB)) deallocate(dCapturedGEMNewtonCorrectedB)
+        allocate(dCapturedGEMNewtonCorrectedA(nVar,nVar),dCapturedGEMNewtonCorrectedB(nVar))
+        dCapturedGEMNewtonCorrectedA = dA(1:nVar,1:nVar)
+        dCapturedGEMNewtonCorrectedB = dB(1:nVar)
+        lGEMNewtonCorrectedSystemCaptured = .TRUE.
+
+    end subroutine CaptureGEMNewtonCorrectedSystem
+
+
+    !---------------------------------------------------------------------------------------------------------
     !> \brief Clear captured storage and restore the default-inactive diagnostic state.
     !---------------------------------------------------------------------------------------------------------
     subroutine ResetGEMNewtonDiagnosticCapture
 
         if (allocated(dCapturedGEMNewtonA)) deallocate(dCapturedGEMNewtonA)
         if (allocated(dCapturedGEMNewtonB)) deallocate(dCapturedGEMNewtonB)
+        if (allocated(dCapturedGEMNewtonCorrectedA)) deallocate(dCapturedGEMNewtonCorrectedA)
+        if (allocated(dCapturedGEMNewtonCorrectedB)) deallocate(dCapturedGEMNewtonCorrectedB)
         lCaptureGEMNewtonSystem = .FALSE.
+        lCaptureGEMNewtonCorrectedSystem = .FALSE.
         lGEMNewtonSystemCaptured = .FALSE.
+        lGEMNewtonCorrectedSystemCaptured = .FALSE.
         nCapturedGEMNewtonVariables = 0
 
     end subroutine ResetGEMNewtonDiagnosticCapture

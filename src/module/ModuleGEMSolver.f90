@@ -61,6 +61,22 @@
     !!                                   locally settled, and making acceptable residual progress.
     !> \param lRKMPHessianActive True when the current assemblage contains a plain RKMP solution phase.
     !> \param lRKMPHessianWasActive True after a plain RKMP phase has appeared during the current GEM solve.
+    !> \param lUseMQMQAExactHessian True only when the caller requests the default-off fixed-alpha MQMQA path.
+    !> \param dMQMQAHessianAlpha Fixed weight applied to each completed aggregate `deltaA/deltaB` correction;
+    !!                            it never scales the local SUBG or SUBQ Hessian.
+    !> \param nMQMQAHessianApplyCount Number of valid MQMQA correction aggregates applied to trial systems.
+    !> \param nMQMQAHessianAcceptedSolveCount Number of corrected trial systems accepted after a finite solve.
+    !> \param nMQMQAHessianPhaseCorrectionCount Number of successful phase-local pairs included in aggregates.
+    !> \param nMQMQAHessianChargedSkipCount Number of deliberately excluded charged MQMQA phases.
+    !> \param nMQMQAHessianInteriorFallbackCount Number of routed states rejected only because at least one
+    !!                                             local fraction is at or below the strict interior threshold.
+    !> \param dMQMQAHessianMinimumRejectedFraction Smallest local fraction observed among those boundary states.
+    !> \param dMQMQAHessianMaxRatioA Largest Frobenius norm of applied `alpha*deltaA` relative to the baseline
+    !!                                GEM element block during the current calculation.
+    !> \param dMQMQAHessianMaxRatioB Largest two-norm of applied `alpha*deltaB` relative to the baseline element
+    !!                                residual during the current calculation.
+    !> \param lMQMQAHessianFallbackUsed True after any routed build or corrected linear trial returns to the
+    !!                                   untouched historical GEM system.
     !> \param lDebugMode        A logical variable used for debugging purposes.  When it is TRUE, a number
     !!                           of print statements are applied.
     !> \param lRevertSystem     A logical variable identifying whether the system should be reverted (TRUE)
@@ -102,12 +118,25 @@ module ModuleGEMSolver
     integer                              ::  nRKMPHessianRejectLocalResponse
     integer                              ::  nRKMPHessianFullAlphaCount
     integer                              ::  iRKMPHessianLastFailurePhase, iRKMPHessianLastFailureReason
+    integer                              ::  nMQMQAHessianApplyCount, nMQMQAHessianAcceptedSolveCount
+    integer                              ::  nMQMQAHessianPhaseCorrectionCount, nMQMQAHessianChargedSkipCount
+    integer                              ::  nMQMQAHessianAggregateFailureCount, nMQMQAHessianApplicationFailureCount
+    integer                              ::  nMQMQAHessianDGESVFallbackCount, nMQMQAHessianNonfiniteFallbackCount
+    integer                              ::  nMQMQAHessianRKMPConflictCount, nMQMQAHessianInteriorFallbackCount
+    integer                              ::  iMQMQAHessianLastFailurePhase, iMQMQAHessianLastFailureStatus
     integer, parameter                   ::  RKMP_MAP_SUCCESS = 0
     integer, parameter                   ::  RKMP_MAP_HESSIAN_FAILURE = 1
     integer, parameter                   ::  RKMP_MAP_ELEMENT_RESPONSE_FAILURE = 2
     integer, parameter                   ::  RKMP_MAP_RESIDUAL_RESPONSE_FAILURE = 3
     integer, parameter                   ::  RKMP_MAP_IDEAL_RESPONSE_FAILURE = 4
     integer, parameter                   ::  RKMP_MAP_INVALID_CORRECTION = 5
+    integer, parameter                   ::  MQMQA_INTEGRATION_SUCCESS = 0
+    integer, parameter                   ::  MQMQA_INTEGRATION_NO_APPLICABLE_PHASE = 1
+    integer, parameter                   ::  MQMQA_INTEGRATION_AGGREGATE_FAILURE = 2
+    integer, parameter                   ::  MQMQA_INTEGRATION_APPLICATION_FAILURE = 3
+    integer, parameter                   ::  MQMQA_INTEGRATION_DGESV_FAILURE = 4
+    integer, parameter                   ::  MQMQA_INTEGRATION_NONFINITE_UPDATE = 5
+    integer, parameter                   ::  MQMQA_INTEGRATION_RKMP_CONFLICT = 6
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
@@ -120,6 +149,11 @@ module ModuleGEMSolver
     real(8)                              ::  dRKMPHessianSelectedAlpha, dRKMPHessianUpdateNormRatio
     real(8)                              ::  dRKMPHessianDirectionCosine, dRKMPHessianDirectionDifference
     real(8)                              ::  dRKMPHessianMaxSelectedAlpha
+    real(8)                              ::  dMQMQAHessianAlpha
+    real(8)                              ::  dMQMQAHessianMaxDeltaA, dMQMQAHessianMaxDeltaB
+    real(8)                              ::  dMQMQAHessianMaxAppliedA, dMQMQAHessianMaxAppliedB
+    real(8)                              ::  dMQMQAHessianMaxRatioA, dMQMQAHessianMaxRatioB
+    real(8)                              ::  dMQMQAHessianMinimumRejectedFraction
     real(8), dimension(iterGlobalMax)     ::  dRKMPHessianAcceptedAlphaHistory
     real(8)                              ::  dRKMPTrustEmergencyRatioCap = 1D6
     real(8)                              ::  dRKMPTrustUpdateRatioCap = 1.25D0
@@ -136,11 +170,18 @@ module ModuleGEMSolver
     logical                              ::  lDebugMode, lRevertSystem, lConverged
     logical                              ::  lUseRKMPExactHessian, lDebugRKMPHessianFD
     logical                              ::  lRKMPHessianNonlinearReady, lRKMPHessianActive, lRKMPHessianWasActive
+    logical                              ::  lUseMQMQAExactHessian, lMQMQAHessianSupportedPhaseFound
+    logical                              ::  lMQMQAHessianEligibleCorrectionBuilt, lMQMQAHessianAggregateBuilt
+    logical                              ::  lMQMQAHessianCorrectionApplied, lMQMQAHessianCorrectedSolveAccepted
+    logical                              ::  lMQMQAHessianFallbackUsed
     logical                              ::  lRKMPHessianControlsConfigured = .FALSE.
     logical                              ::  lRKMPHessianRequestedEnable = .FALSE.
     logical                              ::  lRKMPHessianRequestedDebug = .FALSE.
     logical                              ::  lRKMPHessianReportSummary = .FALSE.
     real(8)                              ::  dRKMPHessianRequestedAlphaMax = 0.10D0
+    logical                              ::  lMQMQAHessianControlsConfigured = .FALSE.
+    logical                              ::  lMQMQAHessianRequestedEnable = .FALSE.
+    real(8)                              ::  dMQMQAHessianRequestedAlpha = 0D0
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver
