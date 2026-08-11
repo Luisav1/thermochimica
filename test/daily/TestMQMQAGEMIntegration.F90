@@ -308,11 +308,16 @@ contains
         logical, intent(inout) :: lAllPass
         logical, intent(in) :: lDetailed
         integer :: i, iFailurePhase, iFailureStatus, iFirst, iInfo, iLast, iNewtonInfo
-        integer :: iPhase, iSlot, iStatus, nAccepted, nCharged, nQuad, nVar
-        logical :: lEligible, lRevertSave, lSupported
-        real(8) :: dConflictUpdateError, dElementError, dFailureMinimumFraction
+        integer :: iBaselineInfo, iCorrectedInfo, iPhase, iSlot, iStatus, nAccepted, nCharged, nQuad, nVar
+        integer, allocatable :: iBaselinePivot(:), iCorrectedPivot(:)
+        logical :: lEligible, lRevertSave, lSupported, lUpdateDiagnosticsValid
+        real(8) :: dBaselineUpdateNorm, dConflictUpdateError, dCorrectedReplayError
+        real(8) :: dCorrectedUpdateNorm, dElementError, dFailureMinimumFraction
         real(8) :: dN, dOutsideA, dOutsideB, dStateDifference
+        real(8) :: dRawUpdateCosine, dUpdateAngleDegrees, dUpdateCosine, dUpdateDifference, dUpdateNormRatio
+        real(8), allocatable :: dBaselineSolveA(:,:), dBaselineUpdate(:)
         real(8), allocatable :: dChemicalSave(:), dDeltaA(:,:), dDeltaB(:), dFractionSave(:)
+        real(8), allocatable :: dCorrectedSolveA(:,:), dCorrectedUpdate(:)
         real(8), allocatable :: dEffStoichSave(:,:), dMolesSave(:), dPhaseSave(:)
         real(8), allocatable :: dUpdateRKMP(:), dUpdateSave(:), dX(:)
 
@@ -401,6 +406,50 @@ contains
         lAllPass = lAllPass .AND. (dElementError <= 1D-13) .AND. &
             (dOutsideA == 0D0) .AND. (dOutsideB == 0D0)
 
+        ! Replay both captured systems independently. This checks the behavioral consequence of the correction:
+        ! it must not merely appear in A/B, but must produce a numerically resolved change in the solved Newton
+        ! direction while reproducing the update accepted by the live corrected path.
+        allocate(dBaselineSolveA(nVar,nVar),dBaselineUpdate(nVar),iBaselinePivot(nVar), &
+            dCorrectedSolveA(nVar,nVar),dCorrectedUpdate(nVar),iCorrectedPivot(nVar))
+        dBaselineSolveA = dCapturedGEMNewtonA
+        dBaselineUpdate = dCapturedGEMNewtonB
+        dCorrectedSolveA = dCapturedGEMNewtonCorrectedA
+        dCorrectedUpdate = dCapturedGEMNewtonCorrectedB
+        call DGESV(nVar,1,dBaselineSolveA,nVar,iBaselinePivot,dBaselineUpdate,nVar,iBaselineInfo)
+        call DGESV(nVar,1,dCorrectedSolveA,nVar,iCorrectedPivot,dCorrectedUpdate,nVar,iCorrectedInfo)
+        lUpdateDiagnosticsValid = .FALSE.
+        dBaselineUpdateNorm = HUGE(1D0)
+        dCorrectedUpdateNorm = HUGE(1D0)
+        dUpdateDifference = HUGE(1D0)
+        dUpdateNormRatio = HUGE(1D0)
+        dUpdateCosine = HUGE(1D0)
+        dUpdateAngleDegrees = HUGE(1D0)
+        dCorrectedReplayError = HUGE(1D0)
+        if ((iBaselineInfo == 0) .AND. (iCorrectedInfo == 0) .AND. &
+            ALL(IEEE_IS_FINITE(dBaselineUpdate)) .AND. ALL(IEEE_IS_FINITE(dCorrectedUpdate))) then
+            dBaselineUpdateNorm = SQRT(SUM(dBaselineUpdate**2))
+            dCorrectedUpdateNorm = SQRT(SUM(dCorrectedUpdate**2))
+            if (IEEE_IS_FINITE(dBaselineUpdateNorm) .AND. IEEE_IS_FINITE(dCorrectedUpdateNorm) .AND. &
+                (dBaselineUpdateNorm > 0D0) .AND. (dCorrectedUpdateNorm > 0D0)) then
+                dRawUpdateCosine = SUM(dCorrectedUpdate*dBaselineUpdate)/ &
+                    (dCorrectedUpdateNorm*dBaselineUpdateNorm)
+                if (IEEE_IS_FINITE(dRawUpdateCosine)) then
+                    dUpdateDifference = SQRT(SUM((dCorrectedUpdate-dBaselineUpdate)**2))/ &
+                        DMAX1(dCorrectedUpdateNorm,dBaselineUpdateNorm)
+                    dUpdateNormRatio = dCorrectedUpdateNorm/dBaselineUpdateNorm
+                    dUpdateCosine = DMAX1(-1D0,DMIN1(1D0,dRawUpdateCosine))
+                    dUpdateAngleDegrees = DACOS(dUpdateCosine)*180D0/DACOS(-1D0)
+                    dCorrectedReplayError = SQRT(SUM((dCorrectedUpdate-dUpdateVar(1:nVar))**2))/ &
+                        DMAX1(1D0,dCorrectedUpdateNorm,SQRT(SUM(dUpdateVar(1:nVar)**2)))
+                    lUpdateDiagnosticsValid = IEEE_IS_FINITE(dUpdateDifference) .AND. &
+                        IEEE_IS_FINITE(dUpdateNormRatio) .AND. IEEE_IS_FINITE(dUpdateAngleDegrees) .AND. &
+                        IEEE_IS_FINITE(dCorrectedReplayError)
+                end if
+            end if
+        end if
+        lAllPass = lAllPass .AND. lUpdateDiagnosticsValid .AND. (dUpdateDifference > 1D-8) .AND. &
+            (dCorrectedReplayError <= 1D-13)
+
         ! First solve the identical restored state with RKMP ownership alone. This supplies the update oracle for
         ! the controlled both-eligible conflict without fabricating a multiphase assessed database case.
         dChemicalPotential = dChemicalSave
@@ -450,6 +499,13 @@ contains
             write(*,'(A,ES12.4)') 'live SUBQ captured application error = ',dElementError
             write(*,'(A,2ES12.4)') 'maximum correction ratios rhoA/rhoB = ', &
                 dMQMQAHessianMaxRatioA,dMQMQAHessianMaxRatioB
+            write(*,'(A,ES12.4)') 'pre-line-search GEM solution-vector separation = ',dUpdateDifference
+            write(*,'(A,2ES12.4)') 'historical/corrected GEM solution-vector norms = ', &
+                dBaselineUpdateNorm,dCorrectedUpdateNorm
+            write(*,'(A,ES12.4)') 'corrected-to-historical solution norm ratio = ',dUpdateNormRatio
+            write(*,'(A,ES12.4)') 'GEM solution-vector cosine similarity = ',dUpdateCosine
+            write(*,'(A,ES12.4)') 'unscaled-coordinate solution-vector angle (degrees) = ',dUpdateAngleDegrees
+            write(*,'(A,ES12.4)') 'corrected solution-vector replay error = ',dCorrectedReplayError
             write(*,'(A)') 'controlled RKMP/MQMQA ownership conflict preserved the untouched RKMP path'
             write(*,'(A,ES12.4)') 'conflict versus equivalent RKMP-owned update error = ',dConflictUpdateError
         end if

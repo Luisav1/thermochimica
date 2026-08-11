@@ -1267,6 +1267,23 @@ interior FeTiVO state, the captured corrected pre-solve system differs from the
 captured historical baseline only by the requested element-block and element-
 residual corrections. The maximum application discrepancy is `9.7700E-15`,
 and the alpha-one corrected linear solve returns a finite update with `INFO=0`.
+Independent solves of the captured baseline and corrected systems also require
+a numerically resolved change in the pre-line-search GEM linear-system solution
+vector, rather than accepting array insertion alone as integration evidence.
+The relative `L2` separation between the corrected and historical pre-line-
+search GEM solution vectors, normalized by the larger solution-vector norm, is
+`2.6485E-01`. This demonstrates a nontrivial effect on the solved vector; it is
+not an error measure or a claim of a 26.5 percent physical-output change. The
+report also separates magnitude and orientation by printing historical/
+corrected norms of `4.3514E+01` and `4.5485E+01`, a corrected-to-historical norm
+ratio of `1.0453E+00`, cosine similarity of `9.6432E-01`, and an angle of
+`1.5352E+01` degrees in the current unscaled coordinate representation. Thus
+this state contains both a modest solution-magnitude change and a resolved
+coordinate-space rotation. `GEMLineSearch` may subsequently limit the applied
+thermodynamic-state displacement, so this angle does not describe that final
+applied displacement. The corrected replay reproduces the solution vector
+accepted by the live linear path exactly within the reported double-precision
+comparison.
 Just-below and just-above threshold controls freeze the dedicated interior
 status at the unchanged `1E-12` boundary.
 
@@ -1279,7 +1296,23 @@ smallest rejected fraction is `1.7504E-19`. Relative to the historical
 run, the scaled final differences are `3.4540E-13` for total Gibbs energy,
 `5.0564E-09` for the complete mole-fraction array, `2.0179E-09` for species
 moles, and `8.3206E-10` for phase amounts. This is encouraging evidence, but
-MQ-4C does not promise alpha-one robustness across calculations. Native
+the small final-state differences do not establish that the correction is
+physically important in this particular FeTiVO calculation. Instead, the
+non-negligible linear-system ratios (`rhoA=3.5183E-02` and `rhoB=7.2634E-03`)
+show that the correction was genuinely active while both paths converged to
+nearly the same equilibrium. The 16 strict-interior outcomes are intentional
+eligibility exclusions, not silent numerical or decoding failures.
+
+The pre-line-search solution-vector comparison uses an ordinary Euclidean norm
+over the complete GEM unknown vector. That vector combines element-potential and phase-related
+unknowns with different physical meanings and numerical scales. The result is
+therefore strong non-vacuity evidence, but it is not a solver-safety or trust
+metric. Variable-group scaling and actual nonlinear residual or merit-function
+improvement belong to MQ-4D globalization.
+
+The MQ-4C claim is therefore **live default-off integration demonstrated and
+transactionally verified**, not finished MQMQA solver integration. MQ-4C does
+not promise alpha-one robustness across calculations. Native
 evidence remains limited to assessed plain-SUBG cases and the uniform-zeta
 FeTiVO SUBQ `G/Q` case. SUBQ `B`, `R`,
 magnetism, nonuniform-zeta assessed data, native simultaneous multi-MQMQA
