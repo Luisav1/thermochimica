@@ -1235,7 +1235,8 @@ which gives bit-for-bit baseline `A/B`, solve, and final-output behavior.
 Alpha is therefore a fixed correction weight in MQ-4C. It multiplies the
 completed reduced matrix and residual corrections together; it is not a scale
 factor on the analytic Hessian. Adaptive alpha selection, nonlinear merit
-checks, and recovery from poor full-curvature steps remain MQ-4D.
+checks, and recovery from poor full-curvature steps are handled separately by
+MQ-4D below.
 
 ### RKMP ownership
 
@@ -1313,7 +1314,7 @@ over the complete GEM unknown vector. That vector combines element-potential and
 unknowns with different physical meanings and numerical scales. The result is
 therefore strong non-vacuity evidence, but it is not a solver-safety or trust
 metric. Variable-group scaling and actual nonlinear residual or merit-function
-improvement belong to MQ-4D globalization.
+progress are addressed by the MQ-4D globalization layer below.
 
 The MQ-4C claim is therefore **live default-off integration demonstrated and
 transactionally verified**, not finished MQMQA solver integration. MQ-4C does
@@ -1323,3 +1324,330 @@ FeTiVO SUBQ `G/Q` case, plus a controlled modified-runtime production regression
 of the corrected nonuniform-zeta S3 selection. SUBQ `B`, `R`,
 magnetism, assessed database-native nonuniform-zeta data, native simultaneous multi-MQMQA
 assemblages, and combined RKMP/MQMQA corrections remain outside this claim.
+
+## MQ-4D: default-off adaptive globalization
+
+### Reader orientation: what MQ-4D changes
+
+MQ-4D changes how the already verified MQMQA correction is admitted into a
+live Newton solve.  It does not derive another Hessian and it does not replace
+Thermochimica's historical GEM solver.  At an eligible solver state, the
+historical code has assembled a linear system
+
+```text
+A_base u_base = B_base,
+```
+
+where `A_base` is the historical GEM Newton matrix, `B_base` is its
+right-hand-side/residual vector, and `u_base` is the resulting Newton update.
+The MQMQA mapper independently supplies a completed correction pair
+`(deltaA,deltaB)`.  An alpha candidate therefore solves
+
+```text
+(A_base + alpha*deltaA) u_alpha = B_base + alpha*deltaB.
+```
+
+The important meanings are:
+
+- `alpha=0` is the untouched historical GEM Newton solve.  It is **not** a
+  first-order method and it does not mean that Thermochimica has stopped using
+  all thermodynamic derivatives.
+- `alpha=1` applies the complete mapped MQMQA excess-curvature correction and
+  is the desired candidate whenever it is safe.
+- `0<alpha<1` applies the same completed correction pair more cautiously.  It
+  does not scale or alter the local analytic Hessian itself.
+- The accepted Newton direction is still passed to the existing GEM line
+  search.  MQ-4D adds a safety decision before that line search; it does not
+  replace it.
+
+The objective is reliable nonlinear convergence with sustained full-alpha use
+near the solution, not the largest possible count of `alpha=1` selections.
+More aggressive full-alpha use can be counterproductive if it repeatedly
+pushes the nonlinear iteration away from a settled region.
+
+### One eligible solve in plain language
+
+For each GEM solve at which an active, supported MQMQA phase is eligible,
+`SolveMQMQAAlphaTrust` performs the following sequence:
+
+1. Build the complete phase-aggregated `(deltaA,deltaB)` pair once.  If any
+   applicable phase fails, discard the whole pair rather than applying a
+   partial correction.
+2. Solve an untouched copy of the historical system.  This provides both the
+   exact fallback and the reference update used by the trust checks.
+3. Ask whether the current phase assemblage and recent nonlinear progress are
+   settled enough to try a nonzero correction.  If not, return the historical
+   solution exactly.
+4. If ready, try alpha candidates from largest to smallest, beginning with
+   `alpha_max` (normally one).
+5. For each candidate, apply both corrections together, solve the trial linear
+   system, and compare its update with the historical update in separately
+   scaled variable groups.
+6. Accept the first safe candidate.  If every positive candidate is rejected,
+   return the already solved `alpha=0` result.
+7. Let the existing GEM line search process the selected update.  On the next
+   nonlinear iteration, use the observed residual and Gibbs-energy progress to
+   retain or revoke readiness.
+
+Readiness and candidate safety answer different questions.  **Readiness asks
+whether this point in the nonlinear trajectory is mature enough to attempt the
+correction.**  **Candidate safety asks whether one particular corrected linear
+solve is acceptably close to the historical solve.**  A solve can therefore be
+ready while rejecting `alpha=1` and accepting a smaller positive alpha.
+
+### Code-to-concept map
+
+| Location | Responsibility |
+|---|---|
+| `ModuleMQMQAResponseMapping.f90` | Builds the phase-local and aggregated `(deltaA,deltaB)` correction without changing the live GEM arrays. |
+| `ModuleMQMQATrust.f90` | Constructs descending alpha candidates and performs state-free correction-size and grouped-update checks. |
+| `GEMNewton.f90::SolveMQMQAAlphaTrust` | Orchestrates the baseline solve, readiness decision, candidate trials, exact fallback, and diagnostic history. |
+| `GEMNewton.f90::BuildMQMQAGroupedDisplacement` | Converts the mixed GEM solution vector into three meaningful update groups before norms and directions are compared. |
+| `SetMQMQAHessianControls.f90` | Exposes the narrow default-off fixed and adaptive control APIs. |
+| `ModuleGEMSolver.f90` | Stores controls, heuristic limits, readiness state, counters, and alpha/rejection histories. |
+| `InitGEMSolver.f90` | Resets adaptive runtime state so one calculation cannot leak history into the next. |
+| `TestMQMQAAdaptiveTrust.F90` | Checks the utilities, controls, failure behavior, live FeTiVO path, and bounded sensitivity matrix. |
+
+### Terminology used in the diagnostics
+
+| Term | Meaning |
+|---|---|
+| Historical or baseline system | The GEM matrix and right-hand side that Thermochimica would solve with MQMQA curvature integration disabled. |
+| Correction pair | The completed `deltaA` and `deltaB`; they are constructed and applied together. |
+| Eligible solve | A call for which an active supported MQMQA phase is present and the correction builder can be considered.  It is not a configured maximum or a convergence limit. |
+| Readiness activation/reset | The adaptive state begins/stops allowing positive-alpha trials based on assemblage stability and measured nonlinear progress. |
+| Full/reduced/zero alpha | Selected `alpha=1`, `0<alpha<1`, or `alpha=0`, respectively. |
+| Fallback | Returning the untouched historical system because the correction was inapplicable, invalid, unsafe, or could not be solved. |
+| Final full-alpha window | Consecutive eligible solves ending at the last eligible solve before convergence, all using `alpha=1` without a readiness reset. |
+| `First+` / `First1` | First global iteration selecting positive alpha / first iteration of the final sustained full-alpha window. |
+| `F/R/Z` | Counts of eligible solves selecting full, reduced, and zero alpha. |
+| Function norm | The existing GEM nonlinear residual measure used to judge whether the state is locally resolved. |
+| Gibbs gap | A scaled comparison with the best Gibbs energy observed for the current settled assemblage. |
+| Transactional | Either the complete correction pair is accepted, or the original arrays are retained exactly; no partial phase correction survives a failure. |
+
+An eligible-solve count need not equal the printed main Newton iteration count.
+For the FeTiVO evidence below, the 77 eligible solves consist of one
+phase-assemblage/initialization solve recorded at global iteration zero plus 76
+main-loop solves.  This is a property of where `GEMNewton` is called, not a
+77-iteration limit; the normal Thermochimica iteration limit remains unchanged.
+
+### Implementation and controls
+
+MQ-4D preserves the complete MQ-4C correction and transaction.  It builds one
+aggregate `(deltaA,deltaB)` pair, solves an untouched alpha-zero copy, and then
+tests completed correction pairs in descending order:
+
+```text
+[alpha_max, 0.1, 0.01, 0.001, 0]
+```
+
+Duplicates and candidates above `alpha_max` are omitted.  Alpha always weights
+the completed reduced GEM matrix and residual corrections together; it never
+weights the local SUBG or SUBQ Hessian.  If no positive candidate passes, the
+already solved alpha-zero arrays are returned exactly.  The historical GEM line
+search is unchanged.
+
+The persistent adaptive interface is separate from the fixed-alpha interface:
+
+```text
+SetMQMQAHessianAdaptiveControls(enable,alpha_max,info)
+ResetMQMQAHessianAdaptiveControls()
+```
+
+Both modes remain default off.  A valid setter call selects its mode and clears
+the other request.  Nonfinite or out-of-range `alpha_max` values are rejected
+before any persistent setting changes.  Thus fixed and adaptive ownership is
+unambiguous while the MQ-4C API and evidence remain available unchanged.
+
+### Readiness and candidate safety
+
+The additional MQMQA correction is withheld while the phase assemblage or
+nonlinear state is not locally settled; the historical GEM Newton solve remains
+active.  Readiness uses an established Gibbs minimum, at least five
+iterations since the last assemblage change, a local function norm, and actual
+next-iteration residual and Gibbs progress.  The residual-ratio check uses the
+existing `1.05` allowance while the function norm exceeds `1E-6`; below the
+existing GEM line-search small-norm threshold of `1E-6`, the absolute norm is
+treated as resolved and a ratio of two sub-threshold residuals does not revoke
+readiness.  Readiness activations, resets, function norms, norm ratios, and
+relative Gibbs gaps are retained per iteration.
+
+Each positive candidate must also pass finite correction/application checks,
+`DGESV`, an emergency correction-to-baseline cap of `1E6`, and groupwise update
+checks relative to the alpha-zero solve.  The three groups are:
+
+1. dimensionless element-potential displacements;
+2. constituent-level first-order logarithmic mole increments for active
+   solution phases;
+3. pure-phase amount displacements in moles.
+
+The second group is reconstructed from the exact expression subsequently used
+by `GEMLineSearch`; the solution-phase scalar GEM unknown is not incorrectly
+treated as a composition increment.  The ratio, cosine, and relative-direction
+limits are `1.25`, `0.90`, and `0.50`, respectively.  Ratios and directions of
+two negligible steps are neutral below group-specific resolved-step floors:
+`1E-8` for the two dimensionless groups and `1E-12 mol` for pure-phase amounts.
+This prevents a large ratio of two numerically immaterial steps from becoming a
+false safety rejection without relaxing the stated ratio limit.
+
+These limits and floors are numerical globalization heuristics, not
+thermodynamic identities.  Their use must be accompanied by sensitivity and
+broader assessed-database evidence before any general robustness claim.
+
+### FeTiVO exit evidence
+
+`TestMQMQAAdaptiveTrust.F90` verifies candidate ordering, emergency-ratio,
+groupwise magnitude and direction rejection, negligible-step handling,
+mutually exclusive persistent controls, atomic invalid-call rejection, exact
+adaptive-alpha-zero identity, and the live FeTiVO nonlinear path.  The existing
+MQ-4C test separately retains no-applicable-phase, boundary-state, application,
+singular-solve, and nonfinite fallback coverage against untouched baseline
+arrays.
+
+For FeTiVO with `alpha_max=1`, the adaptive run converges in 76 iterations.  It
+records 77 eligible solves: 13 at full alpha, 50 at reduced alpha, and 14 at
+alpha zero.  The final 13 eligible corrected solves all select `alpha=1`, with
+no readiness reset inside that final window.  Early reductions are accompanied
+by rejection masks for every larger candidate.  The final scaled differences
+from the historical result are approximately `1.34E-15` for Gibbs energy,
+`4.81E-10` for mole fractions, `5.88E-10` for species moles, and `8.33E-10` for
+phase amounts. Candidate-by-candidate alpha and rejection-mask histories make
+each larger rejected candidate individually identifiable; the reduced-alpha
+gate does not rely only on an undifferentiated per-iteration mask.
+
+### FeTiVO trust-setting sensitivity
+
+The sensitivity driver reruns the same FeTiVO inputs against one historical
+default-off reference.  It changes one internal trust setting at a time, then
+restores every production setting exactly before the next run.  The two final
+rows are exploratory combined policies; neither changes the production
+defaults.  `First+` is the first global iteration selecting positive alpha,
+`First1` begins the final sustained alpha-one window, and `F/R/Z` counts full,
+reduced, and zero-alpha eligible solves.
+
+The classifications are intentionally behavioral rather than thermodynamic:
+
+- **ROBUST:** converged, agreed with the historical final state within the
+  established `1E-8` scaled tolerance, retained at least three final alpha-one
+  solves, and did not differ materially from the default trajectory;
+- **SAFE BUT SENSITIVE:** preserved all safety and final-state requirements but
+  changed iterations or first-positive activation by at least five, changed
+  the final alpha-one window by at least three, changed readiness-reset count,
+  or did not retain the three-solve final alpha-one window;
+- **FAILED:** violated finiteness, alpha bounds, candidate-specific rejection
+  evidence, fallback safety, setting restoration, or historical agreement.
+
+| Case | Changed value | Class | Iter | Eligible | First+ | First1 | F/R/Z | Final window | Act/reset |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| Production default | defaults | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Local residual lower | 0.025 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Local residual upper | 0.10 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Settled period conservative | 8 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Settled period permissive | 3 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Gibbs activation lower | 1E-7 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Gibbs activation upper | 1E-5 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Gibbs retention lower | 1E-5 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Gibbs retention upper | 1E-3 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Progress allowance lower | 1.02 | SAFE BUT SENSITIVE | 64 | 65 | 10 | 59 | 12/31/22 | 6 | 13/12 |
+| Progress allowance upper | 1.10 | SAFE BUT SENSITIVE | 74 | 75 | 10 | 63 | 12/51/12 | 12 | 3/2 |
+| Update ratio lower | 1.10 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Update ratio upper | 1.50 | SAFE BUT SENSITIVE | 103 | 104 | 10 | 85 | 69/3/32 | 19 | 23/22 |
+| Direction cosine conservative | 0.95 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Direction cosine permissive | 0.85 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Relative direction lower | 0.35 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Relative direction upper | 0.75 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Earlier activation policy | 0.10 / 3 / 1E-5 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+| Later activation policy | 0.025 / 8 / 1E-7 | ROBUST | 76 | 77 | 10 | 64 | 13/50/14 | 13 | 5/4 |
+
+All cases converged with `INFOThermo=0`, selected alpha only in `[0,1]`,
+reached maximum alpha one, documented every larger rejected candidate whenever
+a reduced alpha was selected, restored the production settings, and remained
+within the historical final-state tolerance.  No correction, ratio,
+linear-solve, or nonfinite failure occurred.  Across the matrix, scaled final
+differences were at most `2.30E-15` in Gibbs energy, `1.23E-9` in constituent
+mole fractions, `6.26E-10` in species moles, and `8.42E-10` in phase amounts.
+
+The exploratory earlier policy did **not** activate curvature earlier: it was
+identical to the default in activation iteration, total iterations, alpha
+counts, readiness resets, final alpha-one window, and final differences.  The
+later policy was also identical.  On this calculation the changed local,
+settling, and activation limits are therefore not the controlling readiness
+conditions.
+
+The progress allowance is behaviorally active in both neighboring directions.
+At `1.02`, convergence shortened to 64 iterations but readiness cycled 13/12
+times and the final alpha-one window shortened to six.  At `1.10`, convergence
+required 74 iterations with 3/2 readiness activation/reset events.
+
+With the update-ratio limit increased to `1.50`, full alpha was accepted at
+iteration 10, but the following residual norm increased by a factor of `2.92`
+and readiness was revoked.  Similar full-alpha/recovery cycles produced 23
+activations and 22 resets, increasing convergence from 76 to 103 iterations.
+The calculation remained safe and reached the historical equilibrium,
+demonstrating successful fallback, but the permissive threshold produced
+inferior nonlinear progress.  The production value of `1.25` was therefore
+retained.
+
+The current defaults are retained.  They lie within a tested safe and
+convergent neighborhood, while the default progress and update-ratio values
+avoid the material trajectory changes observed at neighboring permissive or
+stricter settings.  This is evidence for retaining the current FeTiVO policy,
+not evidence that the defaults are globally optimal.
+
+> The study evaluates local sensitivity of the MQ-4D heuristics for FeTiVO. It
+> does not establish universal convergence or robustness for arbitrary MQMQA
+> assessments.
+
+The fixed-alpha-one MQ-4C evidence remains unchanged: it converges in 95
+iterations with 82 accepted corrected solves and only 16 intentional
+strict-interior exclusions.  MQ-4D therefore establishes default-off adaptive
+connection and a sustained settled full-alpha window for this FeTiVO case.  It
+does not establish universal alpha-one robustness, broad model/database
+coverage, constrained-KKT compatibility, or assessed molten-salt application
+evidence.
+
+### Future evidence and defensible claim framework
+
+The remaining work must build an eventual claim in explicit layers rather than
+turn one successful FeTiVO calculation into a universal robustness statement.
+The following items are future evidence requirements and are not claims of the
+current MQ-4D checkpoint:
+
+1. **Mathematical scope:** show that the implementation follows the supported
+   SUBQ equations and variable definitions without depending on the layout or
+   parameter values of one database.
+2. **Software scope:** retain transactional fallback evidence for invalid,
+   singular, nonfinite, boundary, and locally unsafe corrected systems so that
+   a rejected curvature correction cannot corrupt the historical GEM solve.
+3. **Verification scope:** identify every controlled fixture, production-native
+   calculation, and physically assessed database case used as evidence.  Here,
+   *assessed* means that the thermodynamic parameters were developed to
+   represent a material system using experimental, published, and/or
+   first-principles evidence; merely parsing a file through Thermochimica makes
+   a case native, not necessarily assessed.
+4. **Empirical robustness scope:** extend the completed bounded FeTiVO MQ-4D
+   threshold-sensitivity study to representative supported assessed systems.
+   Establish that the selected heuristics are not a FeTiVO-specific knife edge
+   without claiming global optimality.
+5. **Application scope:** demonstrate the selected molten-salt problem over its
+   stated database, temperature, composition, phase, and fraction ranges, and
+   keep those bounds attached to the resulting application claim.
+
+Before the MQMQA solver work is presented as complete, the audit must contain a
+traceable evidence table mapping each layer to its equations, tests, databases,
+input ranges, results, and remaining exclusions.  In particular, controlled,
+native, and assessed are not mutually exclusive labels: controlled/assessed
+describe data provenance, whereas native describes execution through
+Thermochimica's production path.
+
+The intended final claim, subject to completion of the listed evidence, is:
+
+> The adaptive MQMQA curvature integration was demonstrated across the tested
+> supported systems and remained stable under the reported threshold-sensitivity
+> study. Unsafe corrections reverted transactionally to the historical GEM
+> system. Universal convergence for arbitrary thermodynamic assessments is not
+> claimed.
+
+This framework leaves broad database coverage, the assessed molten-salt case,
+and application-range evidence as explicit future tasks rather than implicit
+assumptions.

@@ -101,6 +101,9 @@ subroutine GEMNewton(INFO)
         MQMQA_MAP_OUTSIDE_INTERIOR, &
         MQMQA_TRIAL_ACCEPTED, MQMQA_TRIAL_APPLICATION_FALLBACK, MQMQA_TRIAL_DGESV_FALLBACK, &
         MQMQA_TRIAL_NONFINITE_FALLBACK, MQMQA_TRIAL_BASELINE_FAILURE
+    USE ModuleMQMQATrust, ONLY: BuildMQMQAAlphaCandidateList, EvaluateMQMQACorrectionRatio, &
+        EvaluateMQMQAUpdateTrust, &
+        MQMQA_TRUST_ACCEPTED, MQMQA_TRUST_UPDATE_REJECTED, MQMQA_TRUST_DIRECTION_REJECTED
 
     implicit none
 
@@ -261,11 +264,19 @@ subroutine GEMNewton(INFO)
             ! The system is not purely elemental, so use the RKMP Hessian if it is active and enabled.
             if (lUseRKMPExactHessian .AND. lRKMPHessianActive .AND. &
                 lUseMQMQAExactHessian .AND. (dMQMQAHessianAlpha > 0D0)) then
-                call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.TRUE.)
+                if (lMQMQAHessianAdaptiveMode) then
+                    call SolveMQMQAAlphaTrust(A,B,nVar,IPIV,INFO,.TRUE.)
+                else
+                    call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.TRUE.)
+                end if
             else if (lUseRKMPExactHessian .AND. lRKMPHessianActive) then
                 call SolveRKMPAlphaTrust(A, B, nVar, IPIV, INFO)
             else if (lUseMQMQAExactHessian .AND. (dMQMQAHessianAlpha > 0D0)) then
-                call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.FALSE.)
+                if (lMQMQAHessianAdaptiveMode) then
+                    call SolveMQMQAAlphaTrust(A,B,nVar,IPIV,INFO,.FALSE.)
+                else
+                    call SolveMQMQAFixedAlpha(A,B,nVar,IPIV,INFO,.FALSE.)
+                end if
             else
                 call dgesv( nVar, 1, A, nVar, IPIV, B, nVar, INFO )
             end if
@@ -322,6 +333,363 @@ subroutine GEMNewton(INFO)
     return
 
 contains
+
+    !> \brief Select the largest trustworthy MQMQA response correction while retaining an exact historical solve.
+    !!
+    !> \details The complete phase-local `(deltaA,deltaB)` aggregate is built once, while an untouched copy of
+    !! the historical GEM system is solved as both the trust reference and exact fallback.  Alpha zero selects
+    !! that historical Newton solve; it does not turn Thermochimica into a first-order method.  Readiness first
+    !! decides whether the current assemblage and nonlinear trajectory are settled enough to try the correction.
+    !! If ready, candidates are tested from the requested maximum downward, and the first candidate passing the
+    !! correction, linear-solve, and grouped-update checks is selected.
+    !!
+    !! Element potentials, solution logarithmic increments, and pure-phase amounts are assessed as separate
+    !! displacement groups because the raw GEM solution vector mixes different meanings and units.  The existing
+    !! GEM line search remains the nonlinear step globalization.  Its observed residual and Gibbs progress feed
+    !! the next call's readiness decision, so an apparently safe linear direction can still cause readiness to be
+    !! revoked if the nonlinear calculation does not progress.
+    subroutine SolveMQMQAAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut,lRKMPOwnsSolve)
+
+        integer, intent(in) :: nLocalVar
+        integer, intent(inout) :: IPIVIn(:)
+        integer, intent(out) :: INFOOut
+        real(8), intent(inout) :: AIn(:,:), BIn(:)
+        logical, intent(in) :: lRKMPOwnsSolve
+
+        integer :: iAggregateStatus, iAlpha, iFailurePhase, iFailureStatus, iHistorySlot, iInfoBase, iReadinessReason
+        integer :: iLocal, iTrialStatus, iTrustStatus, nAccepted, nAlpha, nCharged, nSolutionStep
+        integer, allocatable :: IPIVBase(:), IPIVTrial(:)
+        logical :: lAccepted, lApplied, lEligible, lOldReady, lSupported, lTrustAccepted
+        real(8) :: dAlphaCandidate, dAppliedNormA, dAppliedNormB, dBaseNormA, dBaseNormB
+        real(8) :: dCurrentGibbs, dFailureMinimumFraction, dGibbsGap, dGibbsScale, dNormRatio, dRatioA, dRatioB
+        real(8) :: dSelectedAlpha
+        integer :: iCandidateRejectionMask(5)
+        real(8) :: dAlphaList(5), dCandidateAlpha(5), dDirectionCosine(3), dDirectionDifference(3), dUpdateRatio(3)
+        real(8) :: dBaseNormGroup(3), dTrialNormGroup(3)
+        real(8), allocatable :: ABase(:,:), ABaseSolved(:,:), ATrial(:,:), BBase(:), BBaseSolved(:), BTrial(:)
+        real(8), allocatable :: dDeltaA(:,:), dDeltaB(:), dStepBase(:), dStepTrial(:)
+
+        INFOOut = 0
+
+        ! MQ-4D step 1: build one complete correction pair for all currently eligible MQMQA phases.  The
+        ! builder is transactional: a failure in any applicable phase rejects the aggregate rather than leaving
+        ! a partially corrected GEM system.
+        allocate(dDeltaA(nElements,nElements),dDeltaB(nElements))
+        call BuildActiveMQMQAGEMCorrection(nSolnPhases,dDeltaA,dDeltaB,lSupported,lEligible, &
+            nAccepted,nCharged,iFailurePhase,iFailureStatus,dFailureMinimumFraction,iAggregateStatus)
+        lMQMQAHessianSupportedPhaseFound = lMQMQAHessianSupportedPhaseFound .OR. lSupported
+        nMQMQAHessianChargedSkipCount = nMQMQAHessianChargedSkipCount+nCharged
+
+        if ((iAggregateStatus /= MQMQA_AGGREGATE_SUCCESS) .AND. &
+            (iAggregateStatus /= MQMQA_AGGREGATE_NO_APPLICABLE_PHASE)) then
+            if (iFailureStatus == MQMQA_MAP_OUTSIDE_INTERIOR) then
+                nMQMQAHessianInteriorFallbackCount = nMQMQAHessianInteriorFallbackCount+1
+                dMQMQAHessianMinimumRejectedFraction = DMIN1( &
+                    dMQMQAHessianMinimumRejectedFraction,dFailureMinimumFraction)
+            else
+                nMQMQAHessianAggregateFailureCount = nMQMQAHessianAggregateFailureCount+1
+            end if
+            lMQMQAHessianFallbackUsed = .TRUE.
+            iMQMQAHessianLastFailurePhase = iFailurePhase
+            if (iAggregateStatus == MQMQA_AGGREGATE_PHASE_FAILURE) then
+                iMQMQAHessianLastFailureStatus = iFailureStatus
+            else
+                iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_AGGREGATE_FAILURE
+            end if
+            if (lRKMPOwnsSolve) then
+                call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            else
+                call dgesv(nLocalVar,1,AIn,nLocalVar,IPIVIn,BIn,nLocalVar,INFOOut)
+            end if
+            return
+        end if
+        if ((iAggregateStatus == MQMQA_AGGREGATE_NO_APPLICABLE_PHASE) .OR. (.NOT. lEligible)) then
+            if (lRKMPOwnsSolve) then
+                call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            else
+                call dgesv(nLocalVar,1,AIn,nLocalVar,IPIVIn,BIn,nLocalVar,INFOOut)
+            end if
+            return
+        end if
+
+        ! The RKMP and MQMQA experimental paths do not yet share a combined trust calculation.  When both are
+        ! requested, preserve the established RKMP-owned solve and record the explicit ownership conflict.
+        lMQMQAHessianEligibleCorrectionBuilt = .TRUE.
+        lMQMQAHessianAggregateBuilt = .TRUE.
+        nMQMQAHessianPhaseCorrectionCount = nMQMQAHessianPhaseCorrectionCount+nAccepted
+        dMQMQAHessianMaxDeltaA = DMAX1(dMQMQAHessianMaxDeltaA,MAXVAL(DABS(dDeltaA)))
+        dMQMQAHessianMaxDeltaB = DMAX1(dMQMQAHessianMaxDeltaB,MAXVAL(DABS(dDeltaB)))
+
+        if (lRKMPOwnsSolve) then
+            nMQMQAHessianRKMPConflictCount = nMQMQAHessianRKMPConflictCount+1
+            lMQMQAHessianFallbackUsed = .TRUE.
+            iMQMQAHessianLastFailurePhase = 0
+            iMQMQAHessianLastFailureStatus = MQMQA_INTEGRATION_RKMP_CONFLICT
+            call SolveRKMPAlphaTrust(AIn,BIn,nLocalVar,IPIVIn,INFOOut)
+            return
+        end if
+
+        ! MQ-4D step 2: solve an untouched copy of the historical GEM system before trying any correction.  This
+        ! solution is both the reference direction for the trust metrics and the exact alpha-zero fallback.
+        allocate(ABase(nLocalVar,nLocalVar),ABaseSolved(nLocalVar,nLocalVar),ATrial(nLocalVar,nLocalVar), &
+            BBase(nLocalVar),BBaseSolved(nLocalVar),BTrial(nLocalVar),IPIVBase(nLocalVar),IPIVTrial(nLocalVar), &
+            dStepBase(nElements+nSpecies+nConPhases),dStepTrial(nElements+nSpecies+nConPhases))
+        ABase = AIn
+        BBase = BIn
+        ABaseSolved = ABase
+        BBaseSolved = BBase
+        IPIVBase = 0
+        call dgesv(nLocalVar,1,ABaseSolved,nLocalVar,IPIVBase,BBaseSolved,nLocalVar,iInfoBase)
+        call CheckSolvedUpdate(BBaseSolved,nLocalVar,iInfoBase)
+        if (iInfoBase /= 0) then
+            INFOOut = iInfoBase
+            return
+        end if
+        call BuildMQMQAGroupedDisplacement(BBaseSolved,nLocalVar,dStepBase,nSolutionStep)
+
+        nMQMQAHessianEligibleSolveCount = nMQMQAHessianEligibleSolveCount+1
+        iHistorySlot = nMQMQAHessianEligibleSolveCount
+        iMQMQAHessianLastRejectionMask = 0
+        dCandidateAlpha = -1D0
+        iCandidateRejectionMask = 0
+        dSelectedAlpha = 0D0
+        dUpdateRatio = 1D0
+        dDirectionCosine = 1D0
+        dDirectionDifference = 0D0
+        dBaseNormGroup = 0D0
+        dTrialNormGroup = 0D0
+
+        ! MQ-4D step 3: decide whether recent nonlinear behavior is settled enough to attempt a nonzero alpha.
+        ! Readiness is trajectory state, not a property of the Hessian.  It may be revoked on a later call when
+        ! the actual residual or Gibbs progress deteriorates after line search.
+        dCurrentGibbs = 0D0
+        do iLocal = 1,nElements
+            dCurrentGibbs = dCurrentGibbs+dElementPotential(iLocal)*dMolesElement(iLocal)
+        end do
+        dCurrentGibbs = dCurrentGibbs*dTemperature*dIdealConstant
+        dGibbsScale = DMAX1(DABS(dMinGibbs),1D0)
+        dNormRatio = dGEMFunctionNorm/DMAX1(dGEMFunctionNormLast,1D-30)
+        dGibbsGap = DABS(dCurrentGibbs-dMinGibbs)/dGibbsScale
+        iReadinessReason = 0
+        if (dMinGibbs >= 0.5D0*1D200) iReadinessReason = IOR(iReadinessReason,1)
+        if (dGEMFunctionNorm >= dMQMQATrustLocalNormThreshold) iReadinessReason = IOR(iReadinessReason,2)
+        if (iterGlobal-iterLast < iMQMQATrustSettledAssemblagePeriod) &
+            iReadinessReason = IOR(iReadinessReason,4)
+        if ((dGEMFunctionNorm > dMQMQATrustResolvedNormFloor) .AND. &
+            (dNormRatio > dMQMQATrustProgressAllowance)) iReadinessReason = IOR(iReadinessReason,8)
+        lOldReady = lMQMQAHessianNonlinearReady
+        if (.NOT. lMQMQAHessianNonlinearReady) then
+            if (dGibbsGap > dMQMQATrustGibbsActivationTolerance) &
+                iReadinessReason = IOR(iReadinessReason,16)
+            lMQMQAHessianNonlinearReady = (dMinGibbs < 0.5D0*1D200) .AND. &
+                (dGEMFunctionNorm < dMQMQATrustLocalNormThreshold) .AND. &
+                (iterGlobal-iterLast >= iMQMQATrustSettledAssemblagePeriod) .AND. &
+                ((dGEMFunctionNorm <= dMQMQATrustResolvedNormFloor) .OR. &
+                (dGEMFunctionNorm <= dMQMQATrustProgressAllowance*DMAX1(dGEMFunctionNormLast,1D-30))) .AND. &
+                (DABS(dCurrentGibbs-dMinGibbs)/dGibbsScale <= dMQMQATrustGibbsActivationTolerance)
+        else
+            if (dGEMFunctionNorm >= dMQMQATrustProgressAllowance*dMQMQATrustLocalNormThreshold) &
+                iReadinessReason = IOR(iReadinessReason,2)
+            if (dGibbsGap > dMQMQATrustGibbsRetentionTolerance) &
+                iReadinessReason = IOR(iReadinessReason,16)
+            lMQMQAHessianNonlinearReady = &
+                (dGEMFunctionNorm < dMQMQATrustProgressAllowance*dMQMQATrustLocalNormThreshold) .AND. &
+                (iterGlobal-iterLast >= iMQMQATrustSettledAssemblagePeriod) .AND. &
+                ((dGEMFunctionNorm <= dMQMQATrustResolvedNormFloor) .OR. &
+                (dGEMFunctionNorm <= dMQMQATrustProgressAllowance*DMAX1(dGEMFunctionNormLast,1D-30))) .AND. &
+                (DABS(dCurrentGibbs-dMinGibbs)/dGibbsScale <= dMQMQATrustGibbsRetentionTolerance)
+        end if
+        if ((.NOT. lOldReady) .AND. lMQMQAHessianNonlinearReady) &
+            nMQMQAHessianReadinessActivationCount = nMQMQAHessianReadinessActivationCount+1
+        if (lOldReady .AND. (.NOT. lMQMQAHessianNonlinearReady)) &
+            nMQMQAHessianReadinessResetCount = nMQMQAHessianReadinessResetCount+1
+
+        lAccepted = .FALSE.
+        if (.NOT. lMQMQAHessianNonlinearReady) then
+            nMQMQAHessianRejectNonlinear = nMQMQAHessianRejectNonlinear+1
+            iMQMQAHessianLastRejectionMask = MQMQA_REJECT_NOT_READY
+        else
+            ! MQ-4D steps 4-5: test the largest permitted correction first.  A candidate must pass the
+            ! correction-size check, corrected linear solve, finiteness checks, and grouped comparison with the
+            ! historical update.  Rejection evidence is retained separately for every larger candidate.
+            call BuildMQMQAAlphaCandidateList(dMQMQAHessianAlpha,dAlphaList,nAlpha)
+            LOOP_MQMQA_ALPHA: do iAlpha = 1,nAlpha
+                dAlphaCandidate = dAlphaList(iAlpha)
+                dCandidateAlpha(iAlpha) = dAlphaCandidate
+                if (dAlphaCandidate <= 0D0) exit LOOP_MQMQA_ALPHA
+
+                call EvaluateMQMQACorrectionRatio(ABase,BBase,nElements,dDeltaA,dDeltaB,dAlphaCandidate, &
+                    dMQMQATrustEmergencyRatioCap,lTrustAccepted,dRatioA,dRatioB)
+                if (.NOT. lTrustAccepted) then
+                    nMQMQAHessianRejectRatio = nMQMQAHessianRejectRatio+1
+                    iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_RATIO)
+                    iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_RATIO
+                    cycle LOOP_MQMQA_ALPHA
+                end if
+
+                call SolveMQMQACorrectionTrial(ABase,BBase,nElements,dDeltaA,dDeltaB,dAlphaCandidate, &
+                    ATrial,BTrial,IPIVTrial,INFOOut,lApplied,lTrustAccepted,iTrialStatus)
+                if (iTrialStatus == MQMQA_TRIAL_APPLICATION_FALLBACK) then
+                    nMQMQAHessianRejectCorrection = nMQMQAHessianRejectCorrection+1
+                    iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_CORRECTION)
+                    iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_CORRECTION
+                    cycle LOOP_MQMQA_ALPHA
+                else if (iTrialStatus == MQMQA_TRIAL_DGESV_FALLBACK) then
+                    nMQMQAHessianRejectDGESV = nMQMQAHessianRejectDGESV+1
+                    iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_DGESV)
+                    iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_DGESV
+                    cycle LOOP_MQMQA_ALPHA
+                else if (iTrialStatus == MQMQA_TRIAL_NONFINITE_FALLBACK) then
+                    nMQMQAHessianRejectNonfinite = nMQMQAHessianRejectNonfinite+1
+                    iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_NONFINITE)
+                    iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_NONFINITE
+                    cycle LOOP_MQMQA_ALPHA
+                else if ((iTrialStatus /= MQMQA_TRIAL_ACCEPTED) .OR. (.NOT. lTrustAccepted)) then
+                    INFOOut = 1
+                    return
+                end if
+
+                call BuildMQMQAGroupedDisplacement(BTrial,nLocalVar,dStepTrial,nSolutionStep)
+                call EvaluateMQMQAUpdateTrust(dStepBase,dStepTrial,nElements,nSolutionStep,nConPhases, &
+                    dMQMQATrustUpdateRatioCap,dMQMQATrustDirectionCosineMin, &
+                    dMQMQATrustDirectionDifferenceCap,lTrustAccepted,dUpdateRatio,dDirectionCosine, &
+                    dDirectionDifference,dBaseNormGroup,dTrialNormGroup,iTrustStatus)
+                if (.NOT. lTrustAccepted) then
+                    dMQMQAHessianLastRejectedAlpha = dAlphaCandidate
+                    dMQMQAHessianRejectedGroupUpdateRatio = dUpdateRatio
+                    dMQMQAHessianRejectedGroupDirectionCosine = dDirectionCosine
+                    dMQMQAHessianRejectedGroupDirectionDifference = dDirectionDifference
+                    dMQMQAHessianRejectedGroupBaseNorm = dBaseNormGroup
+                    dMQMQAHessianRejectedGroupTrialNorm = dTrialNormGroup
+                    if (iTrustStatus == MQMQA_TRUST_UPDATE_REJECTED) then
+                        nMQMQAHessianRejectUpdate = nMQMQAHessianRejectUpdate+1
+                        iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_UPDATE)
+                        iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_UPDATE
+                    else if (iTrustStatus == MQMQA_TRUST_DIRECTION_REJECTED) then
+                        nMQMQAHessianRejectDirection = nMQMQAHessianRejectDirection+1
+                        iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_DIRECTION)
+                        iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_DIRECTION
+                    else
+                        nMQMQAHessianRejectNonfinite = nMQMQAHessianRejectNonfinite+1
+                        iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_NONFINITE)
+                        iCandidateRejectionMask(iAlpha) = MQMQA_REJECT_NONFINITE
+                    end if
+                    cycle LOOP_MQMQA_ALPHA
+                end if
+
+                dSelectedAlpha = dAlphaCandidate
+                lAccepted = .TRUE.
+                exit LOOP_MQMQA_ALPHA
+            end do LOOP_MQMQA_ALPHA
+        end if
+
+        ! MQ-4D step 6: record what was selected and why larger candidates were rejected.  Histories use eligible
+        ! solve slots and separately store the global Newton iteration because an initialization solve can occur
+        ! at iteration zero.
+        dMQMQAHessianSelectedAlpha = dSelectedAlpha
+        dMQMQAHessianMaxSelectedAlpha = DMAX1(dMQMQAHessianMaxSelectedAlpha,dSelectedAlpha)
+        dMQMQAHessianGroupUpdateRatio = dUpdateRatio
+        dMQMQAHessianGroupDirectionCosine = dDirectionCosine
+        dMQMQAHessianGroupDirectionDifference = dDirectionDifference
+        dMQMQAHessianGroupBaseNorm = dBaseNormGroup
+        dMQMQAHessianGroupTrialNorm = dTrialNormGroup
+        if (iHistorySlot <= iterGlobalMax) then
+            dMQMQAHessianAcceptedAlphaHistory(iHistorySlot) = dSelectedAlpha
+            iMQMQAHessianGlobalIterationHistory(iHistorySlot) = iterGlobal
+            iMQMQAHessianRejectionMaskHistory(iHistorySlot) = iMQMQAHessianLastRejectionMask
+            dMQMQAHessianCandidateAlphaHistory(iHistorySlot,:) = dCandidateAlpha
+            iMQMQAHessianCandidateRejectionMaskHistory(iHistorySlot,:) = iCandidateRejectionMask
+            dMQMQAHessianFunctionNormHistory(iHistorySlot) = dGEMFunctionNorm
+            dMQMQAHessianFunctionNormRatioHistory(iHistorySlot) = dNormRatio
+            dMQMQAHessianGibbsGapHistory(iHistorySlot) = dGibbsGap
+            if (lMQMQAHessianNonlinearReady) then
+                iMQMQAHessianReadinessReasonHistory(iHistorySlot) = 0
+            else
+                iMQMQAHessianReadinessReasonHistory(iHistorySlot) = iReadinessReason
+            end if
+        end if
+
+        ! MQ-4D step 7: return either the accepted corrected solve or the already solved historical arrays.
+        ! GEMLineSearch subsequently globalizes this direction and its observed progress informs the next call's
+        ! readiness decision.
+        if (lAccepted) then
+            AIn = ATrial
+            BIn = BTrial
+            IPIVIn = IPIVTrial
+            INFOOut = 0
+            lMQMQAHessianCorrectionApplied = .TRUE.
+            lMQMQAHessianCorrectedSolveAccepted = .TRUE.
+            nMQMQAHessianApplyCount = nMQMQAHessianApplyCount+1
+            nMQMQAHessianAcceptedSolveCount = nMQMQAHessianAcceptedSolveCount+1
+            dAppliedNormA = dSelectedAlpha*SQRT(SUM(dDeltaA**2))
+            dAppliedNormB = dSelectedAlpha*SQRT(SUM(dDeltaB**2))
+            dBaseNormA = SQRT(SUM(ABase(1:nElements,1:nElements)**2))
+            dBaseNormB = SQRT(SUM(BBase(1:nElements)**2))
+            dMQMQAHessianMaxAppliedA = DMAX1(dMQMQAHessianMaxAppliedA, &
+                MAXVAL(DABS(dSelectedAlpha*dDeltaA)))
+            dMQMQAHessianMaxAppliedB = DMAX1(dMQMQAHessianMaxAppliedB, &
+                MAXVAL(DABS(dSelectedAlpha*dDeltaB)))
+            dMQMQAHessianMaxRatioA = DMAX1(dMQMQAHessianMaxRatioA,dAppliedNormA/DMAX1(dBaseNormA,1D-30))
+            dMQMQAHessianMaxRatioB = DMAX1(dMQMQAHessianMaxRatioB,dAppliedNormB/DMAX1(dBaseNormB,1D-30))
+            if (dSelectedAlpha >= 1D0-1D-12) then
+                nMQMQAHessianFullAlphaCount = nMQMQAHessianFullAlphaCount+1
+                nMQMQAHessianFinalFullAlphaWindow = nMQMQAHessianFinalFullAlphaWindow+1
+            else
+                nMQMQAHessianReducedAlphaCount = nMQMQAHessianReducedAlphaCount+1
+                nMQMQAHessianFinalFullAlphaWindow = 0
+            end if
+        else
+            AIn = ABaseSolved
+            BIn = BBaseSolved
+            IPIVIn = IPIVBase
+            INFOOut = 0
+            nMQMQAHessianZeroAlphaCount = nMQMQAHessianZeroAlphaCount+1
+            nMQMQAHessianFinalFullAlphaWindow = 0
+        end if
+
+    end subroutine SolveMQMQAAlphaTrust
+
+
+    !> \brief Convert a solved GEM vector to the three displacement groups used by MQMQA trust.
+    !!
+    !> \details The solution-phase unknown stored by GEM is not itself a composition increment.  For each
+    !! active solution constituent, the actual Newton-coordinate increment used by `GEMLineSearch` is the
+    !! phase multiplier plus the stoichiometric element-potential target, less the current dimensionless
+    !! chemical potential.  This quantity is the first-order logarithmic constituent-mole increment.  Building
+    !! it constituent by constituent prevents a small phase multiplier from hiding a large composition update.
+    subroutine BuildMQMQAGroupedDisplacement(BSolved,nLocalVar,dStep,nSolutionStep)
+
+        integer, intent(in) :: nLocalVar
+        integer, intent(out) :: nSolutionStep
+        real(8), intent(in) :: BSolved(:)
+        real(8), intent(out) :: dStep(:)
+
+        integer :: iElement, iPhase, iSpecies, iSystemPhase, iWrite
+        real(8) :: dIncrement
+
+        dStep = 0D0
+        dStep(1:nElements) = BSolved(1:nElements)-dElementPotential(1:nElements)
+        nSolutionStep = 0
+        do iPhase = 1,nSolnPhases
+            iSystemPhase = -iAssemblage(nElements-iPhase+1)
+            do iSpecies = nSpeciesPhase(iSystemPhase-1)+1,nSpeciesPhase(iSystemPhase)
+                dIncrement = BSolved(nElements+iPhase)-dChemicalPotential(iSpecies)
+                do iElement = 1,nElements
+                    dIncrement = dIncrement+BSolved(iElement)*dStoichSpecies(iSpecies,iElement)/ &
+                        DFLOAT(iParticlesPerMole(iSpecies))
+                end do
+                nSolutionStep = nSolutionStep+1
+                dStep(nElements+nSolutionStep) = dIncrement
+            end do
+        end do
+
+        do iPhase = 1,nConPhases
+            iWrite = nElements+nSolutionStep+iPhase
+            if ((iWrite > SIZE(dStep)) .OR. (nElements+nSolnPhases+iPhase > nLocalVar)) exit
+            dStep(iWrite) = BSolved(nElements+nSolnPhases+iPhase)-dMolesPhase(iPhase)
+        end do
+
+    end subroutine BuildMQMQAGroupedDisplacement
 
     !> \brief Apply one fixed-alpha MQMQA aggregate transactionally and solve, with baseline fallback.
     !!

@@ -14,7 +14,8 @@
 !!
 !!          The builder never changes Thermochimica global state or a GEM matrix. The separate applicator changes
 !!          only the caller-owned element block and element residual. Alpha weights the completed correction,
-!!          never the local Hessian. Adaptive trust selection and nonlinear globalization remain MQ-4D work.
+!!          never the local Hessian. The separate default-off MQ-4D trust layer selects how much of the
+!!          completed correction pair to apply.
 !-------------------------------------------------------------------------------------------------------------
 
 module ModuleMQMQAResponseMapping

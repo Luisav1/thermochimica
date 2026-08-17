@@ -61,8 +61,9 @@
     !!                                   locally settled, and making acceptable residual progress.
     !> \param lRKMPHessianActive True when the current assemblage contains a plain RKMP solution phase.
     !> \param lRKMPHessianWasActive True after a plain RKMP phase has appeared during the current GEM solve.
-    !> \param lUseMQMQAExactHessian True only when the caller requests the default-off fixed-alpha MQMQA path.
-    !> \param dMQMQAHessianAlpha Fixed weight applied to each completed aggregate `deltaA/deltaB` correction;
+    !> \param lUseMQMQAExactHessian True when the caller requests either default-off MQMQA correction mode.
+    !> \param lMQMQAHessianAdaptiveMode True only for adaptive alpha trust; false preserves fixed-alpha MQ-4C.
+    !> \param dMQMQAHessianAlpha Fixed MQ-4C weight or the maximum candidate requested by adaptive MQ-4D;
     !!                            it never scales the local SUBG or SUBQ Hessian.
     !> \param nMQMQAHessianApplyCount Number of valid MQMQA correction aggregates applied to trial systems.
     !> \param nMQMQAHessianAcceptedSolveCount Number of corrected trial systems accepted after a finite solve.
@@ -123,7 +124,16 @@ module ModuleGEMSolver
     integer                              ::  nMQMQAHessianAggregateFailureCount, nMQMQAHessianApplicationFailureCount
     integer                              ::  nMQMQAHessianDGESVFallbackCount, nMQMQAHessianNonfiniteFallbackCount
     integer                              ::  nMQMQAHessianRKMPConflictCount, nMQMQAHessianInteriorFallbackCount
+    integer                              ::  nMQMQAHessianEligibleSolveCount, nMQMQAHessianFullAlphaCount
+    integer                              ::  nMQMQAHessianReducedAlphaCount, nMQMQAHessianZeroAlphaCount
+    integer                              ::  nMQMQAHessianRejectNonlinear, nMQMQAHessianRejectCorrection
+    integer                              ::  nMQMQAHessianRejectRatio, nMQMQAHessianRejectDGESV
+    integer                              ::  nMQMQAHessianRejectNonfinite
+    integer                              ::  nMQMQAHessianRejectUpdate, nMQMQAHessianRejectDirection
+    integer                              ::  nMQMQAHessianReadinessActivationCount, nMQMQAHessianReadinessResetCount
+    integer                              ::  nMQMQAHessianFinalFullAlphaWindow
     integer                              ::  iMQMQAHessianLastFailurePhase, iMQMQAHessianLastFailureStatus
+    integer                              ::  iMQMQAHessianLastRejectionMask
     integer, parameter                   ::  RKMP_MAP_SUCCESS = 0
     integer, parameter                   ::  RKMP_MAP_HESSIAN_FAILURE = 1
     integer, parameter                   ::  RKMP_MAP_ELEMENT_RESPONSE_FAILURE = 2
@@ -137,6 +147,13 @@ module ModuleGEMSolver
     integer, parameter                   ::  MQMQA_INTEGRATION_DGESV_FAILURE = 4
     integer, parameter                   ::  MQMQA_INTEGRATION_NONFINITE_UPDATE = 5
     integer, parameter                   ::  MQMQA_INTEGRATION_RKMP_CONFLICT = 6
+    integer, parameter                   ::  MQMQA_REJECT_NOT_READY = 1
+    integer, parameter                   ::  MQMQA_REJECT_CORRECTION = 2
+    integer, parameter                   ::  MQMQA_REJECT_RATIO = 4
+    integer, parameter                   ::  MQMQA_REJECT_DGESV = 8
+    integer, parameter                   ::  MQMQA_REJECT_UPDATE = 16
+    integer, parameter                   ::  MQMQA_REJECT_DIRECTION = 32
+    integer, parameter                   ::  MQMQA_REJECT_NONFINITE = 64
     integer                              ::  iConPhaseLast, iSolnPhaseLast,       iSolnSwap,  iPureConSwap
     integer,                 parameter   ::  iterGlobalMax = 3000
     integer, dimension(:,:), allocatable ::  iterHistory
@@ -154,7 +171,45 @@ module ModuleGEMSolver
     real(8)                              ::  dMQMQAHessianMaxAppliedA, dMQMQAHessianMaxAppliedB
     real(8)                              ::  dMQMQAHessianMaxRatioA, dMQMQAHessianMaxRatioB
     real(8)                              ::  dMQMQAHessianMinimumRejectedFraction
+    real(8)                              ::  dMQMQAHessianSelectedAlpha, dMQMQAHessianMaxSelectedAlpha
+    real(8)                              ::  dMQMQAHessianGroupUpdateRatio(3)
+    real(8)                              ::  dMQMQAHessianGroupDirectionCosine(3)
+    real(8)                              ::  dMQMQAHessianGroupDirectionDifference(3)
+    real(8)                              ::  dMQMQAHessianLastRejectedAlpha
+    real(8)                              ::  dMQMQAHessianRejectedGroupUpdateRatio(3)
+    real(8)                              ::  dMQMQAHessianRejectedGroupDirectionCosine(3)
+    real(8)                              ::  dMQMQAHessianRejectedGroupDirectionDifference(3)
+    real(8)                              ::  dMQMQAHessianGroupBaseNorm(3), dMQMQAHessianGroupTrialNorm(3)
+    real(8)                              ::  dMQMQAHessianRejectedGroupBaseNorm(3)
+    real(8)                              ::  dMQMQAHessianRejectedGroupTrialNorm(3)
+
+    ! MQ-4D adaptive-globalization heuristics.  These are numerical safety limits, not thermodynamic model
+    ! parameters.  They decide when to try the completed MQMQA GEM correction and whether a trial Newton update
+    ! remains acceptably close to the untouched historical update.  The sensitivity evidence and interpretation
+    ! for these defaults are documented in doc/MQMQAResponseMappingAudit.md.
+    real(8)                              ::  dMQMQATrustEmergencyRatioCap = 1D6
+    real(8)                              ::  dMQMQATrustUpdateRatioCap = 1.25D0
+    real(8)                              ::  dMQMQATrustDirectionCosineMin = 0.90D0
+    real(8)                              ::  dMQMQATrustDirectionDifferenceCap = 0.50D0
+    real(8)                              ::  dMQMQATrustLocalNormThreshold = 5D-2
+    real(8)                              ::  dMQMQATrustProgressAllowance = 1.05D0
+    real(8)                              ::  dMQMQATrustResolvedNormFloor = 1D-6
+    real(8)                              ::  dMQMQATrustGibbsActivationTolerance = 1D-6
+    real(8)                              ::  dMQMQATrustGibbsRetentionTolerance = 1D-4
+    integer                              ::  iMQMQATrustSettledAssemblagePeriod = 5
+
+    ! Histories are indexed by eligible MQMQA solves rather than only by printed Newton iteration.  The paired
+    ! global-iteration history preserves the distinction when GEMNewton is also called at initialization.
     real(8), dimension(iterGlobalMax)     ::  dRKMPHessianAcceptedAlphaHistory
+    real(8), dimension(iterGlobalMax)     ::  dMQMQAHessianAcceptedAlphaHistory
+    integer, dimension(iterGlobalMax)     ::  iMQMQAHessianGlobalIterationHistory
+    integer, dimension(iterGlobalMax)     ::  iMQMQAHessianRejectionMaskHistory
+    real(8), dimension(iterGlobalMax,5)   ::  dMQMQAHessianCandidateAlphaHistory
+    integer, dimension(iterGlobalMax,5)   ::  iMQMQAHessianCandidateRejectionMaskHistory
+    real(8), dimension(iterGlobalMax)     ::  dMQMQAHessianFunctionNormHistory
+    real(8), dimension(iterGlobalMax)     ::  dMQMQAHessianFunctionNormRatioHistory
+    real(8), dimension(iterGlobalMax)     ::  dMQMQAHessianGibbsGapHistory
+    integer, dimension(iterGlobalMax)     ::  iMQMQAHessianReadinessReasonHistory
     real(8)                              ::  dRKMPTrustEmergencyRatioCap = 1D6
     real(8)                              ::  dRKMPTrustUpdateRatioCap = 1.25D0
     real(8)                              ::  dRKMPTrustDirectionCosineMin = 0.90D0
@@ -173,7 +228,8 @@ module ModuleGEMSolver
     logical                              ::  lUseMQMQAExactHessian, lMQMQAHessianSupportedPhaseFound
     logical                              ::  lMQMQAHessianEligibleCorrectionBuilt, lMQMQAHessianAggregateBuilt
     logical                              ::  lMQMQAHessianCorrectionApplied, lMQMQAHessianCorrectedSolveAccepted
-    logical                              ::  lMQMQAHessianFallbackUsed
+    logical                              ::  lMQMQAHessianFallbackUsed, lMQMQAHessianAdaptiveMode
+    logical                              ::  lMQMQAHessianNonlinearReady
     logical                              ::  lRKMPHessianControlsConfigured = .FALSE.
     logical                              ::  lRKMPHessianRequestedEnable = .FALSE.
     logical                              ::  lRKMPHessianRequestedDebug = .FALSE.
@@ -182,6 +238,9 @@ module ModuleGEMSolver
     logical                              ::  lMQMQAHessianControlsConfigured = .FALSE.
     logical                              ::  lMQMQAHessianRequestedEnable = .FALSE.
     real(8)                              ::  dMQMQAHessianRequestedAlpha = 0D0
+    logical                              ::  lMQMQAHessianAdaptiveControlsConfigured = .FALSE.
+    logical                              ::  lMQMQAHessianRequestedAdaptiveEnable = .FALSE.
+    real(8)                              ::  dMQMQAHessianRequestedAlphaMax = 0D0
     logical, dimension(:),   allocatable ::  lSolnPhases, lMiscibility
 
 end module ModuleGEMSolver

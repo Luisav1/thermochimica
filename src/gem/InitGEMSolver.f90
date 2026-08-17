@@ -217,8 +217,23 @@ subroutine InitGEMSolver
     nMQMQAHessianNonfiniteFallbackCount = 0
     nMQMQAHessianRKMPConflictCount = 0
     nMQMQAHessianInteriorFallbackCount = 0
+    nMQMQAHessianEligibleSolveCount = 0
+    nMQMQAHessianFullAlphaCount = 0
+    nMQMQAHessianReducedAlphaCount = 0
+    nMQMQAHessianZeroAlphaCount = 0
+    nMQMQAHessianRejectNonlinear = 0
+    nMQMQAHessianRejectCorrection = 0
+    nMQMQAHessianRejectRatio = 0
+    nMQMQAHessianRejectDGESV = 0
+    nMQMQAHessianRejectNonfinite = 0
+    nMQMQAHessianRejectUpdate = 0
+    nMQMQAHessianRejectDirection = 0
+    nMQMQAHessianReadinessActivationCount = 0
+    nMQMQAHessianReadinessResetCount = 0
+    nMQMQAHessianFinalFullAlphaWindow = 0
     iMQMQAHessianLastFailurePhase = 0
     iMQMQAHessianLastFailureStatus = 0
+    iMQMQAHessianLastRejectionMask = 0
     dMQMQAHessianMaxDeltaA = 0D0
     dMQMQAHessianMaxDeltaB = 0D0
     dMQMQAHessianMaxAppliedA = 0D0
@@ -226,17 +241,46 @@ subroutine InitGEMSolver
     dMQMQAHessianMaxRatioA = 0D0
     dMQMQAHessianMaxRatioB = 0D0
     dMQMQAHessianMinimumRejectedFraction = HUGE(1D0)
+    dMQMQAHessianSelectedAlpha = 0D0
+    dMQMQAHessianMaxSelectedAlpha = 0D0
+    dMQMQAHessianGroupUpdateRatio = 1D0
+    dMQMQAHessianGroupDirectionCosine = 1D0
+    dMQMQAHessianGroupDirectionDifference = 0D0
+    dMQMQAHessianLastRejectedAlpha = 0D0
+    dMQMQAHessianRejectedGroupUpdateRatio = 1D0
+    dMQMQAHessianRejectedGroupDirectionCosine = 1D0
+    dMQMQAHessianRejectedGroupDirectionDifference = 0D0
+    dMQMQAHessianGroupBaseNorm = 0D0
+    dMQMQAHessianGroupTrialNorm = 0D0
+    dMQMQAHessianRejectedGroupBaseNorm = 0D0
+    dMQMQAHessianRejectedGroupTrialNorm = 0D0
+    dMQMQAHessianAcceptedAlphaHistory = -1D0
+    iMQMQAHessianGlobalIterationHistory = -1
+    iMQMQAHessianRejectionMaskHistory = 0
+    dMQMQAHessianCandidateAlphaHistory = -1D0
+    iMQMQAHessianCandidateRejectionMaskHistory = 0
+    dMQMQAHessianFunctionNormHistory = 0D0
+    dMQMQAHessianFunctionNormRatioHistory = 0D0
+    dMQMQAHessianGibbsGapHistory = 0D0
+    iMQMQAHessianReadinessReasonHistory = 0
     lMQMQAHessianSupportedPhaseFound = .FALSE.
     lMQMQAHessianEligibleCorrectionBuilt = .FALSE.
     lMQMQAHessianAggregateBuilt = .FALSE.
     lMQMQAHessianCorrectionApplied = .FALSE.
     lMQMQAHessianCorrectedSolveAccepted = .FALSE.
     lMQMQAHessianFallbackUsed = .FALSE.
-    if (lMQMQAHessianControlsConfigured) then
+    lMQMQAHessianNonlinearReady = .FALSE.
+    if (lMQMQAHessianAdaptiveControlsConfigured) then
+        lUseMQMQAExactHessian = lMQMQAHessianRequestedAdaptiveEnable
+        lMQMQAHessianAdaptiveMode = lMQMQAHessianRequestedAdaptiveEnable
+        dMQMQAHessianAlpha = dMQMQAHessianRequestedAlphaMax
+    else if (lMQMQAHessianControlsConfigured) then
         lUseMQMQAExactHessian = lMQMQAHessianRequestedEnable
+        lMQMQAHessianAdaptiveMode = .FALSE.
         dMQMQAHessianAlpha = dMQMQAHessianRequestedAlpha
     else
         lUseMQMQAExactHessian = .FALSE.
+        lMQMQAHessianAdaptiveMode = .FALSE.
         dMQMQAHessianAlpha = 0D0
     end if
     lCompEverything         = .FALSE.

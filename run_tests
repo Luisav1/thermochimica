@@ -36,6 +36,7 @@ tail -1 test12out.txt
 ./TestMQMQAGEMMappingVerification
 ./TestMQMQASUBQGEMMappingVerification
 ./TestMQMQAGEMIntegration
+./TestMQMQAAdaptiveTrust
 ./TestThermo31
 ./TestThermo32
 ./TestThermo33
