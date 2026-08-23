@@ -18,13 +18,16 @@
 !!          native test of the nonuniform pair-specific-zeta distinction. A
 !!          controlled modified-runtime section supplies positive nonuniform
 !!          zeta values, verifies the corrected weighted S3 scalar block and
-!!          complete production partial molars, and restores the parsed row.
+!!          complete production partial molars, production-linked Hessian-vector
+!!          differences, and restores the parsed row.
 !!
 !!          The production comparison uses Euler sums of production partial
 !!          molars. CompExcessGibbsEnergySUBG returns reference/configurational
 !!          terms in dChemicalPotential and excess terms in
 !!          dPartialExcessGibbs, so the two blocks remain independently visible.
-!!          Hessian-vector finite differences are intentionally deferred to MQ-2B.
+!!          MQ-2B supplies the broader 14-direction Hessian-vector verification
+!!          at the unchanged assessed FeTiVO state. The controlled section here
+!!          adds the specifically missing nonuniform-zeta production-Hv chain.
 !!          Pass --report to print the decoded native-state evidence.
 !-------------------------------------------------------------------------------------------------------------
 
@@ -35,7 +38,7 @@ program TestMQMQASUBQNativeEnergyVerification
     USE ModuleGEMSolver
     USE ModuleMQMQAUnconstrained
     USE ModuleMQMQAProductionAdapter
-    USE ModuleFiniteDifferenceVerification, ONLY: ComputeVectorErrorMetrics
+    USE ModuleFiniteDifferenceVerification
 
     implicit none
 
@@ -174,7 +177,7 @@ program TestMQMQASUBQNativeEnergyVerification
                 if (lReport) then
                     write(*,'(A)') 'MQ-2A Thermochimica-native SUBQ scalar-energy verification'
                     write(*,'(A)') 'native scope: nonmagnetic SUBQ reference/configurational/G/Q families'
-                    write(*,'(A)') 'native exclusions: B, R, Hessian FD, constrained response, GEM integration'
+                    write(*,'(A)') 'native exclusions: B, R, nonuniform-zeta Hessian FD, constrained response, GEM integration'
                     write(*,'(A,A)') 'database = ',TRIM(cThermoFileName)
                     write(*,'(A,A)') 'phase = ',TRIM(cSolnPhaseName(iPhaseIndex))
                     write(*,'(A,I0)') 'quadruplet count = ',nQuad
@@ -233,17 +236,23 @@ contains
         logical, intent(inout) :: lAllPass
         logical, intent(in) :: lVerbose
 
-        integer, parameter :: nExpectedPairs = 5
-        integer :: a, iGradientWorst, iInfoLocal, iPair, iSPI, x
+        integer, parameter :: nExpectedPairs = 5, nHvDirections = 3, nHvSteps = 9
+        integer :: a, iDirection, iGradientWorst, iInfoLocal, iPair, iReference, iSPI, iStep, iTarget, x
         logical :: lCasePass, lDiagnosticsValid, lRestored
         real(8) :: dCorrectedMolar, dDeltaS3, dExcessLocal, dG, dGExcessLocal
         real(8) :: dGIdealLocal, dGLegacyMolar, dGReferenceLocal, dGradientAbsolute
         real(8) :: dGradientError, dGradientMaxAbsolute, dGradientMaxScaled
         real(8) :: dLegacyS3, dLegacySeparation, dParityError, dProductionReferenceIdeal
         real(8) :: dExcessParityError, dTotalParityError, dWeightedS3
-        real(8), allocatable :: dGradient(:), dHessian(:,:), dMuProduction(:), dState(:), dZetaSave(:)
+        real(8) :: dWorstBestHv, dWorstBestHvComponent
+        real(8), allocatable :: dDirection(:), dGradient(:), dHessian(:,:), dHvErrors(:,:)
+        real(8), allocatable :: dHvMaxAbsolute(:,:), dHvMaxScaled(:,:), dHvNormAbsolute(:,:)
+        real(8), allocatable :: dHvOrders(:,:), dHvSteps(:,:), dMuProduction(:), dState(:), dZetaSave(:)
+        integer, allocatable :: iHvWorst(:,:)
+        logical, allocatable :: lHvOrderAvailable(:,:)
         type(MQMQAModelData) :: tModifiedModel
         type(MQMQAInteractionTerm), allocatable :: tModifiedInteraction(:)
+        type(FDSweepAssessment) :: tHvSweep
 
         lCasePass = .TRUE.
         lDiagnosticsValid = .FALSE.
@@ -291,6 +300,8 @@ contains
         dExcessParityError = HUGE(1D0)
         dTotalParityError = HUGE(1D0)
         dWeightedS3 = 0D0
+        dWorstBestHv = HUGE(1D0)
+        dWorstBestHvComponent = HUGE(1D0)
         dGradient = 0D0
         dHessian = 0D0
         dMuProduction = 0D0
@@ -344,6 +355,45 @@ contains
                 (dLegacySeparation >= 100D0*DMAX1(dParityError,EPSILON(1D0)))
             lCasePass = lCasePass .AND. (dGradientError <= 1D-10)
             lCasePass = lCasePass .AND. (dGradientMaxScaled <= 1D-10)
+
+            ! The direct gradient comparison checks the first derivative at one
+            ! state. These centered sweeps additionally differentiate the
+            ! established production partial molars and compare the result with
+            ! the analytic Hessian. Three independent mole-transfer directions
+            ! keep total phase amount fixed while exercising the nonuniform-zeta
+            ! weighted-normalization derivative introduced by the S3 correction.
+            allocate(dDirection(SIZE(dState)),dHvErrors(nHvDirections,nHvSteps), &
+                dHvMaxAbsolute(nHvDirections,nHvSteps),dHvMaxScaled(nHvDirections,nHvSteps), &
+                dHvNormAbsolute(nHvDirections,nHvSteps),dHvOrders(nHvDirections,nHvSteps), &
+                dHvSteps(nHvDirections,nHvSteps),iHvWorst(nHvDirections,nHvSteps), &
+                lHvOrderAvailable(nHvDirections,nHvSteps))
+            iReference = MAXLOC(dState,1)
+            iDirection = 0
+            dWorstBestHv = 0D0
+            dWorstBestHvComponent = 0D0
+            do iTarget = 1, SIZE(dState)
+                if ((iTarget == iReference) .OR. (iDirection == nHvDirections)) cycle
+                iDirection = iDirection+1
+                dDirection = 0D0
+                dDirection(iTarget) = 1D0
+                dDirection(iReference) = -1D0
+                call VerifyControlledProductionDirection(iPhaseLocal,dState,dDirection,dHessian, &
+                    dHvSteps(iDirection,:),dHvNormAbsolute(iDirection,:),dHvErrors(iDirection,:), &
+                    dHvMaxAbsolute(iDirection,:),dHvMaxScaled(iDirection,:), &
+                    iHvWorst(iDirection,:),lCasePass)
+                call AssessFDSweep(dHvSteps(iDirection,:),dHvErrors(iDirection,:), &
+                    FD_ORDER_SECOND_MIN,FD_ORDER_SECOND_MAX,1D-8,tHvSweep, &
+                    dHvOrders(iDirection,:),lHvOrderAvailable(iDirection,:))
+                lCasePass = lCasePass .AND. tHvSweep%lPassed
+                if (tHvSweep%iBest > 0) then
+                    dWorstBestHv = DMAX1(dWorstBestHv,tHvSweep%dBestError)
+                    dWorstBestHvComponent = DMAX1(dWorstBestHvComponent, &
+                        dHvMaxScaled(iDirection,tHvSweep%iBest))
+                end if
+            end do
+            lCasePass = lCasePass .AND. (iDirection == nHvDirections)
+            lCasePass = lCasePass .AND. (dWorstBestHv <= 1D-8)
+            lCasePass = lCasePass .AND. (dWorstBestHvComponent <= 1D-8)
             lDiagnosticsValid = .TRUE.
         end if
 
@@ -380,6 +430,21 @@ contains
                     write(*,'(I6,3ES26.14)') iPair,dGradient(iPair),dMuProduction(iPair), &
                         dMuProduction(iPair)-dGradient(iPair)
                 end do
+                write(*,'(A)') 'controlled central derivative of production partial molars; expected order = 2'
+                write(*,'(A)') &
+                    'dir  h                 norm abs            norm scaled         max abs             max scaled          worst  order'
+                do iDirection = 1, nHvDirections
+                    do iStep = 1, nHvSteps
+                        write(*,'(I3,5ES20.10,I7,2X,A)') iDirection,dHvSteps(iDirection,iStep), &
+                            dHvNormAbsolute(iDirection,iStep),dHvErrors(iDirection,iStep), &
+                            dHvMaxAbsolute(iDirection,iStep),dHvMaxScaled(iDirection,iStep), &
+                            iHvWorst(iDirection,iStep),TRIM(OrderLabel( &
+                            dHvOrders(iDirection,iStep),lHvOrderAvailable(iDirection,iStep)))
+                    end do
+                end do
+                write(*,'(A,ES14.6)') 'controlled worst best production-mu Hv error = ',dWorstBestHv
+                write(*,'(A,ES14.6)') &
+                    'controlled worst componentwise error at normwise-best steps = ',dWorstBestHvComponent
             else
                 write(*,'(A,I0)') 'controlled diagnostics unavailable; evaluator status = ',iInfoLocal
             end if
@@ -387,9 +452,60 @@ contains
             write(*,'(A,L1)') 'controlled regression pass = ',lCasePass
         end if
 
+        if (ALLOCATED(dDirection)) deallocate(dDirection,dHvErrors,dHvMaxAbsolute,dHvMaxScaled, &
+            dHvNormAbsolute,dHvOrders,dHvSteps,iHvWorst,lHvOrderAvailable)
         deallocate(dGradient,dHessian,dMuProduction,dState,dZetaSave)
 
     end subroutine VerifyControlledNonuniformZeta
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Compare analytic H*v with production partial-molar differences under controlled nonuniform zeta.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine VerifyControlledProductionDirection(iPhaseLocal,dMolesLocal,dDirectionLocal,dHessianLocal, &
+        dStepValues,dNormAbsolute,dErrors,dMaxAbsolute,dMaxScaled,iWorst,lAllPass)
+
+        integer, intent(in) :: iPhaseLocal
+        real(8), intent(in) :: dMolesLocal(:), dDirectionLocal(:), dHessianLocal(:,:)
+        real(8), intent(out) :: dStepValues(:), dNormAbsolute(:), dErrors(:)
+        real(8), intent(out) :: dMaxAbsolute(:), dMaxScaled(:)
+        integer, intent(out) :: iWorst(:)
+        logical, intent(inout) :: lAllPass
+
+        integer :: iInfoLocal, iStepLocal
+        real(8) :: dDummyExcess, dDummyReferenceIdeal, dH, dScale
+        real(8), allocatable :: dMinus(:), dMuMinus(:), dMuPlus(:), dPlus(:), dPrediction(:), dRatio(:)
+
+        allocate(dMinus(SIZE(dMolesLocal)),dMuMinus(SIZE(dMolesLocal)), &
+            dMuPlus(SIZE(dMolesLocal)),dPlus(SIZE(dMolesLocal)), &
+            dPrediction(SIZE(dMolesLocal)),dRatio(SIZE(dMolesLocal)))
+        where (DABS(dDirectionLocal) > 0D0)
+            dRatio = dMolesLocal/DABS(dDirectionLocal)
+        elsewhere
+            dRatio = HUGE(1D0)
+        end where
+        dScale = MINVAL(dRatio)
+        dPrediction = MATMUL(dHessianLocal,dDirectionLocal)
+
+        do iStepLocal = 1, SIZE(dStepValues)
+            dH = 0.05D0*dScale*3D0**(-(iStepLocal-1))
+            dStepValues(iStepLocal) = dH
+            dMinus = dMolesLocal-dH*dDirectionLocal
+            dPlus = dMolesLocal+dH*dDirectionLocal
+            call EvaluateProductionEnergy(iPhaseLocal,dMinus,dDummyReferenceIdeal, &
+                dDummyExcess,iInfoLocal,dMuMinus)
+            lAllPass = lAllPass .AND. (iInfoLocal == 0)
+            call EvaluateProductionEnergy(iPhaseLocal,dPlus,dDummyReferenceIdeal, &
+                dDummyExcess,iInfoLocal,dMuPlus)
+            lAllPass = lAllPass .AND. (iInfoLocal == 0)
+            call ComputeVectorErrorMetrics((dMuPlus-dMuMinus)/(2D0*dH),dPrediction, &
+                dNormAbsolute(iStepLocal),dErrors(iStepLocal),dMaxAbsolute(iStepLocal), &
+                dMaxScaled(iStepLocal),iWorst(iStepLocal))
+        end do
+
+        deallocate(dMinus,dMuMinus,dMuPlus,dPlus,dPrediction,dRatio)
+
+    end subroutine VerifyControlledProductionDirection
 
 
     !---------------------------------------------------------------------------------------------------------
@@ -546,6 +662,20 @@ contains
         deallocate(dChemicalSave,dFractionSave,dPartialSave,dX)
 
     end subroutine EvaluateProductionEnergy
+
+
+    character(len=16) function OrderLabel(dOrder,lAvailable)
+
+        real(8), intent(in) :: dOrder
+        logical, intent(in) :: lAvailable
+
+        if (lAvailable) then
+            write(OrderLabel,'(F10.4)') dOrder
+        else
+            OrderLabel = 'N/A'
+        end if
+
+    end function OrderLabel
 
 
     real(8) function ScaledError(dA,dB)

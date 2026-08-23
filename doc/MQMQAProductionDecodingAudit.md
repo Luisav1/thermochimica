@@ -104,6 +104,25 @@ production coverage, not an assessed database-native nonuniform-zeta case. The
 measured complete-model derivative differences remain modest but resolved and
 state-dependent in the synthetic states tested.
 
+The controlled regression now also closes the production-linked derivative
+chain that was previously missing for nonuniform zeta.  At three independent
+total-preserving mole-transfer directions it compares
+
+```text
+[mu(n+h v) - mu(n-h v)] / (2 h)
+```
+
+from the established production partial-molar routine with the standalone
+analytic `H*v`.  It requires a consecutive second-order truncation region and
+checks both the vector norm and the worst scaled component.  This is stronger
+than comparing only the scalar energy or first derivative: it demonstrates that
+the corrected weighted `S3` choice and its normalization derivative propagate
+consistently through production partial molars and the analytic Hessian.  It
+does not turn the modified FeTiVO row into assessed material evidence; its role
+is a controlled, discriminating production regression.  The measured worst
+best normwise `H*v` error is `6.93E-10`, and the corresponding worst scaled
+component error is `4.65E-10`.
+
 ## Phase and Array Boundaries
 
 The two public entry points enforce distinct phase-model contracts:
@@ -434,7 +453,7 @@ required. At the fixed interior verification state, the direct gradient error
 is `2.98E-17`, raw Hessian symmetry is `1.20E-16`, and homogeneity is
 `2.12E-17`. All 14 independent total-preserving mole-transfer directions show
 the expected second-order production-partial-molar finite-difference region;
-the worst-best normwise error is `7.22E-10`, and the worst componentwise scaled
+the worst-best normwise error is `7.75E-10`, and the worst componentwise scaled
    error at the normwise-best steps is `5.51E-10`. The database contains no `B` or
    `R` records, and its uniform zeta cannot distinguish ordinary from weighted
    pair fractions. The separate controlled modified-runtime regression provides
