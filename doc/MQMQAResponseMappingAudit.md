@@ -1616,6 +1616,123 @@ strict-interior and boundary exclusions, accepted corrections, alpha histories,
 fallback frequency, convergence, and final-equilibrium agreement.  `B` remains
 controlled standalone coverage rather than database-native solver evidence.
 
+## MQ-4E-A: portable public-database solver coverage
+
+### Purpose and evidence boundary
+
+MQ-4E-A broadens the live solver experiment without using the private MSD-TC
+files reserved for MQ-4E-B.  `TestMQMQASolverCoverage.F90` runs thirteen
+public-data states: the repository's `CuFeC-Kang.dat` plain-`SUBG` case at
+1400 K and a twelve-state `FeTiVO.dat` `SUBQ` sweep.  The FeTiVO sweep changes
+temperature from 1900 to 2100 K while Fe/Ti change linearly from 0.55/0.45 to
+0.45/0.55 mol; V=0.5 mol, O=2 mol, and pressure=1 atm remain fixed.  It is a
+controlled parameter trajectory, not a physical time integration.
+
+Each state is solved three times from a fresh Thermochimica state:
+
+1. historical/default-off GEM, which supplies the case-local reference;
+2. fixed `alpha=1`, retained as a stress comparison with the MQ-4C interface;
+3. adaptive `alpha_max=1`, which is the MQ-4D production candidate.
+
+The test records convergence, iterations, eligible/application/accepted-solve
+counts, full/reduced/zero-alpha selections, final full-alpha window, boundary
+exclusions, correction ratios, readiness changes, rejection reasons, and
+scaled final differences.  It also reports fixed/historical and
+adaptive/historical iteration ratios so safety evidence is not mistaken for a
+performance improvement.  Every reduced-alpha selection must retain a
+candidate-specific rejection mask for each larger rejected candidate.  The
+default-off run must remain silent: no correction, eligibility, or boundary
+diagnostic is allowed to activate.
+
+The classifications deliberately separate what was demonstrated:
+
+- `FULL_CURVATURE_EVIDENCE`: at least one full-alpha correction was accepted;
+- `REDUCED_CURVATURE_EVIDENCE`: positive corrections were accepted, but none
+  at full alpha;
+- `SAFE_BOUNDARY_FALLBACK`: only documented strict-interior exclusions were
+  observed;
+- `SAFE_TRUST_FALLBACK`: the adaptive path considered eligible states but
+  retained only the historical update;
+- `REFERENCE_STATE_DIFFERENCE`: the run converged finitely with accepted
+  corrections, but its raw final state arrays did not agree with the
+  case-local historical arrays within the stated comparison tolerance;
+- `FAILURE`: convergence, finiteness, transactional safety, or documented
+  reduced-alpha evidence failed.
+
+Only the first two classifications are curvature-effect evidence.  The two
+`SAFE_*` classes are fallback evidence.  `REFERENCE_STATE_DIFFERENCE` is a
+flag for further interpretation, not a successful final-state-equivalence
+claim.  Historical comparison uses scaled tolerances of `1E-8` for total Gibbs
+energy and `1E-6` for mole fractions, species moles, and phase amounts.  The
+state tolerance is still substantially tighter than the `1E-3` relative
+application checks in Tests 56 and 57, while allowing the broader trajectory's
+solver-level numerical variation.
+
+### Measured public-data results
+
+All thirteen historical runs and all twenty-six corrected runs converged with
+finite outputs.  No aggregate-construction, application, corrected-linear-
+solve, or nonfinite-update failure occurred.  Every reduced-alpha decision was
+candidate-specifically documented.
+
+For adaptive mode, all thirteen states agreed with their historical references
+within the stated tolerances.  Eleven states selected `alpha=1` at least once.
+FeTiVO steps 4 and 11 selected only reduced positive corrections, with maximum
+alpha `0.1`; they are therefore reduced-curvature evidence rather than full-
+curvature evidence.  Three fixed FeTiVO runs encountered strict-interior
+exclusions, but still accepted positive corrections elsewhere and converged.
+
+| Public case | Historical iterations | Adaptive iterations | Adaptive/historical | Full/reduced/zero | Maximum alpha | Final full-alpha window | Adaptive class |
+|---|---:|---:|---:|---:|---:|---:|---|
+| CuFeC 1400 K, SUBG | 448 | 657 | 1.467 | 26/271/306 | 1.0 | 0 | full-curvature evidence |
+| FeTiVO step 1 | 45 | 69 | 1.533 | 2/42/28 | 1.0 | 1 | full-curvature evidence |
+| FeTiVO step 2 | 66 | 116 | 1.758 | 18/62/27 | 1.0 | 18 | full-curvature evidence |
+| FeTiVO step 3 | 45 | 67 | 1.489 | 1/40/29 | 1.0 | 0 | full-curvature evidence |
+| FeTiVO step 4 | 46 | 66 | 1.435 | 0/44/25 | 0.1 | 0 | reduced-curvature evidence |
+| FeTiVO step 5 | 87 | 107 | 1.230 | 19/31/60 | 1.0 | 18 | full-curvature evidence |
+| FeTiVO step 6 | 79 | 95 | 1.203 | 18/27/53 | 1.0 | 15 | full-curvature evidence |
+| FeTiVO step 7 | 38 | 40 | 1.053 | 7/24/10 | 1.0 | 7 | full-curvature evidence |
+| FeTiVO step 8 | 41 | 67 | 1.634 | 30/30/8 | 1.0 | 30 | full-curvature evidence |
+| FeTiVO step 9 | 33 | 73 | 2.212 | 1/58/15 | 1.0 | 0 | full-curvature evidence |
+| FeTiVO step 10 | 32 | 81 | 2.531 | 1/64/17 | 1.0 | 0 | full-curvature evidence |
+| FeTiVO step 11 | 32 | 84 | 2.625 | 0/66/19 | 0.1 | 0 | reduced-curvature evidence |
+| FeTiVO step 12 | 31 | 52 | 1.677 | 2/39/12 | 1.0 | 0 | full-curvature evidence |
+
+The public plain-SUBG case is a clear performance warning.  Adaptive mode
+preserved the historical final state, but required 657 iterations versus 448
+historically, an iteration ratio of `1.467`.  It recorded 159
+readiness activations and 158 resets.  Its rejections were dominated by update
+magnitude (`551`), followed by nonlinear readiness (`305`) and direction
+(`11`).  This is safe guarded behavior, not evidence that adaptive curvature
+improves convergence for CuFeC.  It should remain visible in MQ-4E-C's final
+performance interpretation rather than prompting FeTiVO-tuned threshold
+changes during MQ-4E-A.
+
+The performance issue is not limited to CuFeC.  Adaptive mode required more
+iterations than the historical solver in every public case, with ratios from
+`1.053` to `2.625`.  This matrix therefore demonstrates safety and coverage,
+not acceleration.  MQ-4E-C must use the public and private MQ-4E evidence to
+decide whether the overhead is an acceptable cost of guarded experimental
+curvature, whether readiness/trust needs another bounded revision, or whether
+adaptive curvature should remain an opt-in diagnostic capability.  Thresholds
+are not changed in MQ-4E-A solely to improve this table.
+
+Fixed `alpha=1` on CuFeC converged in 466 iterations and applied 383 corrected
+solves, but the raw species/phase state arrays differed materially from the
+historical arrays even though the scaled Gibbs-energy difference was only
+`5.66E-14`.  MQ-4E-A therefore labels this result
+`REFERENCE_STATE_DIFFERENCE`; it does not call the fixed run equivalent or use
+it as the adaptive acceptance gate.  Whether the raw difference represents an
+alternative near-degenerate assemblage or a meaningful fixed-curvature solver
+difference requires phase-identity-aware interpretation in MQ-4E-C.
+
+MQ-4E-A establishes portable public-data execution through both supported
+plain-SUBG and SUBQ routes, with exact default-off behavior, transactional
+safety, and adaptive historical agreement over the tested states.  It does not
+establish that full alpha is selected near every solution, that adaptive mode
+is faster, or that the FeTiVO trust heuristics are optimal for plain SUBG.
+Private assessed molten-salt solver evidence remains MQ-4E-B.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than
