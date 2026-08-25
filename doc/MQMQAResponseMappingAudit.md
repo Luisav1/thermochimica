@@ -1606,6 +1606,16 @@ does not establish universal alpha-one robustness, broad model/database
 coverage, constrained-KKT compatibility, or assessed molten-salt application
 evidence.
 
+Private local MSD-TC FLiBe verification now supplies database-native
+nonuniform-zeta `G`-family scalar, gradient, and Hessian evidence over three
+documented compositions.  That closes the local derivative-evidence item, but
+it does not extend the current MQ-4D solver claim: the FLiBe cases have not yet
+been exercised through live GEM mapping or adaptive globalization.  MQ-4E must
+reuse the documented database and application range to record eligibility,
+strict-interior and boundary exclusions, accepted corrections, alpha histories,
+fallback frequency, convergence, and final-equilibrium agreement.  `B` remains
+controlled standalone coverage rather than database-native solver evidence.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than

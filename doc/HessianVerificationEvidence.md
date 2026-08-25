@@ -285,9 +285,12 @@ establish that exact curvature reduces iteration count or wall-clock time.
   assessed uniform-zeta state, the maximum direct weighted/ordinary pair-fraction
   difference is `1.11E-16`, making explicit why that database cannot distinguish
   the two S3 definitions.
-  No assessed database-native nonuniform-zeta case is available. Native B-family
-  parameters, reciprocal R terms, and magnetism remain outside the demonstrated
-  scope.
+  Private local MSD-TC FLiBe evidence now provides database-native
+  nonuniform-zeta `G`-family scalar, gradient, and Hessian verification across
+  three compositions. Its database-dependent assets remain excluded from the
+  public regression suite. Native `B`-family parameters remain controlled
+  standalone coverage; reciprocal `R` terms and magnetism remain outside the
+  demonstrated scope.
 
 ## Reproduction
 

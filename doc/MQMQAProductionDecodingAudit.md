@@ -91,6 +91,10 @@ normalization contribution
 for each quadruplet partial molar. The contribution is identically zero when
 all pairs share one zeta, but is required for production partial molars to equal
 the gradient of the corrected weighted scalar energy when zeta is pair specific.
+The underlying pair incidence was already present in production as the local
+`nA*nX` factor; the correction retains its ordinary and zeta-weighted sums so
+the normalization derivative can be evaluated. Neither incidence is generally
+zero. For uniform zeta, their difference in the expression above cancels exactly.
 
 FeTiVO's assessed zeta values are uniformly `2.4`, so ordinary and weighted
 normalized fractions coincide there. The assessed-state test gates their maximum
@@ -122,6 +126,25 @@ does not turn the modified FeTiVO row into assessed material evidence; its role
 is a controlled, discriminating production regression.  The measured worst
 best normwise `H*v` error is `6.93E-10`, and the corresponding worst scaled
 component error is `4.65E-10`.
+
+### SUBQ S3 correction status
+
+The corrected SUBQ `S3` scalar expression, its weighted-normalization
+derivative, and the corresponding standalone Hessian path are complete in the
+local implementation.  The controlled production-linked nonuniform-zeta
+`H*v` regression described above is also complete.
+
+Private local MSD-TC FLiBe evidence additionally exercises database-native
+nonuniform pair-specific zeta values over three compositions.  It establishes
+`G`-family scalar, gradient, and Hessian consistency for that documented range;
+the database and its dependent test assets remain excluded from the public
+regression suite.  Database-native `B` evidence is not available, so `B`
+remains controlled standalone coverage under the supervisor-approved evidence
+boundary.
+
+The narrow production correction has been submitted upstream as a draft pull
+request and is awaiting maintainer activation of the CIVET checks.  It must not
+be described as upstream-accepted or merged until that process is complete.
 
 ## Phase and Array Boundaries
 
