@@ -59,12 +59,13 @@ subroutine CheckPureConPhaseRem
 
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseRemovalEvent
 
     implicit none
 
-    integer                       :: i, iPhaseChange, iPhaseTypeOut, iMaxDrivingForce
+    integer                       :: i, iPhaseChange, iPhaseTypeOut, iMaxDrivingForce, iDiagnosticPhase
     integer,dimension(nConPhases) :: iTempVec
-    real(8)                       :: dMaxDrivingForce, dTemp
+    real(8)                       :: dMaxDrivingForce, dTemp, dDiagnosticCurrent, dDiagnosticPrevious
     real(8),dimension(nConPhases) :: dTempVec
     logical                       :: lSwapLater, lPhasePass
 
@@ -105,6 +106,10 @@ subroutine CheckPureConPhaseRem
             ! revert the system back to the last successful phase assemblage:
             if ((iPureConSwap == iAssemblage(iPhaseChange)).AND.(iterLast == iterSwap)) then
 
+                call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iAssemblage(iPhaseChange),2,3,2, &
+                    dMolesPhase(iPhaseChange),dMolesPhaseLast(iPhaseChange),dTemp, &
+                    dTolerance(7),0.01D0*DABS(dMolesPhase(iPhaseChange)))
+
                 ! Revert the system to the last succesful phase assemblage:
                 call RevertSystem(iterSwap)
 
@@ -117,7 +122,16 @@ subroutine CheckPureConPhaseRem
             end if
 
             ! Try removing this pure condensed phase from the phase assemblage:
+            iDiagnosticPhase = iAssemblage(iPhaseChange)
+            dDiagnosticCurrent = dMolesPhase(iPhaseChange)
+            dDiagnosticPrevious = dMolesPhaseLast(iPhaseChange)
+            call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iDiagnosticPhase,2,2,0, &
+                dDiagnosticCurrent,dDiagnosticPrevious,dTemp, &
+                dTolerance(7),0.01D0*DABS(dDiagnosticCurrent))
             call RemPureConPhase(iPhaseChange,lSwapLater,lPhasePass)
+            call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iDiagnosticPhase,2,2, &
+                MERGE(1,-1,lPhasePass),dDiagnosticCurrent,dDiagnosticPrevious, &
+                dTemp,dTolerance(7),0.01D0*DABS(dDiagnosticCurrent))
 
             ! Exit if the phase assemblage has passed:
             if (lPhasePass) exit LOOP_PureConPhases

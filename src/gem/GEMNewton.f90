@@ -95,7 +95,15 @@ subroutine GEMNewton(INFO)
     USE ModuleThermo
     USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
     USE ModuleGEMSolver
-    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureGEMNewtonSystem
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureGEMNewtonSystem, &
+        CaptureMQMQACandidateComparison, &
+        RecordMQMQAPhasePathCandidate, &
+        lCaptureMQMQATrajectory, &
+        nMQMQADiagnosticMaxCandidateSpecies, &
+        lMQMQADiagnosticForceZeroAlpha, lMQMQADiagnosticRejectAcceptedCandidate, &
+        lMQMQADiagnosticPhasePathStudy, &
+        iMQMQADiagnosticCurrentAttempt, iMQMQADiagnosticSkipAttempt, &
+        iMQMQADiagnosticSkipIteration
     USE ModuleMQMQAResponseMapping, ONLY: BuildActiveMQMQAGEMCorrection, SolveMQMQACorrectionTrial, &
         MQMQA_AGGREGATE_SUCCESS, MQMQA_AGGREGATE_NO_APPLICABLE_PHASE, MQMQA_AGGREGATE_PHASE_FAILURE, &
         MQMQA_MAP_OUTSIDE_INTERIOR, &
@@ -359,10 +367,17 @@ contains
         integer :: iAggregateStatus, iAlpha, iFailurePhase, iFailureStatus, iHistorySlot, iInfoBase, iReadinessReason
         integer :: iLocal, iTrialStatus, iTrustStatus, nAccepted, nAlpha, nCharged, nSolutionStep
         integer, allocatable :: IPIVBase(:), IPIVTrial(:)
-        logical :: lAccepted, lApplied, lEligible, lOldReady, lSupported, lTrustAccepted
+        logical :: lAccepted, lApplied, lDiagnosticForceZero, lEligible, lOldReady, lSupported, lTrustAccepted
+        logical :: lIdentityChange, lEligibilityCrossing, lOrderingReversal, lRemovalCrossing
         real(8) :: dAlphaCandidate, dAppliedNormA, dAppliedNormB, dBaseNormA, dBaseNormB
         real(8) :: dCurrentGibbs, dFailureMinimumFraction, dGibbsGap, dGibbsScale, dNormRatio, dRatioA, dRatioB
-        real(8) :: dSelectedAlpha
+        real(8) :: dSelectedAlpha, dPureBase, dPureTrial, dSolutionBase, dSolutionTrial
+        real(8) :: dScaledForceShift, dAmountDisplacement
+        integer :: iPureBase, iPureTrial, iSolutionBase, iSolutionTrial
+        integer :: iSolutionSpeciesBase(nMQMQADiagnosticMaxCandidateSpecies), &
+            iSolutionSpeciesTrial(nMQMQADiagnosticMaxCandidateSpecies)
+        real(8) :: dSolutionFractionBase(nMQMQADiagnosticMaxCandidateSpecies), &
+            dSolutionFractionTrial(nMQMQADiagnosticMaxCandidateSpecies)
         integer :: iCandidateRejectionMask(5)
         real(8) :: dAlphaList(5), dCandidateAlpha(5), dDirectionCosine(3), dDirectionDifference(3), dUpdateRatio(3)
         real(8) :: dBaseNormGroup(3), dTrialNormGroup(3)
@@ -370,6 +385,9 @@ contains
         real(8), allocatable :: dDeltaA(:,:), dDeltaB(:), dStepBase(:), dStepTrial(:)
 
         INFOOut = 0
+        lDiagnosticForceZero = lMQMQADiagnosticForceZeroAlpha .OR. &
+            ((iMQMQADiagnosticCurrentAttempt == iMQMQADiagnosticSkipAttempt) .AND. &
+            (iterGlobal == iMQMQADiagnosticSkipIteration))
 
         ! MQ-4D step 1: build one complete correction pair for all currently eligible MQMQA phases.  The
         ! builder is transactional: a failure in any applicable phase rejects the aggregate rather than leaving
@@ -505,9 +523,17 @@ contains
             nMQMQAHessianReadinessResetCount = nMQMQAHessianReadinessResetCount+1
 
         lAccepted = .FALSE.
-        if (.NOT. lMQMQAHessianNonlinearReady) then
-            nMQMQAHessianRejectNonlinear = nMQMQAHessianRejectNonlinear+1
-            iMQMQAHessianLastRejectionMask = MQMQA_REJECT_NOT_READY
+        if ((.NOT. lMQMQAHessianNonlinearReady) .OR. lDiagnosticForceZero) then
+            ! The diagnostic force-zero branch distinguishes effects of entering
+            ! the adaptive path from effects of testing or accepting candidates.
+            ! It is default-inactive and intentionally does not manufacture a
+            ! nonlinear-readiness rejection when the state is otherwise ready.
+            if (lDiagnosticForceZero .AND. lMQMQAHessianNonlinearReady) then
+                iMQMQAHessianLastRejectionMask = 0
+            else
+                nMQMQAHessianRejectNonlinear = nMQMQAHessianRejectNonlinear+1
+                iMQMQAHessianLastRejectionMask = MQMQA_REJECT_NOT_READY
+            end if
         else
             ! MQ-4D steps 4-5: test the largest permitted correction first.  A candidate must pass the
             ! correction-size check, corrected linear solve, finiteness checks, and grouped comparison with the
@@ -577,10 +603,41 @@ contains
                     cycle LOOP_MQMQA_ALPHA
                 end if
 
+                ! Diagnostic-only phase-path study.  Both candidate vectors originate from the same
+                ! pre-step GEM system.  The test records immediate crossings of production addition/removal
+                ! boundaries.  It never compares with a known final assemblage or database-specific phase
+                ! identity, and the measured quantities do not influence candidate acceptance.
+                if (lMQMQADiagnosticPhasePathStudy) then
+                    call EvaluateMQMQAPhasePathCandidate(BBaseSolved,BTrial,nLocalVar, &
+                        lIdentityChange,lEligibilityCrossing,lOrderingReversal,lRemovalCrossing, &
+                        dScaledForceShift,dAmountDisplacement)
+                    call RecordMQMQAPhasePathCandidate(lIdentityChange,lEligibilityCrossing, &
+                        lOrderingReversal,lRemovalCrossing,dScaledForceShift,dAmountDisplacement)
+                end if
+
                 dSelectedAlpha = dAlphaCandidate
                 lAccepted = .TRUE.
                 exit LOOP_MQMQA_ALPHA
             end do LOOP_MQMQA_ALPHA
+            if (lMQMQADiagnosticRejectAcceptedCandidate .AND. lAccepted) then
+                dSelectedAlpha = 0D0
+                lAccepted = .FALSE.
+            end if
+        end if
+
+        ! Diagnostic-only causal comparison: both target vectors were solved
+        ! from the same pre-step GEM system.  Recompute the phase rankings at
+        ! each target, restore all modified working arrays, and record the
+        ! result before either target enters GEMLineSearch.
+        if (lAccepted .AND. lCaptureMQMQATrajectory) then
+            call EvaluateMQMQACandidatePhaseRanking(BBaseSolved(1:nElements),iPureBase,dPureBase, &
+                iSolutionBase,dSolutionBase,iSolutionSpeciesBase,dSolutionFractionBase)
+            call EvaluateMQMQACandidatePhaseRanking(BTrial(1:nElements),iPureTrial,dPureTrial, &
+                iSolutionTrial,dSolutionTrial,iSolutionSpeciesTrial,dSolutionFractionTrial)
+            call CaptureMQMQACandidateComparison(iterGlobal,dSelectedAlpha,dElementPotential, &
+                BBaseSolved(1:nElements),BTrial(1:nElements),iPureBase,dPureBase, &
+                iSolutionBase,dSolutionBase,iPureTrial,dPureTrial,iSolutionTrial,dSolutionTrial, &
+                iSolutionSpeciesBase,dSolutionFractionBase,iSolutionSpeciesTrial,dSolutionFractionTrial)
         end if
 
         ! MQ-4D step 6: record what was selected and why larger candidates were rejected.  Histories use eligible
@@ -648,6 +705,170 @@ contains
         end if
 
     end subroutine SolveMQMQAAlphaTrust
+
+
+    !> \brief Recompute pure- and solution-phase rankings at one candidate element-potential target.
+    !!
+    !> \details This helper is reached only through opt-in diagnostic capture.  `CompMolFraction` is the same
+    !! production routine later used by phase-addition logic.  All Thermochimica arrays that it changes are
+    !! snapshotted and restored, so neither candidate evaluation can seed or otherwise alter the live solve.
+    subroutine EvaluateMQMQACandidatePhaseRanking(dGamma,iPure,dPure,iSolution,dSolution, &
+        iSolutionSpecies,dSolutionFraction)
+
+        real(8), intent(in) :: dGamma(:)
+        integer, intent(out) :: iPure, iSolution
+        real(8), intent(out) :: dPure, dSolution
+        integer, intent(out) :: iSolutionSpecies(:)
+        real(8), intent(out) :: dSolutionFraction(:)
+
+        integer :: iElement, iPhase, iSpecies, iInfoSave
+        real(8) :: dForce
+        real(8), allocatable :: dChemicalSave(:), dDrivingSave(:), dEffStoichSave(:,:), &
+            dElementSave(:), dFractionSave(:), dPartialSave(:), dSumSave(:)
+
+        iPure = 0
+        iSolution = 0
+        dPure = 0D0
+        dSolution = 0D0
+        iSolutionSpecies = 0
+        dSolutionFraction = 0D0
+        if (SIZE(dGamma) /= nElements) return
+
+        allocate(dElementSave(SIZE(dElementPotential)),dFractionSave(SIZE(dMolFraction)), &
+            dChemicalSave(SIZE(dChemicalPotential)),dPartialSave(SIZE(dPartialExcessGibbs)), &
+            dDrivingSave(SIZE(dDrivingForceSoln)),dSumSave(SIZE(dSumMolFractionSoln)), &
+            dEffStoichSave(SIZE(dEffStoichSolnPhase,1),SIZE(dEffStoichSolnPhase,2)))
+        dElementSave = dElementPotential
+        dFractionSave = dMolFraction
+        dChemicalSave = dChemicalPotential
+        dPartialSave = dPartialExcessGibbs
+        dDrivingSave = dDrivingForceSoln
+        dSumSave = dSumMolFractionSoln
+        dEffStoichSave = dEffStoichSolnPhase
+        iInfoSave = INFOThermo
+
+        dElementPotential = dGamma
+        do iSpecies = nSpeciesPhase(nSolnPhasesSys)+1,nSpecies-nDummySpecies
+            dForce = dStdGibbsEnergy(iSpecies)
+            do iElement = 1,nElements
+                dForce = dForce-dGamma(iElement)*dStoichSpecies(iSpecies,iElement)
+            end do
+            dForce = dForce/dSpeciesTotalAtoms(iSpecies)
+            if (dForce < dPure) then
+                iPure = iSpecies
+                dPure = dForce
+            end if
+        end do
+
+        do iPhase = 1,nSolnPhasesSys
+            if (.NOT. lSolnPhases(iPhase)) call CompMolFraction(iPhase)
+        end do
+        if (nSolnPhasesSys > 0) then
+            iSolution = MINLOC(dDrivingForceSoln,DIM=1)
+            dSolution = dDrivingForceSoln(iSolution)
+            do iSpecies = nSpeciesPhase(iSolution-1)+1,nSpeciesPhase(iSolution)
+                iElement = iSpecies-nSpeciesPhase(iSolution-1)
+                if (iElement > MIN(SIZE(iSolutionSpecies),SIZE(dSolutionFraction))) exit
+                iSolutionSpecies(iElement) = iSpecies
+                dSolutionFraction(iElement) = dMolFraction(iSpecies)
+            end do
+        end if
+
+        dElementPotential = dElementSave
+        dMolFraction = dFractionSave
+        dChemicalPotential = dChemicalSave
+        dPartialExcessGibbs = dPartialSave
+        dDrivingForceSoln = dDrivingSave
+        dSumMolFractionSoln = dSumSave
+        dEffStoichSolnPhase = dEffStoichSave
+        INFOThermo = iInfoSave
+
+    end subroutine EvaluateMQMQACandidatePhaseRanking
+
+
+    !> \brief Compare two solved candidates for immediate phase-path boundary crossings.
+    !!
+    !> \details Addition metrics use the same production driving-force evaluator as `CheckPhaseAssemblage`.
+    !! Active-phase amount metrics reconstruct the undamped full-step targets used to initialize
+    !! `GEMLineSearch`.  The comparison is local to one pre-step state and is diagnostic-only.
+    subroutine EvaluateMQMQAPhasePathCandidate(BBaseSolved,BTrial,nLocalVar,lIdentityChange, &
+        lEligibilityCrossing,lOrderingReversal,lRemovalCrossing,dScaledForceShift,dAmountDisplacement)
+
+        integer, intent(in) :: nLocalVar
+        real(8), intent(in) :: BBaseSolved(:), BTrial(:)
+        logical, intent(out) :: lIdentityChange, lEligibilityCrossing, lOrderingReversal, lRemovalCrossing
+        real(8), intent(out) :: dScaledForceShift, dAmountDisplacement
+
+        integer :: iElement, iPhase, iSpecies, iSystemPhase
+        integer :: iPureBaseLocal, iPureTrialLocal, iSolutionBaseLocal, iSolutionTrialLocal
+        integer :: iSpeciesBase(nMQMQADiagnosticMaxCandidateSpecies), &
+            iSpeciesTrial(nMQMQADiagnosticMaxCandidateSpecies)
+        real(8) :: dPureBaseLocal, dPureTrialLocal, dSolutionBaseLocal, dSolutionTrialLocal
+        real(8) :: dFractionBase(nMQMQADiagnosticMaxCandidateSpecies), &
+            dFractionTrial(nMQMQADiagnosticMaxCandidateSpecies)
+        real(8) :: dBaseAmount, dTrialAmount, dIncrement, dForceScale, dMarginBase, dMarginTrial
+
+        lIdentityChange = .FALSE.
+        lEligibilityCrossing = .FALSE.
+        lOrderingReversal = .FALSE.
+        lRemovalCrossing = .FALSE.
+        dScaledForceShift = 0D0
+        dAmountDisplacement = 0D0
+
+        call EvaluateMQMQACandidatePhaseRanking(BBaseSolved(1:nElements),iPureBaseLocal,dPureBaseLocal, &
+            iSolutionBaseLocal,dSolutionBaseLocal,iSpeciesBase,dFractionBase)
+        call EvaluateMQMQACandidatePhaseRanking(BTrial(1:nElements),iPureTrialLocal,dPureTrialLocal, &
+            iSolutionTrialLocal,dSolutionTrialLocal,iSpeciesTrial,dFractionTrial)
+
+        lIdentityChange = (iPureBaseLocal /= iPureTrialLocal) .OR. &
+            (iSolutionBaseLocal /= iSolutionTrialLocal)
+        lEligibilityCrossing = ((MIN(dPureBaseLocal,dSolutionBaseLocal) < dTolerance(4)) .NEQV. &
+            (MIN(dPureTrialLocal,dSolutionTrialLocal) < dTolerance(4)))
+        dMarginBase = dPureBaseLocal-dSolutionBaseLocal
+        dMarginTrial = dPureTrialLocal-dSolutionTrialLocal
+        dForceScale = DMAX1(DABS(dPureBaseLocal),DABS(dSolutionBaseLocal),DABS(dTolerance(4)),1D-12)
+        ! Ignore an ordering sign change when either ordering margin is unresolved at floating-point scale.
+        lOrderingReversal = (dMarginBase*dMarginTrial < 0D0) .AND. &
+            (DABS(dMarginBase) > 1D-10*dForceScale) .AND. &
+            (DABS(dMarginTrial) > 1D-10*dForceScale)
+        dScaledForceShift = DMAX1(DABS(dPureTrialLocal-dPureBaseLocal), &
+            DABS(dSolutionTrialLocal-dSolutionBaseLocal))/dForceScale
+
+        do iPhase = 1,nConPhases
+            if (nElements+nSolnPhases+iPhase > nLocalVar) exit
+            dBaseAmount = BBaseSolved(nElements+nSolnPhases+iPhase)
+            dTrialAmount = BTrial(nElements+nSolnPhases+iPhase)
+            dAmountDisplacement = DMAX1(dAmountDisplacement, &
+                DABS(dTrialAmount-dBaseAmount)/DMAX1(DABS(dBaseAmount),dTolerance(7),1D-30))
+            if ((dBaseAmount >= dTolerance(7)) .AND. (dTrialAmount < dTolerance(7))) &
+                lRemovalCrossing = .TRUE.
+        end do
+
+        do iPhase = 1,nSolnPhases
+            iSystemPhase = -iAssemblage(nElements-iPhase+1)
+            dBaseAmount = 0D0
+            dTrialAmount = 0D0
+            do iSpecies = nSpeciesPhase(iSystemPhase-1)+1,nSpeciesPhase(iSystemPhase)
+                dIncrement = BBaseSolved(nElements+iPhase)-dChemicalPotential(iSpecies)
+                do iElement = 1,nElements
+                    dIncrement = dIncrement+BBaseSolved(iElement)*dStoichSpecies(iSpecies,iElement)/ &
+                        DFLOAT(iParticlesPerMole(iSpecies))
+                end do
+                dBaseAmount = dBaseAmount+dMolesSpecies(iSpecies)*(1D0+dIncrement)
+                dIncrement = BTrial(nElements+iPhase)-dChemicalPotential(iSpecies)
+                do iElement = 1,nElements
+                    dIncrement = dIncrement+BTrial(iElement)*dStoichSpecies(iSpecies,iElement)/ &
+                        DFLOAT(iParticlesPerMole(iSpecies))
+                end do
+                dTrialAmount = dTrialAmount+dMolesSpecies(iSpecies)*(1D0+dIncrement)
+            end do
+            dAmountDisplacement = DMAX1(dAmountDisplacement, &
+                DABS(dTrialAmount-dBaseAmount)/DMAX1(DABS(dBaseAmount),dTolerance(7),1D-30))
+            if ((dBaseAmount >= dTolerance(7)) .AND. (dTrialAmount < dTolerance(7))) &
+                lRemovalCrossing = .TRUE.
+        end do
+
+    end subroutine EvaluateMQMQAPhasePathCandidate
 
 
     !> \brief Convert a solved GEM vector to the three displacement groups used by MQMQA trust.

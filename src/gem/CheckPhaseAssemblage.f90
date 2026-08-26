@@ -159,17 +159,20 @@ subroutine CheckPhaseAssemblage
 
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseDecision
 
     implicit none
 
-    integer      :: nPhasesCheck, j, iMaxDrivingForce
-    real(8)      :: dMolesPhaseChange, dMaxChange, dMaxDrivingForce
+    integer      :: nPhasesCheck, j, iMaxDrivingForce, iMinSolutionDrivingForce
+    real(8)      :: dMolesPhaseChange, dMaxChange, dMaxDrivingForce, dMinSolutionDrivingForce
     logical      :: lAddPhase
 
 
     ! Initialize variables:
     nPhasesCheck      = 0
+    iMinSolutionDrivingForce = 0
     dMaxChange        = 0D0
+    dMinSolutionDrivingForce = 0D0
     dMolesPhaseChange = 0.01D0
     lAddPhase         = .FALSE.
 
@@ -278,6 +281,13 @@ subroutine CheckPhaseAssemblage
                 end do
 
                 if (lDebugMode) print *, 'solution phase driving forces:', MINLOC(dDrivingForceSoln), MINVAL(dDrivingForceSoln)
+
+                ! Preserve the exact ranking presented to the phase-addition
+                ! logic.  Capture is opt-in and otherwise returns immediately.
+                iMinSolutionDrivingForce = MINLOC(dDrivingForceSoln,DIM=1)
+                dMinSolutionDrivingForce = dDrivingForceSoln(iMinSolutionDrivingForce)
+                call CaptureMQMQAPhaseDecision(iterGlobal,iMaxDrivingForce,dMaxDrivingForce, &
+                    iMinSolutionDrivingForce,dMinSolutionDrivingForce)
 
 
                 ! Determine whether a pure condensed phase should be considered first or a solution phase.

@@ -72,11 +72,12 @@ subroutine CheckSolnPhaseRem
 
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseRemovalEvent
 
     implicit none
 
-    integer::   i, j, k, iMaxDrivingForce
-    real(8)::   dMaxDrivingForce
+    integer::   i, j, k, iMaxDrivingForce, iDiagnosticPhase
+    real(8)::   dMaxDrivingForce, dDiagnosticCurrent, dDiagnosticPrevious
     logical::   lPhasePass, lSwapLater
 
 
@@ -99,6 +100,10 @@ subroutine CheckSolnPhaseRem
             ! revert the system back to the last successful phase assemblage:
             if ((iSolnSwap == -iAssemblage(nElements - i + 1)).AND.(iterLast == iterSwap)) then
 
+                call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iAssemblage(j),1,3,2, &
+                    dMolesPhase(j),dMolesPhaseLast(j),dMolesPhase(j)-dMolesPhaseLast(j), &
+                    dTolerance(7),dTolerance(7))
+
                 ! Revert system:
                 call RevertSystem(iterSwap)
 
@@ -111,7 +116,16 @@ subroutine CheckSolnPhaseRem
             end if
 
             ! Try removing this solution phase from the system:
+            iDiagnosticPhase = iAssemblage(j)
+            dDiagnosticCurrent = dMolesPhase(j)
+            dDiagnosticPrevious = dMolesPhaseLast(j)
+            call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iDiagnosticPhase,1,1,0, &
+                dDiagnosticCurrent,dDiagnosticPrevious,dDiagnosticCurrent-dDiagnosticPrevious, &
+                dTolerance(7),dTolerance(7))
             call RemSolnPhase(i,lPhasePass)
+            call CaptureMQMQAPhaseRemovalEvent(iterGlobal,iDiagnosticPhase,1,1,MERGE(1,-1,lPhasePass), &
+                dDiagnosticCurrent,dDiagnosticPrevious,dDiagnosticCurrent-dDiagnosticPrevious, &
+                dTolerance(7),dTolerance(7))
 
             ! Exit if the phase assemblage has passed:
             if (lPhasePass) exit LOOP_SolnRem

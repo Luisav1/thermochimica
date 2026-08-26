@@ -1733,6 +1733,314 @@ establish that full alpha is selected near every solution, that adaptive mode
 is faster, or that the FeTiVO trust heuristics are optimal for plain SUBG.
 Private assessed molten-salt solver evidence remains MQ-4E-B.
 
+## MQ-4E-B: private assessed FLiBe solver gate
+
+### Purpose and private-evidence boundary
+
+MQ-4E-B reused the local MSD-TC V4.1 fluoride assessment at 1000 K, 1 atm,
+and LiF/BeF2 feed ratios 45/55, 50/50, and 55/45.  The database, optional
+driver, runner, and detailed numerical record remain ignored local assets
+because the external assessment is not distributed with Thermochimica.  The
+tracked audit records the result and claim boundary without publishing the
+database or database-dependent test source.
+
+Unlike the earlier derivative fixture, the live solver experiment did not
+blend quadruplet amounts toward an artificial interior state.  Each actual
+assessed equilibrium was run as an untouched historical reference, a second
+untouched reproducibility check, fixed `alpha=1`, and adaptive
+`alpha_max=1`.  The repeated historical calculations were bitwise identical
+in the reported Gibbs and state-array comparisons and reproduced the same
+`MSFL` assemblage and iteration count.  The reference is therefore stable.
+
+### Measured blocking result
+
+All corrected calculations returned `INFOThermo=0`, but none satisfied the
+established historical final-state gate.  The important results are:
+
+| LiF/BeF2 | Historical | Fixed `alpha=1` | Adaptive `alpha_max=1` |
+|---|---|---|---|
+| 45/55 | 1267 iterations; `MSFL` | 1117; solid + liquid; scaled `dG=5.120E-3` | 2884; `MSFL`; scaled `dG=2.271E-7`, `dx=4.339E-3`; F/R/Z=30/79/2124 |
+| 50/50 | 1586 iterations; `MSFL` | 5510; `gas_ideal`; scaled `dG=4.619E-2` | 4720; `gas_ideal`; scaled `dG=4.619E-2`; F/R/Z=37/72/1134 |
+| 55/45 | 3511 iterations; `MSFL` | 5459; solid + liquid; scaled `dG=1.174E-2` | 1002; solid + liquid; scaled `dG=4.668E-3`; F/R/Z=16/14/455 |
+
+The alternative assemblages have less negative, and therefore higher, Gibbs
+energies than the reproducible historical `MSFL` states.  These are not merely
+different representations of a near-degenerate equilibrium.  Fixed mode also
+recorded 18, 10, and 27 corrected-linear-solve fallbacks, respectively.  Those
+fallbacks were transactional, but accepted corrections earlier in the
+trajectory had already changed the subsequent phase search.
+
+Adaptive mode recorded no aggregate-construction, application,
+accepted-path linear-solve, or nonfinite fallback, and every reduced-alpha
+selection retained a rejection reason for all larger candidates.  It still
+ended with no final full-alpha window and frequent readiness cycling:
+55/54, 77/77, and 22/22 activation/reset events.  Local step acceptance and
+next-iteration progress checks therefore did not guarantee recovery of the
+historical global phase assemblage for these assessed states.
+
+The separate database-native derivative gate remains successful.  It still
+shows nonuniform-zeta `G`-family scalar, gradient, Hessian, and production-mu
+`H*v` consistency for all three compositions.  MQ-4E-B therefore distinguishes
+a global phase-path/globalization defect from a failure of the local analytic
+derivatives or mapper algebra.
+
+The hardening investigation added two further localization checks.  First, the
+actual converged `MSFL` tangent Hessians were positive definite at all three
+states.  Their minimum/maximum tangent eigenvalues were
+`1.608/1.164E5`, `2.428/5.883E4`, and `2.194/2.658E4`, respectively.
+Second, the independent MQ-4A reduced-mapping finite-difference experiment was
+repeated without the earlier 20 percent interior blend.  All three unmodified
+assessed states passed live baseline capture, builder-versus-independent
+`deltaA/deltaB` comparison, and second-order finite-difference checks of
+`deltaA`, `deltaB`, and their combined affine action.  The worst reported
+scaled mapping error remained below `2E-9`.  Thus the evidence now localizes
+the unresolved behavior beyond the local Hessian, constrained response, and
+reduced GEM mapping layers.
+
+Two bounded globalization experiments were also rejected rather than retained
+in production.  Comparing the corrected and historical line-search outcomes
+from the same pre-step state did not preserve the eventual historical phase
+path: a locally preferable step can still enter a worse basin several phase
+search decisions later.  Delaying curvature until Thermochimica's established
+post-1000-iteration convergence-eligibility regime likewise failed at 55/45
+and left small but gate-breaking state differences at 45/55 and 50/50.  These
+experiments show that neither a one-step merit comparison nor a fixed global
+iteration delay is an adequate phase-path safeguard.  Both experimental code
+changes were removed.
+
+The three established RKMP phase-path safeguards were then ported directly to
+MQMQA as one further bounded experiment: live SUBG/SUBQ activity tracking,
+suppression of the residual-only convergence shortcuts while MQMQA curvature
+was active, and the larger mixed solution/pure-phase Wolfe-search budget.  The
+same three unchanged FLiBe states still failed the historical-state exit gate.
+At 45/55 and 50/50, fixed `alpha=1` reached the reported 6001-iteration limit;
+at 55/45 it converged to `gas_ideal` rather than the historical `MSFL` state.
+Adaptive mode ended in alternative solid/liquid or liquid/gas assemblages at
+all three compositions.  Its readiness rejection counts remained substantial,
+and no run recovered the historical final state.  The stricter convergence
+path usefully exposed that some earlier alternative states were not globally
+settled, but it did not restore the correct phase path.  Therefore, the missing
+RKMP safeguards were relevant omissions but were not the complete MQMQA
+solution.  The experimental production changes were removed after this gate.
+
+The remaining failure was then localized with attempt-aware trajectory and
+ablation diagnostics.  This distinction matters because Thermochimica can
+restart the GEM solve after the nominal 3000-iteration limit; comparing only
+the final attempt can otherwise assign a phase-path change to the wrong
+iteration.  Four controls all reproduced the historical result exactly:
+
+- a second unmodified historical solve;
+- adaptive mode with `alpha_max=0`;
+- entry into the complete adaptive correction-building and baseline-solve path
+  while positive candidates were never tested; and
+- normal candidate evaluation followed by diagnostic rejection of every
+  otherwise accepted positive candidate.
+
+Consequently, the divergence is not random solver variability, corruption from
+constructing the correction, or a side effect of the adaptive bookkeeping.  It
+requires an accepted positive curvature correction.
+
+Aligned historical/corrected traces placed the first phase-assemblage
+divergence at, or after, an accepted correction in every composition.  Skipping
+only that first accepted event delayed some divergences but did not restore the
+historical result: a later accepted correction produced the same qualitative
+redirection.  This rules out a single anomalous Newton iteration and instead
+shows a repeatable sensitivity of the discrete phase search to the corrected
+continuous update.
+
+One final causal probe separated ordinary GEMNewton calls from the speculative
+assemblage solves issued by `CheckPhaseChange`.  The normal adaptive runs made
+1179, 919, and 380 such probe calls at 45/55, 50/50, and 55/45, but only 5, 5,
+and 2 of those calls accepted positive curvature.  Suppressing MQMQA curvature
+in every speculative probe reduced those accepted-probe counts to zero without
+changing the final failure classification.  The first accepted main-solve
+corrections under that suppression were only `0.01`, `0.01`, and `0.001`, yet
+the three calculations still left the historical path.  Curvature inside the
+speculative probes is therefore not the primary cause, and the behavior is not
+an `alpha=1` blow-up.
+
+The assessed FLiBe states also contain no active `R`, `Q`, or `B` terms: their
+active excess contribution is the verified nonuniform-zeta `G` family.  The
+absence of an `R` branch therefore cannot make the target historical solution
+unrepresentable.  Together with the positive-definite tangent Hessians and the
+successful unmodified-state mapping finite differences, the evidence supports
+the following narrower diagnosis: a locally admissible and algebraically
+correct continuous Newton correction can be large enough in phase-selection
+coordinates to change a later discrete assemblage decision in this difficult,
+multi-basin FLiBe solve.  The present local trust gates do not measure that
+longer-horizon phase-path consequence.
+
+That diagnosis was then tested against the independently supplied legacy
+MSTDB-TC V3.1 fluoride assessment.  The same three 1000 K LiF/BeF2 inputs used
+one complete database version per fresh process.  V3.1 changed the wider
+database topology relative to V4.1, but the active binary `MSFL` state still
+decoded as a six-quadruplet SUBQ phase with five `G` terms, no active `R`, `Q`,
+or `B` terms, and zeta values spanning 2.4 to 6.0.  Historical and repeated
+historical V3.1 solves agreed exactly at all three compositions, with final
+`MSFL` assemblages after 1526, 902, and 2700 iterations.  Force-zero and
+evaluate-then-reject controls also reproduced those references exactly.
+
+Retained positive curvature nevertheless failed the same reference-state gate
+in V3.1.  Adaptive runs required 2657, 1637, and 1259 iterations and departed
+from the historical phase path or final state.  At 45/55, the first retained
+positive correction was followed immediately by the first recorded divergence:
+the corrected path added `Be_S1(s)` while the historical path retained only
+`MSFL`.  The V3.1 production-linked nonuniform-zeta derivative evidence still
+passed, with a worst best `H*v` error of `4.87E-10` and the expected
+second-order region.  Thus the V4.1 reassessment is not the sole cause, and the
+common failure is not explained by missing `R`, `Q`, or `B` families or by an
+incorrect local Hessian.
+
+The next diagnostic captured the exact normalized pure- and solution-phase
+driving forces compared by `CheckPhaseAssemblage`, together with the phase-set
+difference at the first historical/corrected divergence.  A negative force is
+eligible to enter the assemblage; the more negative pure/solution value is
+considered first.  The measured adaptive results were:
+
+| Database and LiF/BeF2 | First phase-set difference | Historical leading pure / solution | Corrected leading pure / solution | Corrected pure-minus-solution |
+|---|---|---:|---:|---:|
+| V4.1 45/55 | add `Be_S1(s)` | `0 / 0` | `-45.613 / -16.572` | `-29.041` |
+| V4.1 50/50 | remove `gas_ideal` | `0 / 0` | `0 / 0` at the nearest add check | `0` |
+| V4.1 55/45 | add `Be_S1(s)` | `0 / 0` | `-13.019 / 0` | `-13.019` |
+| V3.1 45/55 | add `Be_S1(s)` | `0 / -30.643` | `-18.480 / 0` | `-18.480` |
+| V3.1 50/50 | add `Be_S1(s)` | `0 / -127.197` | `-20.602 / 0` | `-20.602` |
+| V3.1 55/45 | remove `Be_S1(s)` | `-10.966 / 0` | `0 / -6.963` | `+6.963` |
+
+The V4.1 45/55 and 55/45 additions occur at the same iteration as a retained
+full-alpha correction.  V3.1 45/55 diverges on a retained reduced correction
+(`alpha=0.001` at the recorded decision), demonstrating that this is not only
+an `alpha=1` instability.  V3.1 50/50 already differs during an outer
+zero-alpha iteration because earlier internal accepted curvature activity has
+changed the state delivered to that iteration.  The V4.1 50/50 event is a
+solution-phase removal, whose amount-based removal criterion is not represented
+by the phase-addition driving-force capture; its nearest add check is therefore
+reported as inconclusive rather than interpreted as a tie.
+
+Those aligned-trajectory values identify what the two already-separated paths
+eventually presented to `CheckPhaseAssemblage`; they do **not** by themselves
+measure the immediate effect of one corrected Newton candidate.  A subsequent
+same-pre-step replay therefore solved the untouched `alpha=0` and selected
+positive-alpha systems from one identical Thermochimica state, without
+committing either result.  It recorded the element-potential targets, rebuilt
+the pure-phase force component by component, and reran the production
+inactive-solution ranking.  The componentwise pure-force reconstruction agreed
+with the direct production formula to roundoff.
+
+This causal replay separates three behaviors that the earlier trajectory-only
+table combined:
+
+- In V4.1 45/55, the candidate at the later `Be_S1(s)` addition changed the
+  element potentials by at most `1.61E-3`, while the immediate pure and
+  solution rankings remained at roundoff.  The order-10 phase forces seen six
+  iterations later were therefore accumulated nonlinear/phase-search effects,
+  not the instantaneous response of the same candidate.
+- In V4.1 50/50, the selected `alpha=0.01` candidate changed the Be/Li element
+  potentials by only about `2.66E-6`.  The corrected trajectory nevertheless
+  reached the exact solution-removal test with `gas_ideal=5.121E-12`, below the
+  `1E-11` threshold, while the historical trajectory still contained
+  `gas_ideal=2.232E-1` at the same global iteration.  The removal routine thus
+  behaved as coded; the continuous trajectories had separated before the
+  phase-set change.
+- Other nearby recorded gas removals also occurred on the historical path and
+  are explicitly labelled non-causal by the diagnostic.  A removal event is
+  treated as explanatory only when the matched historical trace still retains
+  that same phase at the same global iteration.
+- In V4.1 55/45, the first retained full-alpha candidate coincided with the
+  `Be_S1(s)` addition, but both replayed pure-phase forces were negative only
+  at roundoff (`-4.44E-16` and `-8.88E-16`).  This is a discrete boundary tie,
+  not an order-10 immediate force displacement.
+- V3.1 contains both regimes.  Its 45/55 same-state pure-force change was only
+  `4.00E-15`; at 50/50 the full-alpha candidate changed the element-potential
+  targets by as much as `35.51` and the inactive-solution force from `-76.56`
+  to `-49.92`; at 55/45 the `alpha=0.1` candidate changed the `Be_S1(s)` force
+  from `-8.30` to `-15.16` and the leading inactive-solution composition by at
+  most `5.18E-5`.
+
+Post-assemblage phase-amount and element-potential traces place the first
+resolved continuous-state separation before, or at, the first discrete phase
+split.  This evidence rules out a single universal explanation such as an
+incorrect V4.1 assessment, a missing parameter family, or a defective removal
+condition.  Depending on the state, a locally accepted correction can either
+move the phase-selection coordinates directly or introduce a small continuous
+change that is amplified by subsequent nonlinear iterations and a nearly
+degenerate add/remove boundary.
+
+### Bounded same-state phase-path gate experiment
+
+A bounded experiment next evaluated every candidate that had already passed
+the existing correction-ratio, linear-solve, finiteness, and grouped-update
+trust checks.  From the same pre-step state it measured:
+
+- changes in the leading inactive pure or solution phase;
+- crossings of the production phase-addition eligibility threshold;
+- resolved reversals of the pure-versus-solution ordering;
+- crossings of the production active-phase removal amount threshold; and
+- the largest scaled force and active-phase target-amount displacement.
+
+These are local candidate diagnostics only.  They do not consult a known final
+assemblage, a historical equilibrium result, a database name, or a prescribed
+phase identity.  Candidate evaluation snapshots and restores all production
+arrays and therefore does not seed the live calculation.
+
+The portable successful set consisted of one public SUBG state and twelve
+public SUBQ FeTiVO states.  Across all twelve FeTiVO adaptive runs, the
+diagnostic observed **zero** leading-identity, eligibility, ordering, and
+removal crossings.  Cu-Fe-C had 130 leading-identity changes in 284 measured
+candidates, but zero eligibility, ordering, or removal crossings.  This shows
+why leading identity by itself is not an acceptable gate: a numerically leading
+inactive phase can change without changing any production decision boundary.
+
+The six diverting FLiBe runs produced the following ungated measurements:
+
+| Database | LiF/BeF2 | Candidates | Identity | Eligibility | Ordering | Removal |
+|---|---:|---:|---:|---:|---:|---:|
+| V4.1 | 45/55 | 109 | 8 | 6 | 4 | 0 |
+| V4.1 | 50/50 | 294 | 50 | 34 | 5 | 0 |
+| V4.1 | 55/45 | 30 | 8 | 6 | 3 | 0 |
+| V3.1 | 45/55 | 87 | 6 | 5 | 0 | 0 |
+| V3.1 | 50/50 | 85 | 8 | 3 | 1 | 0 |
+| V3.1 | 55/45 | 88 | 16 | 9 | 4 | 0 |
+
+The separation is real but not sufficient for a local acceptance rule.  Three
+test-only policies were evaluated and then removed:
+
+1. an amount-crossing gate rejected no candidate and reproduced the ungated
+   reference-state differences;
+2. an eligibility/ordering gate rejected between 9 and 45 candidates per run,
+   but all six calculations still ended outside the established reference-state
+   tolerances; and
+3. the combined gate was equivalent to the ranking gate because no immediate
+   removal crossing occurred.
+
+The negative result is important.  The V4.1 50/50 gas removal is preceded by a
+continuous multi-iteration separation, so the phase amount is still locally
+safe at the earlier accepted candidates.  Rejecting only the later local
+ranking crossings also changes the path without proving that the replacement
+path reaches the desired minimum.  Accordingly, no phase-path acceptance gate
+is retained in the solver.  Only the opt-in read-only diagnostic remains.
+
+The next remedy must therefore remain model-independent and must not hard-code
+the historical phase identity, database, composition, or iteration.  Before a
+multi-iteration rollback is selected, the next bounded experiment should test
+whether candidate acceptance can monitor the immediate phase-driving-force and
+active-phase amount consequences without rejecting benign near-degenerate
+steps.  If no local phase-aware criterion can distinguish the successful and
+diverting candidates, checkpoint recovery becomes justified as a genuinely
+longer-horizon globalization mechanism rather than a substitute for diagnosis.
+Neither outcome implies that the local Hessian or reduced mapper should be
+altered.  MQ-4E-B remains blocked until the assessed live-solver gate passes.
+
+The MQ-4E-B **assessment and localization work is complete, but its live-solver
+exit gate is blocked**.  Before MQ-4E-B can pass, the point at which accepted
+curvature diverts the assemblage search must be addressed.  A phase-identity/
+Gibbs-aware multi-iteration recovery mechanism is one candidate, but it is not
+yet selected; other phase-path safeguards may be evaluated first.  The three
+assessed states must then be rerun against the unchanged historical tolerances.
+Do not widen the tolerances, weaken trust thresholds, or count an alternative
+converged assemblage as a pass.  MQ-4E-C remains evidence synthesis after this
+solver gate is resolved.  `B` remains controlled standalone coverage, and
+constrained-KKT execution remains outside this unconstrained assessed gate.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than

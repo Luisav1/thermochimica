@@ -87,6 +87,8 @@ subroutine GEMSolver
     USE ModuleThermoIO
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: BeginMQMQATrajectoryAttempt, &
+        CaptureMQMQATrajectoryPoint
 
     implicit none
 
@@ -95,6 +97,7 @@ subroutine GEMSolver
 
     ! Initialize the GEM solver:
     call InitGEMSolver
+    call BeginMQMQATrajectoryAttempt(nElements,iterGlobalMax)
 
     !!!
     !!! CONSIDER MOVING THIS INTO THE InitGEMSolver SUBROUTINE:
@@ -130,6 +133,12 @@ subroutine GEMSolver
 
         ! Check if the estimated phase assemblage needs to be adjusted:
         call CheckPhaseAssemblage
+
+        call CaptureMQMQATrajectoryPoint(iterGlobal,iterLast,iAssemblage(1:nElements), &
+            dMolesPhase(1:nElements),dElementPotential(1:nElements), &
+            nMQMQAHessianAcceptedSolveCount,nMQMQAHessianEligibleSolveCount, &
+            nMQMQAHessianInteriorFallbackCount,dMQMQAHessianSelectedAlpha,dGEMFunctionNorm, &
+            dMinGibbs,dMQMQAHessianMinimumRejectedFraction)
 
         ! Phase assemblage may have changed, so it needs to be refreshed before CheckConvergence and end-of-solve reporting.
         call UpdateRKMPHessianActivity

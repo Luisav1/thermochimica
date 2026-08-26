@@ -15,6 +15,12 @@ program TestMQMQASolverCoverage
     USE ModuleThermoIO
     USE ModuleParseCS
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: ResetGEMNewtonDiagnosticCapture, &
+        lMQMQADiagnosticPhasePathStudy, &
+        nMQMQADiagnosticPhasePathCandidates, nMQMQADiagnosticLeadingIdentityChanges, &
+        nMQMQADiagnosticEligibilityCrossings, nMQMQADiagnosticOrderingReversals, &
+        nMQMQADiagnosticRemovalCrossings, &
+        dMQMQADiagnosticMaxScaledForceShift, dMQMQADiagnosticMaxActiveAmountDisplacement
 
     implicit none
 
@@ -78,12 +84,14 @@ program TestMQMQASolverCoverage
         integer :: nReadinessActivations = 0
         integer :: nReadinessResets = 0
         integer :: nReject(7) = 0
+        integer :: nPath(5) = 0
         real(8) :: dMinimumBoundaryFraction = 1D0
         real(8) :: dIterationRatio = HUGE(1D0)
         real(8) :: dMaximumAlpha = 0D0
         real(8) :: dMaximumRatioA = 0D0
         real(8) :: dMaximumRatioB = 0D0
         real(8) :: dDifference(4) = HUGE(1D0)
+        real(8) :: dPathMaximum(2) = 0D0
         logical :: lConverged = .FALSE.
         logical :: lFinite = .FALSE.
         logical :: lHistoricalAgreement = .FALSE.
@@ -171,6 +179,7 @@ contains
         logical :: lDimensionsMatch
 
         tCoverage = CoverageResult()
+        call ResetGEMNewtonDiagnosticCapture
         call DescribeCase(iCase,tCoverage%cCase,tCoverage%cModel)
         if (iMode == MODE_FIXED) then
             tCoverage%cMode = 'fixed-one'
@@ -180,6 +189,7 @@ contains
             tCoverage%cMode = 'adaptive'
             call ResetMQMQAHessianControls
             call SetMQMQAHessianAdaptiveControls(.TRUE.,1D0,iInfo)
+            lMQMQADiagnosticPhasePathStudy = .TRUE.
         end if
 
         if (iInfo == 0) then
@@ -212,6 +222,11 @@ contains
         tCoverage%nReject = [nMQMQAHessianRejectNonlinear,nMQMQAHessianRejectCorrection, &
             nMQMQAHessianRejectRatio,nMQMQAHessianRejectDGESV,nMQMQAHessianRejectNonfinite, &
             nMQMQAHessianRejectUpdate,nMQMQAHessianRejectDirection]
+        tCoverage%nPath = [nMQMQADiagnosticPhasePathCandidates,nMQMQADiagnosticLeadingIdentityChanges, &
+            nMQMQADiagnosticEligibilityCrossings,nMQMQADiagnosticOrderingReversals, &
+            nMQMQADiagnosticRemovalCrossings]
+        tCoverage%dPathMaximum = [dMQMQADiagnosticMaxScaledForceShift, &
+            dMQMQADiagnosticMaxActiveAmountDisplacement]
         tCoverage%dMinimumBoundaryFraction = dMQMQAHessianMinimumRejectedFraction
         tCoverage%dMaximumAlpha = dMQMQAHessianMaxSelectedAlpha
         tCoverage%dMaximumRatioA = dMQMQAHessianMaxRatioA
@@ -412,6 +427,13 @@ contains
                 tCoverage(i,j)%nReadinessActivations,'/',tCoverage(i,j)%nReadinessResets, &
                 tCoverage(i,j)%dMaximumAlpha,tCoverage(i,j)%dMaximumRatioA,tCoverage(i,j)%dMaximumRatioB, &
                 tCoverage(i,j)%lReducedDocumented,tCoverage(i,j)%nReject
+        end do
+        write(*,'(/,A)') 'diagnostic same-state phase-path metrics (adaptive candidates only)'
+        write(*,'(A)') 'case                 candidates identity eligibility ordering removal  max-force-shift max-amount-shift'
+        do i = 1,SIZE(tCoverage,1)
+            j = MODE_ADAPTIVE
+            write(*,'(A20,1X,5I9,2ES17.5)') TRIM(tCoverage(i,j)%cCase), &
+                tCoverage(i,j)%nPath,tCoverage(i,j)%dPathMaximum
         end do
         write(*,'(/,A)') 'Classification boundary: FULL_CURVATURE_EVIDENCE requires at least one full-alpha solve.'
         write(*,'(A)') 'REDUCED_CURVATURE_EVIDENCE means only damped positive corrections were used.'
