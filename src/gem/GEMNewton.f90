@@ -91,7 +91,8 @@
 
 subroutine GEMNewton(INFO)
 
-    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
+    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_DIVIDE_BY_ZERO, IEEE_GET_HALTING_MODE, &
+        IEEE_INVALID, IEEE_IS_FINITE, IEEE_OVERFLOW, IEEE_SET_HALTING_MODE
     USE ModuleThermo
     USE ModuleThermoIO, ONLY: INFOThermo, dTemperature
     USE ModuleGEMSolver
@@ -102,11 +103,34 @@ subroutine GEMNewton(INFO)
         nMQMQADiagnosticMaxCandidateSpecies, &
         lMQMQADiagnosticForceZeroAlpha, lMQMQADiagnosticRejectAcceptedCandidate, &
         lMQMQADiagnosticPhasePathStudy, &
+        lMQMQADiagnosticMinimumNormStudy, lMQMQADiagnosticMinimumNormCaptured, &
+        iMQMQADiagnosticMinimumNormRank, iMQMQADiagnosticMinimumNormInfo, &
+        iMQMQADiagnosticMinimumNormDecision, dMQMQADiagnosticMinimumNormResidual, &
+        dMQMQADiagnosticMinimumNormRHSResidual, &
+        dMQMQADiagnosticMinimumNormSolutionNorm, dMQMQADiagnosticMinimumNormRelativeDifference, &
+        dMQMQADiagnosticMinimumNormNullResidual, dMQMQADiagnosticMinimumNormGammaDifference, &
+        dMQMQADiagnosticMinimumNormDecisionForce, dMQMQADiagnosticMinimumNormSingularSummary, &
+        dMQMQADiagnosticMinimumNormCrossSystemDifference, &
+        dMQMQADiagnosticMinimumNormCrossGammaDifference, &
+        dMQMQADiagnosticNullModeSummary, iMQMQADiagnosticNullModeDecisionChanges, &
+        dMQMQADiagnosticLeftNullSummary, dMQMQADiagnosticLeftNullVector, &
+        dMQMQADiagnosticRightNullVector, iMQMQADiagnosticEquationIdentity, &
+        dMQMQADiagnosticNullSpaceComparison, &
+        iMQMQADiagnosticPhaseStructureRank, dMQMQADiagnosticPhaseStructureSummary, &
+        iMQMQADiagnosticPhaseRuleSummary, &
+        dMQMQADiagnosticPhaseDependencyVector, dMQMQADiagnosticPhaseDependencyProjection, &
+        dMQMQADiagnosticPhaseEquationData, &
+        iMQMQADiagnosticConstrainedInfo, iMQMQADiagnosticConstrainedDecision, &
+        dMQMQADiagnosticConstrainedRHSResidual, dMQMQADiagnosticConstrainedResidual, &
+        dMQMQADiagnosticConstrainedSolutionNorm, dMQMQADiagnosticConstrainedGroupNorm, &
+        dMQMQADiagnosticConstrainedDecisionForce, &
+        nCapturedGEMNewtonVariables, &
         iMQMQADiagnosticCurrentAttempt, iMQMQADiagnosticSkipAttempt, &
         iMQMQADiagnosticSkipIteration
-    USE ModuleMQMQAResponseMapping, ONLY: BuildActiveMQMQAGEMCorrection, SolveMQMQACorrectionTrial, &
+    USE ModuleMQMQAResponseMapping, ONLY: ApplyMQMQAGEMCorrection, BuildActiveMQMQAGEMCorrection, &
+        SolveMQMQACorrectionTrial, &
         MQMQA_AGGREGATE_SUCCESS, MQMQA_AGGREGATE_NO_APPLICABLE_PHASE, MQMQA_AGGREGATE_PHASE_FAILURE, &
-        MQMQA_MAP_OUTSIDE_INTERIOR, &
+        MQMQA_MAP_OUTSIDE_INTERIOR, MQMQA_MAP_SUCCESS, &
         MQMQA_TRIAL_ACCEPTED, MQMQA_TRIAL_APPLICATION_FALLBACK, MQMQA_TRIAL_DGESV_FALLBACK, &
         MQMQA_TRIAL_NONFINITE_FALLBACK, MQMQA_TRIAL_BASELINE_FAILURE
     USE ModuleMQMQATrust, ONLY: BuildMQMQAAlphaCandidateList, EvaluateMQMQACorrectionRatio, &
@@ -555,6 +579,8 @@ contains
 
                 call SolveMQMQACorrectionTrial(ABase,BBase,nElements,dDeltaA,dDeltaB,dAlphaCandidate, &
                     ATrial,BTrial,IPIVTrial,INFOOut,lApplied,lTrustAccepted,iTrialStatus)
+                if (lApplied) call RunMQMQAMinimumNormDiagnostic(ABase,BBase,dDeltaA,dDeltaB, &
+                    dAlphaCandidate,nLocalVar)
                 if (iTrialStatus == MQMQA_TRIAL_APPLICATION_FALLBACK) then
                     nMQMQAHessianRejectCorrection = nMQMQAHessianRejectCorrection+1
                     iMQMQAHessianLastRejectionMask = IOR(iMQMQAHessianLastRejectionMask,MQMQA_REJECT_CORRECTION)
@@ -871,6 +897,595 @@ contains
     end subroutine EvaluateMQMQAPhasePathCandidate
 
 
+    !> \brief Compare production LU and SVD minimum-norm solutions on identical MQMQA GEM systems.
+    !!
+    !> \details This routine is reached only through an opt-in diagnostic flag. It reconstructs the complete
+    !! baseline and corrected systems at one identical pre-step state, solves each with both the production LU
+    !! path and an SVD pseudoinverse, and records residuals, null-space differences, element-potential changes,
+    !! and inactive-phase rankings. The production LU result returned by GEMNewton is never replaced.
+    subroutine RunMQMQAMinimumNormDiagnostic(ABase,BBase,dDeltaA,dDeltaB,dAlpha,nLocalVar)
+
+        integer, intent(in) :: nLocalVar
+        real(8), intent(in) :: ABase(:,:), BBase(:), dDeltaA(:,:), dDeltaB(:), dAlpha
+
+        integer :: iApplyStatus, iInfoLU, iInfoSVD, iPure, iSolution, iSolver, iSystem, nRank
+        integer, allocatable :: iPiv(:), iSolutionSpecies(:)
+        real(8) :: dANorm, dBScale, dDifferenceNorm, dPure, dSolution
+        real(8), allocatable :: AOriginal(:,:), ALU(:,:), BOriginal(:), BLU(:), BMinimum(:), &
+            dCapturedRHS(:,:), &
+            dDifference(:), dSolutionFraction(:), dSolutions(:,:,:)
+
+        if ((.NOT. lMQMQADiagnosticMinimumNormStudy) .OR. &
+            lMQMQADiagnosticMinimumNormCaptured) return
+        if ((nLocalVar <= 0) .OR. (SIZE(ABase,1) < nLocalVar) .OR. &
+            (SIZE(ABase,2) < nLocalVar) .OR. (SIZE(BBase) < nLocalVar)) return
+
+        allocate(AOriginal(nLocalVar,nLocalVar),ALU(nLocalVar,nLocalVar), &
+            BOriginal(nLocalVar),BLU(nLocalVar),BMinimum(nLocalVar), &
+            dDifference(nLocalVar),iPiv(nLocalVar), &
+            iSolutionSpecies(nMQMQADiagnosticMaxCandidateSpecies), &
+            dSolutionFraction(nMQMQADiagnosticMaxCandidateSpecies),dSolutions(nLocalVar,2,2), &
+            dCapturedRHS(nLocalVar,2))
+        dSolutions = 0D0
+        dCapturedRHS = 0D0
+
+        do iSystem = 1,2
+            AOriginal = ABase(1:nLocalVar,1:nLocalVar)
+            BOriginal = BBase(1:nLocalVar)
+            if (iSystem == 2) then
+                call ApplyMQMQAGEMCorrection(AOriginal,BOriginal,nElements,dDeltaA,dDeltaB, &
+                    dAlpha,iApplyStatus)
+                if (iApplyStatus /= MQMQA_MAP_SUCCESS) then
+                    iMQMQADiagnosticMinimumNormInfo(:,iSystem) = iApplyStatus
+                    cycle
+                end if
+            end if
+            dCapturedRHS(:,iSystem) = BOriginal
+
+            ALU = AOriginal
+            BLU = BOriginal
+            iPiv = 0
+            call DGESV(nLocalVar,1,ALU,nLocalVar,iPiv,BLU,nLocalVar,iInfoLU)
+            call SolveMinimumNormSVD(AOriginal,BOriginal,BMinimum,nRank,iInfoSVD, &
+                dMQMQADiagnosticMinimumNormSingularSummary(:,iSystem))
+            call AnalyzeMQMQAPhaseStructure(AOriginal,BOriginal,iSystem)
+            iMQMQADiagnosticMinimumNormRank(iSystem) = nRank
+            iMQMQADiagnosticMinimumNormInfo(1,iSystem) = iInfoLU
+            iMQMQADiagnosticMinimumNormInfo(2,iSystem) = iInfoSVD
+
+            dANorm = DSQRT(SUM(AOriginal*AOriginal))
+            dBScale = DMAX1(DSQRT(SUM(BOriginal*BOriginal)),1D-30)
+            if (iInfoLU == 0) then
+                dSolutions(:,1,iSystem) = BLU
+                dMQMQADiagnosticMinimumNormRHSResidual(1,iSystem) = &
+                    DSQRT(SUM((MATMUL(AOriginal,BLU)-BOriginal)**2))/dBScale
+                dMQMQADiagnosticMinimumNormResidual(1,iSystem) = &
+                    DSQRT(SUM((MATMUL(AOriginal,BLU)-BOriginal)**2))/ &
+                    DMAX1(dBScale,dANorm*DSQRT(SUM(BLU*BLU)),1D-30)
+                dMQMQADiagnosticMinimumNormSolutionNorm(1,iSystem) = DSQRT(SUM(BLU*BLU))
+                call EvaluateMQMQACandidatePhaseRanking(BLU(1:nElements),iPure,dPure, &
+                    iSolution,dSolution,iSolutionSpecies,dSolutionFraction)
+                iMQMQADiagnosticMinimumNormDecision(:,1,iSystem) = [iPure,iSolution]
+                dMQMQADiagnosticMinimumNormDecisionForce(:,1,iSystem) = &
+                    [dPure,dSolution,dPure-dSolution]
+            end if
+            if (iInfoSVD == 0) then
+                dSolutions(:,2,iSystem) = BMinimum
+                dMQMQADiagnosticMinimumNormRHSResidual(2,iSystem) = &
+                    DSQRT(SUM((MATMUL(AOriginal,BMinimum)-BOriginal)**2))/dBScale
+                dMQMQADiagnosticMinimumNormResidual(2,iSystem) = &
+                    DSQRT(SUM((MATMUL(AOriginal,BMinimum)-BOriginal)**2))/ &
+                    DMAX1(dBScale,dANorm*DSQRT(SUM(BMinimum*BMinimum)),1D-30)
+                dMQMQADiagnosticMinimumNormSolutionNorm(2,iSystem) = DSQRT(SUM(BMinimum*BMinimum))
+                call EvaluateMQMQACandidatePhaseRanking(BMinimum(1:nElements),iPure,dPure, &
+                    iSolution,dSolution,iSolutionSpecies,dSolutionFraction)
+                iMQMQADiagnosticMinimumNormDecision(:,2,iSystem) = [iPure,iSolution]
+                dMQMQADiagnosticMinimumNormDecisionForce(:,2,iSystem) = &
+                    [dPure,dSolution,dPure-dSolution]
+            end if
+
+            if ((iInfoLU == 0) .AND. (iInfoSVD == 0)) then
+                dDifference = BLU-BMinimum
+                dDifferenceNorm = DSQRT(SUM(dDifference*dDifference))
+                dMQMQADiagnosticMinimumNormRelativeDifference(iSystem) = dDifferenceNorm/ &
+                    DMAX1(1D0,DSQRT(SUM(BLU*BLU)),DSQRT(SUM(BMinimum*BMinimum)))
+                dMQMQADiagnosticMinimumNormNullResidual(iSystem) = &
+                    DSQRT(SUM(MATMUL(AOriginal,dDifference)**2))/ &
+                    DMAX1(dANorm*dDifferenceNorm,1D-30)
+                dMQMQADiagnosticMinimumNormGammaDifference(iSystem) = &
+                    MAXVAL(DABS(dDifference(1:nElements)))/ &
+                    DMAX1(1D0,MAXVAL(DABS(BLU(1:nElements))), &
+                    MAXVAL(DABS(BMinimum(1:nElements))))
+                call RunMQMQAConstrainedLinearDiagnostics(AOriginal,BOriginal,BMinimum, &
+                    nRank,iSystem)
+            end if
+        end do
+        if (ALL(iMQMQADiagnosticMinimumNormInfo(2,:) == 0)) then
+            call CompareMQMQANullSpaces(dCapturedRHS(:,1),dCapturedRHS(:,2), &
+                iMQMQADiagnosticMinimumNormRank(1),iMQMQADiagnosticMinimumNormRank(2))
+        end if
+        do iSolver = 1,2
+            if (ALL(iMQMQADiagnosticMinimumNormInfo(iSolver,:) == 0)) then
+                dMQMQADiagnosticMinimumNormCrossSystemDifference(iSolver) = &
+                    DSQRT(SUM((dSolutions(:,iSolver,2)-dSolutions(:,iSolver,1))**2))/ &
+                    DMAX1(1D0,DSQRT(SUM(dSolutions(:,iSolver,1)**2)), &
+                    DSQRT(SUM(dSolutions(:,iSolver,2)**2)))
+                dMQMQADiagnosticMinimumNormCrossGammaDifference(iSolver) = &
+                    MAXVAL(DABS(dSolutions(1:nElements,iSolver,2)- &
+                    dSolutions(1:nElements,iSolver,1)))/ &
+                    DMAX1(1D0,MAXVAL(DABS(dSolutions(1:nElements,iSolver,1))), &
+                    MAXVAL(DABS(dSolutions(1:nElements,iSolver,2))))
+            end if
+        end do
+        nCapturedGEMNewtonVariables = nLocalVar
+        lMQMQADiagnosticMinimumNormCaptured = .TRUE.
+
+    end subroutine RunMQMQAMinimumNormDiagnostic
+
+
+    !> \brief Solve one square linear system with an SVD rank-revealing pseudoinverse.
+    subroutine SolveMinimumNormSVD(AIn,BIn,XOut,nRank,iInfo,dSingularSummary)
+
+        real(8), intent(in) :: AIn(:,:), BIn(:)
+        real(8), intent(out) :: XOut(:)
+        integer, intent(out) :: nRank, iInfo
+        real(8), intent(out) :: dSingularSummary(4)
+
+        integer :: i, lWork, n
+        logical :: lHaltDivide, lHaltInvalid, lHaltOverflow
+        real(8) :: dScale, dTolerance
+        real(8), allocatable :: AScaled(:,:), BScaled(:), dSingular(:), dU(:,:), dVT(:,:), &
+            dWork(:), dProjection(:)
+
+        XOut = 0D0
+        dSingularSummary = 0D0
+        nRank = 0
+        iInfo = -1
+        n = SIZE(BIn)
+        if ((n <= 0) .OR. (SIZE(AIn,1) /= n) .OR. (SIZE(AIn,2) /= n) .OR. &
+            (SIZE(XOut) /= n) .OR. (.NOT. ALL(IEEE_IS_FINITE(AIn))) .OR. &
+            (.NOT. ALL(IEEE_IS_FINITE(BIn)))) return
+        dScale = MAXVAL(DABS(AIn))
+        if (dScale <= 0D0) return
+
+        allocate(AScaled(n,n),BScaled(n),dSingular(n),dU(n,n),dVT(n,n),dProjection(n))
+        lWork = MAX(1,5*n)
+        allocate(dWork(lWork))
+        AScaled = AIn/dScale
+        BScaled = BIn/dScale
+
+        call IEEE_GET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_GET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_GET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,.FALSE.)
+        call DGESVD('A','A',n,n,AScaled,n,dSingular,dU,n,dVT,n,dWork,lWork,iInfo)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        if (iInfo /= 0) return
+
+        dTolerance = DBLE(n)*EPSILON(1D0)*dSingular(1)
+        nRank = COUNT(dSingular > dTolerance)
+        dSingularSummary(1) = dSingular(1)
+        dSingularSummary(4) = dTolerance
+        if (nRank > 0) dSingularSummary(2) = dSingular(nRank)
+        if (nRank < n) dSingularSummary(3) = dSingular(nRank+1)
+        dProjection = MATMUL(TRANSPOSE(dU),BScaled)
+        do i = 1,n
+            if (dSingular(i) > dTolerance) then
+                dProjection(i) = dProjection(i)/dSingular(i)
+            else
+                dProjection(i) = 0D0
+            end if
+        end do
+        XOut = MATMUL(TRANSPOSE(dVT),dProjection)
+        if (.NOT. ALL(IEEE_IS_FINITE(XOut))) iInfo = 1
+
+    end subroutine SolveMinimumNormSVD
+
+
+    !> \brief Test whether discarded GEM singular modes are physical gauges and whether scaling restores an exact solve.
+    !!
+    !> \details This diagnostic deliberately keeps three questions separate.  First, right singular vectors are
+    !! tested for both equation nullness and invariance of the production inactive-phase ranking.  Second, the LU
+    !! solution is projected along the numerical null basis to minimize the same element, constituent-logarithm,
+    !! and pure-amount displacements used by adaptive trust.  Third, the original square equations are solved after
+    !! algebraically exact row/column equilibration.  No candidate is returned to the nonlinear solver.
+    subroutine RunMQMQAConstrainedLinearDiagnostics(AIn,BIn,XMinimum,nRank,iSystem)
+
+        integer, intent(in) :: nRank, iSystem
+        real(8), intent(in) :: AIn(:,:), BIn(:), XMinimum(:)
+
+        integer :: i, iInfo, iMode, iPureMinus, iPurePlus, iPureReference, &
+            iSolutionMinus, iSolutionPlus, iSolutionReference, kNull, lWork, n
+        integer, allocatable :: iPiv(:), iSolutionSpecies(:)
+        logical :: lHaltDivide, lHaltInvalid, lHaltOverflow
+        real(8) :: dANorm, dBScale, dForceShift, dGammaScale, dMatrixScale, &
+            dPureMinus, dPurePlus, dPureReference, dSolutionMinus, dSolutionPlus, &
+            dSolutionReference, dTolerance
+        real(8), allocatable :: AScaled(:,:), BScaled(:), dColumnScale(:), dPhysicalOffset(:), &
+            dProjection(:), dRowScale(:), dSingular(:), dSolutionFraction(:), dU(:,:), dVT(:,:), &
+            dWork(:), dNullBasis(:,:), dPhysicalMap(:,:), dGaugeMatrix(:,:), dGaugeRHS(:), &
+            dGaugeSolution(:), dEquilibratedA(:,:), dEquilibratedB(:), dMode(:), &
+            dGammaMinus(:), dGammaPlus(:)
+
+        n = SIZE(BIn)
+        if ((n <= 0) .OR. (nRank < 0) .OR. (nRank > n) .OR. (iSystem < 1) .OR. (iSystem > 2)) return
+        dMatrixScale = MAXVAL(DABS(AIn))
+        if (dMatrixScale <= 0D0) return
+        allocate(AScaled(n,n),BScaled(n),dSingular(n),dU(n,n),dVT(n,n),dProjection(n),dMode(n), &
+            dGammaMinus(nElements),dGammaPlus(nElements), &
+            iSolutionSpecies(nMQMQADiagnosticMaxCandidateSpecies), &
+            dSolutionFraction(nMQMQADiagnosticMaxCandidateSpecies))
+        lWork = MAX(1,5*n)
+        allocate(dWork(lWork))
+        AScaled = AIn/dMatrixScale
+        BScaled = BIn/dMatrixScale
+
+        call IEEE_GET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_GET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_GET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,.FALSE.)
+        call DGESVD('A','A',n,n,AScaled,n,dSingular,dU,n,dVT,n,dWork,lWork,iInfo)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        if (iInfo /= 0) then
+            iMQMQADiagnosticConstrainedInfo(:,iSystem) = iInfo
+            return
+        end if
+        dTolerance = DBLE(n)*EPSILON(1D0)*dSingular(1)
+        kNull = n-nRank
+        if (.NOT. allocated(dMQMQADiagnosticNullModeSummary)) then
+            allocate(dMQMQADiagnosticNullModeSummary(8,n,2), &
+                iMQMQADiagnosticNullModeDecisionChanges(n,2), &
+                dMQMQADiagnosticLeftNullSummary(7,n,2), &
+                dMQMQADiagnosticLeftNullVector(n,n,2), &
+                dMQMQADiagnosticRightNullVector(n,n,2), &
+                iMQMQADiagnosticEquationIdentity(2,n))
+            dMQMQADiagnosticNullModeSummary = 0D0
+            iMQMQADiagnosticNullModeDecisionChanges = 0
+            dMQMQADiagnosticLeftNullSummary = 0D0
+            dMQMQADiagnosticLeftNullVector = 0D0
+            dMQMQADiagnosticRightNullVector = 0D0
+            iMQMQADiagnosticEquationIdentity = 0
+            do i = 1,nElements
+                iMQMQADiagnosticEquationIdentity(:,i) = [1,i]
+            end do
+            do i = 1,nSolnPhases
+                iMQMQADiagnosticEquationIdentity(:,nElements+i) = &
+                    [2,-iAssemblage(nElements-i+1)]
+            end do
+            do i = 1,nConPhases
+                iMQMQADiagnosticEquationIdentity(:,nElements+nSolnPhases+i) = &
+                    [3,iAssemblage(i)]
+            end do
+        end if
+
+        dANorm = DSQRT(SUM(AIn*AIn))
+        dBScale = DMAX1(DSQRT(SUM(BScaled*BScaled)),1D-30)
+        dProjection = MATMUL(TRANSPOSE(dU),BScaled)
+        call EvaluateMQMQACandidatePhaseRanking(XMinimum(1:nElements),iPureReference,dPureReference, &
+            iSolutionReference,dSolutionReference,iSolutionSpecies,dSolutionFraction)
+        do iMode = 1,kNull
+            i = nRank+iMode
+            dMode = dVT(i,:)
+            dMQMQADiagnosticLeftNullVector(:,iMode,iSystem) = dU(:,i)
+            dMQMQADiagnosticRightNullVector(:,iMode,iSystem) = dMode
+            dMQMQADiagnosticNullModeSummary(1,iMode,iSystem) = dSingular(i)
+            dMQMQADiagnosticNullModeSummary(2,iMode,iSystem) = &
+                DSQRT(SUM(MATMUL(AIn,dMode)**2))/DMAX1(dANorm,1D-30)
+            dMQMQADiagnosticNullModeSummary(3,iMode,iSystem) = DABS(dProjection(i))/dBScale
+            if (dSingular(i) > 0D0) then
+                dMQMQADiagnosticNullModeSummary(4,iMode,iSystem) = &
+                    DABS(dProjection(i)/dSingular(i))
+            else
+                dMQMQADiagnosticNullModeSummary(4,iMode,iSystem) = HUGE(1D0)
+            end if
+            dMQMQADiagnosticNullModeSummary(5,iMode,iSystem) = DSQRT(SUM(dMode(1:nElements)**2))
+            if (nSolnPhases > 0) dMQMQADiagnosticNullModeSummary(6,iMode,iSystem) = &
+                DSQRT(SUM(dMode(nElements+1:nElements+nSolnPhases)**2))
+            if (nConPhases > 0) dMQMQADiagnosticNullModeSummary(7,iMode,iSystem) = &
+                DSQRT(SUM(dMode(nElements+nSolnPhases+1:n)**2))
+
+            dMQMQADiagnosticLeftNullSummary(1,iMode,iSystem) = &
+                DSQRT(SUM(dU(1:nElements,i)**2))
+            if (nSolnPhases > 0) dMQMQADiagnosticLeftNullSummary(2,iMode,iSystem) = &
+                DSQRT(SUM(dU(nElements+1:nElements+nSolnPhases,i)**2))
+            if (nConPhases > 0) dMQMQADiagnosticLeftNullSummary(3,iMode,iSystem) = &
+                DSQRT(SUM(dU(nElements+nSolnPhases+1:n,i)**2))
+            dMQMQADiagnosticLeftNullSummary(4,iMode,iSystem) = &
+                DOT_PRODUCT(dU(1:nElements,i),BScaled(1:nElements))/dBScale
+            if (nSolnPhases > 0) dMQMQADiagnosticLeftNullSummary(5,iMode,iSystem) = &
+                DOT_PRODUCT(dU(nElements+1:nElements+nSolnPhases,i), &
+                BScaled(nElements+1:nElements+nSolnPhases))/dBScale
+            if (nConPhases > 0) dMQMQADiagnosticLeftNullSummary(6,iMode,iSystem) = &
+                DOT_PRODUCT(dU(nElements+nSolnPhases+1:n,i), &
+                BScaled(nElements+nSolnPhases+1:n))/dBScale
+            dMQMQADiagnosticLeftNullSummary(7,iMode,iSystem) = &
+                DOT_PRODUCT(dU(:,i),BScaled)/dBScale
+
+            dGammaScale = MAXVAL(DABS(dMode(1:nElements)))
+            if (dGammaScale > 1D-30) then
+                dGammaMinus = XMinimum(1:nElements)-dMode(1:nElements)/dGammaScale
+                dGammaPlus = XMinimum(1:nElements)+dMode(1:nElements)/dGammaScale
+                call EvaluateMQMQACandidatePhaseRanking(dGammaMinus,iPureMinus,dPureMinus, &
+                    iSolutionMinus,dSolutionMinus,iSolutionSpecies,dSolutionFraction)
+                call EvaluateMQMQACandidatePhaseRanking(dGammaPlus,iPurePlus,dPurePlus, &
+                    iSolutionPlus,dSolutionPlus,iSolutionSpecies,dSolutionFraction)
+                dForceShift = MAX(DABS(dPureMinus-dPureReference),DABS(dPurePlus-dPureReference), &
+                    DABS(dSolutionMinus-dSolutionReference),DABS(dSolutionPlus-dSolutionReference))
+                dMQMQADiagnosticNullModeSummary(8,iMode,iSystem) = dForceShift
+                iMQMQADiagnosticNullModeDecisionChanges(iMode,iSystem) = &
+                    MERGE(1,0,(iPureMinus /= iPureReference) .OR. &
+                    (iSolutionMinus /= iSolutionReference)) + &
+                    MERGE(1,0,(iPurePlus /= iPureReference) .OR. &
+                    (iSolutionPlus /= iSolutionReference))
+            end if
+        end do
+
+        ! Treat the discarded right singular vectors as a candidate gauge basis and choose, within that
+        ! approximate family, the representative minimizing physically grouped Newton displacements.
+        if (kNull > 0) then
+            allocate(dNullBasis(n,kNull))
+            dNullBasis = TRANSPOSE(dVT(nRank+1:n,:))
+            call BuildMQMQAPhysicalMetric(dPhysicalMap,dPhysicalOffset,n)
+            allocate(dGaugeMatrix(kNull,kNull),dGaugeRHS(kNull),dGaugeSolution(n),iPiv(kNull))
+            dGaugeMatrix = MATMUL(TRANSPOSE(MATMUL(dPhysicalMap,dNullBasis)), &
+                MATMUL(dPhysicalMap,dNullBasis))
+            dGaugeRHS = -MATMUL(TRANSPOSE(MATMUL(dPhysicalMap,dNullBasis)), &
+                MATMUL(dPhysicalMap,XMinimum)-dPhysicalOffset)
+            iPiv = 0
+            call DGESV(kNull,1,dGaugeMatrix,kNull,iPiv,dGaugeRHS,kNull,iInfo)
+            iMQMQADiagnosticConstrainedInfo(1,iSystem) = iInfo
+            if (iInfo == 0) then
+                dGaugeSolution = XMinimum+MATMUL(dNullBasis,dGaugeRHS)
+                call RecordMQMQAConstrainedCandidate(AIn,BIn,dGaugeSolution,1,iSystem)
+            end if
+        else
+            iMQMQADiagnosticConstrainedInfo(1,iSystem) = -2
+        end if
+
+        ! Row/column equilibration is algebraically exact: it changes numerical units, not the equations.
+        allocate(dColumnScale(n),dRowScale(n),dEquilibratedA(n,n),dEquilibratedB(n))
+        do i = 1,n
+            dColumnScale(i) = 1D0/DMAX1(MAXVAL(DABS(AIn(:,i))),1D-300)
+        end do
+        do i = 1,n
+            dRowScale(i) = 1D0/DMAX1(MAXVAL(DABS(AIn(i,:)*dColumnScale)),1D-300)
+        end do
+        do i = 1,n
+            dEquilibratedA(i,:) = dRowScale(i)*AIn(i,:)*dColumnScale
+        end do
+        dEquilibratedB = dRowScale*BIn
+        if (allocated(iPiv)) deallocate(iPiv)
+        allocate(iPiv(n))
+        iPiv = 0
+        call DGESV(n,1,dEquilibratedA,n,iPiv,dEquilibratedB,n,iInfo)
+        iMQMQADiagnosticConstrainedInfo(2,iSystem) = iInfo
+        if (iInfo == 0) then
+            dEquilibratedB = dColumnScale*dEquilibratedB
+            call RecordMQMQAConstrainedCandidate(AIn,BIn,dEquilibratedB,2,iSystem)
+        end if
+
+    end subroutine RunMQMQAConstrainedLinearDiagnostics
+
+
+    !> \brief Compare the paired baseline/corrected numerical null spaces and isolate direct RHS forcing.
+    subroutine CompareMQMQANullSpaces(BBase,BCorrected,nRankBase,nRankCorrected)
+
+        integer, intent(in) :: nRankBase, nRankCorrected
+        real(8), intent(in) :: BBase(:), BCorrected(:)
+
+        integer :: iInfo, kBase, kCorrected, kShared, lWork, n
+        real(8) :: dBaseScale
+        real(8) :: dDummyU(1,1), dDummyVT(1,1)
+        real(8), allocatable :: dDeltaB(:), dOverlap(:,:), dSingular(:), dWork(:)
+
+        n = SIZE(BBase)
+        kBase = n-nRankBase
+        kCorrected = n-nRankCorrected
+        kShared = MIN(kBase,kCorrected)
+        if ((n <= 0) .OR. (SIZE(BCorrected) /= n) .OR. (kShared <= 0)) return
+        if ((.NOT. allocated(dMQMQADiagnosticLeftNullVector)) .OR. &
+            (.NOT. allocated(dMQMQADiagnosticRightNullVector))) return
+
+        allocate(dDeltaB(n))
+        dDeltaB = BCorrected-BBase
+        dBaseScale = DMAX1(DSQRT(SUM(BBase*BBase)),1D-30)
+        dMQMQADiagnosticNullSpaceComparison(3) = &
+            DSQRT(SUM(MATMUL(TRANSPOSE(dMQMQADiagnosticLeftNullVector(:,1:kBase,1)), &
+            dDeltaB)**2))/dBaseScale
+        dMQMQADiagnosticNullSpaceComparison(4) = &
+            DSQRT(SUM(MATMUL(TRANSPOSE(dMQMQADiagnosticLeftNullVector(:,1:kBase,1)), &
+            BCorrected)**2))/dBaseScale
+
+        allocate(dOverlap(kBase,kCorrected),dSingular(kShared))
+        lWork = MAX(1,5*MAX(kBase,kCorrected))
+        allocate(dWork(lWork))
+        dOverlap = MATMUL(TRANSPOSE(dMQMQADiagnosticLeftNullVector(:,1:kBase,1)), &
+            dMQMQADiagnosticLeftNullVector(:,1:kCorrected,2))
+        call DGESVD('N','N',kBase,kCorrected,dOverlap,kBase,dSingular,dDummyU,1,dDummyVT,1, &
+            dWork,lWork,iInfo)
+        if (iInfo == 0) dMQMQADiagnosticNullSpaceComparison(1) = &
+            DSQRT(DMAX1(0D0,1D0-dSingular(kShared)**2))
+
+        dOverlap = MATMUL(TRANSPOSE(dMQMQADiagnosticRightNullVector(:,1:kBase,1)), &
+            dMQMQADiagnosticRightNullVector(:,1:kCorrected,2))
+        call DGESVD('N','N',kBase,kCorrected,dOverlap,kBase,dSingular,dDummyU,1,dDummyVT,1, &
+            dWork,lWork,iInfo)
+        if (iInfo == 0) dMQMQADiagnosticNullSpaceComparison(2) = &
+            DSQRT(DMAX1(0D0,1D0-dSingular(kShared)**2))
+
+    end subroutine CompareMQMQANullSpaces
+
+
+    !> \brief Diagnose whether active-phase stoichiometry can satisfy all phase-energy equations.
+    !!
+    !> \details The GEM saddle matrix contains the element-by-active-phase block C.  Element balance requires
+    !! the inventory forcing to lie in range(C), while the active phase equations require their Gibbs forcing
+    !! to lie in range(C^T).  This SVD check reports both orthogonal residuals without solving or modifying the
+    !! Newton system.  A nonzero phase-energy closure residual means a dependent active-phase combination is
+    !! being asked to satisfy mutually incompatible stationarity equations at that off-equilibrium state.
+    subroutine AnalyzeMQMQAPhaseStructure(AIn,BIn,iSystem)
+
+        integer, intent(in) :: iSystem
+        real(8), intent(in) :: AIn(:,:), BIn(:)
+
+        integer :: i, iInfo, iMode, lWork, nPhase, nRankC
+        real(8) :: dBScale, dScale, dToleranceC
+        real(8), allocatable :: CScaled(:,:), dElementProjection(:), dPhaseProjection(:), &
+            dSingular(:), dU(:,:), dVT(:,:), dWork(:)
+
+        nPhase = nSolnPhases+nConPhases
+        if ((nElements <= 0) .OR. (nPhase <= 0) .OR. &
+            (SIZE(AIn,1) < nElements+nPhase) .OR. (SIZE(AIn,2) < nElements+nPhase) .OR. &
+            (SIZE(BIn) < nElements+nPhase)) return
+        iMQMQADiagnosticPhaseRuleSummary(:,iSystem) = [nElements,nChargedConstraints, &
+            nSolnPhases,nConPhases,nPhase,nElements-nChargedConstraints,iterGlobal, &
+            MERGE(1,0,nPhase > nElements-nChargedConstraints)]
+        allocate(CScaled(nElements,nPhase),dSingular(MIN(nElements,nPhase)), &
+            dU(nElements,nElements),dVT(nPhase,nPhase),dElementProjection(nElements), &
+            dPhaseProjection(nPhase))
+        lWork = MAX(1,5*MAX(nElements,nPhase))
+        allocate(dWork(lWork))
+        CScaled = AIn(1:nElements,nElements+1:nElements+nPhase)
+        if (.NOT. allocated(dMQMQADiagnosticPhaseEquationData)) then
+            allocate(dMQMQADiagnosticPhaseEquationData(2,nPhase,2))
+            dMQMQADiagnosticPhaseEquationData = 0D0
+        end if
+        do i = 1,nPhase
+            dMQMQADiagnosticPhaseEquationData(1,i,iSystem) = DSQRT(SUM(CScaled(:,i)**2))
+            dMQMQADiagnosticPhaseEquationData(2,i,iSystem) = BIn(nElements+i)
+        end do
+        dScale = MAXVAL(DABS(CScaled))
+        if (dScale <= 0D0) return
+        CScaled = CScaled/dScale
+        call DGESVD('A','A',nElements,nPhase,CScaled,nElements,dSingular,dU,nElements, &
+            dVT,nPhase,dWork,lWork,iInfo)
+        if (iInfo /= 0) return
+
+        dToleranceC = DBLE(MAX(nElements,nPhase))*EPSILON(1D0)*dSingular(1)
+        nRankC = COUNT(dSingular > dToleranceC)
+        iMQMQADiagnosticPhaseStructureRank(iSystem) = nRankC
+        dMQMQADiagnosticPhaseStructureSummary(1,iSystem) = dSingular(1)
+        if (nRankC > 0) dMQMQADiagnosticPhaseStructureSummary(2,iSystem) = dSingular(nRankC)
+        if (nRankC < MIN(nElements,nPhase)) &
+            dMQMQADiagnosticPhaseStructureSummary(3,iSystem) = dSingular(nRankC+1)
+        dBScale = DMAX1(DSQRT(SUM(BIn*BIn)),1D-30)
+        dElementProjection = MATMUL(TRANSPOSE(dU),BIn(1:nElements))
+        dPhaseProjection = MATMUL(dVT,BIn(nElements+1:nElements+nPhase))
+        if (nRankC < nElements) dMQMQADiagnosticPhaseStructureSummary(4,iSystem) = &
+            DSQRT(SUM(dElementProjection(nRankC+1:nElements)**2))/dBScale
+        if (nRankC < nPhase) dMQMQADiagnosticPhaseStructureSummary(5,iSystem) = &
+            DSQRT(SUM(dPhaseProjection(nRankC+1:nPhase)**2))/dBScale
+        if (nRankC < nPhase) dMQMQADiagnosticPhaseStructureSummary(6,iSystem) = &
+            DSQRT(SUM(dPhaseProjection(nRankC+1:nPhase)**2))
+        dMQMQADiagnosticPhaseStructureSummary(7,iSystem) = DBLE(nPhase-nRankC)
+
+        if (.NOT. allocated(dMQMQADiagnosticPhaseDependencyVector)) then
+            allocate(dMQMQADiagnosticPhaseDependencyVector(nPhase,nPhase,2), &
+                dMQMQADiagnosticPhaseDependencyProjection(nPhase,2))
+            dMQMQADiagnosticPhaseDependencyVector = 0D0
+            dMQMQADiagnosticPhaseDependencyProjection = 0D0
+        end if
+        do iMode = 1,nPhase-nRankC
+            i = nRankC+iMode
+            dMQMQADiagnosticPhaseDependencyVector(:,iMode,iSystem) = dVT(i,:)
+            dMQMQADiagnosticPhaseDependencyProjection(iMode,iSystem) = &
+                dPhaseProjection(i)/dBScale
+        end do
+
+    end subroutine AnalyzeMQMQAPhaseStructure
+
+
+    !> \brief Construct the affine physical-displacement map used to choose a numerical gauge representative.
+    subroutine BuildMQMQAPhysicalMetric(dMap,dOffset,nLocalVar)
+
+        integer, intent(in) :: nLocalVar
+        real(8), allocatable, intent(out) :: dMap(:,:), dOffset(:)
+
+        integer :: iElement, iPhase, iSpecies, iSystemPhase, iWrite, nRows
+        real(8) :: dElementScale, dPureScale
+
+        nRows = nElements+nConPhases
+        do iPhase = 1,nSolnPhases
+            iSystemPhase = -iAssemblage(nElements-iPhase+1)
+            nRows = nRows+nSpeciesPhase(iSystemPhase)-nSpeciesPhase(iSystemPhase-1)
+        end do
+        allocate(dMap(nRows,nLocalVar),dOffset(nRows))
+        dMap = 0D0
+        dOffset = 0D0
+        dElementScale = DMAX1(1D0,DSQRT(SUM(dElementPotential(1:nElements)**2)/DFLOAT(nElements)))
+        do iElement = 1,nElements
+            dMap(iElement,iElement) = 1D0/dElementScale
+            dOffset(iElement) = dElementPotential(iElement)/dElementScale
+        end do
+        iWrite = nElements
+        do iPhase = 1,nSolnPhases
+            iSystemPhase = -iAssemblage(nElements-iPhase+1)
+            do iSpecies = nSpeciesPhase(iSystemPhase-1)+1,nSpeciesPhase(iSystemPhase)
+                iWrite = iWrite+1
+                dMap(iWrite,nElements+iPhase) = 1D0
+                do iElement = 1,nElements
+                    dMap(iWrite,iElement) = dStoichSpecies(iSpecies,iElement)/ &
+                        DFLOAT(iParticlesPerMole(iSpecies))
+                end do
+                dOffset(iWrite) = dChemicalPotential(iSpecies)
+            end do
+        end do
+        do iPhase = 1,nConPhases
+            iWrite = iWrite+1
+            dPureScale = DMAX1(DABS(dMolesPhase(iPhase)),dTolerance(7),1D-30)
+            dMap(iWrite,nElements+nSolnPhases+iPhase) = 1D0/dPureScale
+            dOffset(iWrite) = dMolesPhase(iPhase)/dPureScale
+        end do
+
+    end subroutine BuildMQMQAPhysicalMetric
+
+
+    !> \brief Record residual, groupwise displacement, and phase-ranking evidence for one diagnostic solve.
+    subroutine RecordMQMQAConstrainedCandidate(AIn,BIn,XIn,iCandidate,iSystem)
+
+        integer, intent(in) :: iCandidate, iSystem
+        real(8), intent(in) :: AIn(:,:), BIn(:), XIn(:)
+
+        integer :: iPure, iSolution, nSolutionStep
+        integer, allocatable :: iSolutionSpecies(:)
+        real(8) :: dANorm, dBScale, dPure, dSolution
+        real(8), allocatable :: dSolutionFraction(:), dStep(:)
+
+        allocate(iSolutionSpecies(nMQMQADiagnosticMaxCandidateSpecies), &
+            dSolutionFraction(nMQMQADiagnosticMaxCandidateSpecies), &
+            dStep(nElements+nSpecies+nConPhases))
+        dANorm = DSQRT(SUM(AIn*AIn))
+        dBScale = DMAX1(DSQRT(SUM(BIn*BIn)),1D-30)
+        dMQMQADiagnosticConstrainedRHSResidual(iCandidate,iSystem) = &
+            DSQRT(SUM((MATMUL(AIn,XIn)-BIn)**2))/dBScale
+        dMQMQADiagnosticConstrainedResidual(iCandidate,iSystem) = &
+            DSQRT(SUM((MATMUL(AIn,XIn)-BIn)**2))/ &
+            DMAX1(dBScale,dANorm*DSQRT(SUM(XIn*XIn)),1D-30)
+        dMQMQADiagnosticConstrainedSolutionNorm(iCandidate,iSystem) = DSQRT(SUM(XIn*XIn))
+        call BuildMQMQAGroupedDisplacement(XIn,SIZE(XIn),dStep,nSolutionStep)
+        dMQMQADiagnosticConstrainedGroupNorm(1,iCandidate,iSystem) = &
+            DSQRT(SUM(dStep(1:nElements)**2))
+        if (nSolutionStep > 0) dMQMQADiagnosticConstrainedGroupNorm(2,iCandidate,iSystem) = &
+            DSQRT(SUM(dStep(nElements+1:nElements+nSolutionStep)**2))
+        if (nConPhases > 0) dMQMQADiagnosticConstrainedGroupNorm(3,iCandidate,iSystem) = &
+            DSQRT(SUM(dStep(nElements+nSolutionStep+1:nElements+nSolutionStep+nConPhases)**2))
+        call EvaluateMQMQACandidatePhaseRanking(XIn(1:nElements),iPure,dPure,iSolution,dSolution, &
+            iSolutionSpecies,dSolutionFraction)
+        iMQMQADiagnosticConstrainedDecision(:,iCandidate,iSystem) = [iPure,iSolution]
+        dMQMQADiagnosticConstrainedDecisionForce(:,iCandidate,iSystem) = &
+            [dPure,dSolution,dPure-dSolution]
+
+    end subroutine RecordMQMQAConstrainedCandidate
+
+
     !> \brief Convert a solved GEM vector to the three displacement groups used by MQMQA trust.
     !!
     !> \details The solution-phase unknown stored by GEM is not itself a composition increment.  For each
@@ -989,6 +1604,8 @@ contains
         allocate(ATrial(nLocalVar,nLocalVar),BTrial(nLocalVar),IPIVTrial(nLocalVar))
         call SolveMQMQACorrectionTrial(AIn,BIn,nElements,dDeltaA,dDeltaB,dMQMQAHessianAlpha, &
             ATrial,BTrial,IPIVTrial,INFOOut,lApplied,lAccepted,iTrialStatus)
+        if (lApplied) call RunMQMQAMinimumNormDiagnostic(AIn,BIn,dDeltaA,dDeltaB, &
+            dMQMQAHessianAlpha,nLocalVar)
         if (lApplied) then
             lMQMQAHessianCorrectionApplied = .TRUE.
             nMQMQAHessianApplyCount = nMQMQAHessianApplyCount+1

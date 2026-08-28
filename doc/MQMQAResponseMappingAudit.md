@@ -2041,6 +2041,341 @@ converged assemblage as a pass.  MQ-4E-C remains evidence synthesis after this
 solver gate is resolved.  `B` remains controlled standalone coverage, and
 constrained-KKT execution remains outside this unconstrained assessed gate.
 
+### Compound-component and live matrix-rank diagnostic
+
+A subsequent bounded experiment tested the proposed explanation that elemental
+Li-Be-F components leave the live GEM system rank-deficient and that replacing
+them by LiF and BeF2 components would restore uniqueness.  The diagnostic used
+Thermochimica's existing compound-component input path and captured the exact
+live GEM matrix.  Numerical rank was measured with an SVD after scaling each
+matrix by its largest absolute entry, using
+
+```text
+rank tolerance = matrix dimension * machine epsilon * largest singular value.
+```
+
+For both the MSD-TC V4.1 and MSTDB-TC V3.1 fluoride assessments, at all three
+45/55, 50/50, and 55/45 compositions:
+
+- the final historical elemental-component matrix had rank `3/4`;
+- the first paired pre-correction elemental matrix had rank `4/6`;
+- the corresponding fixed-`alpha=1` corrected matrix also had rank `4/6`;
+- the historical LiF-BeF2 compound-component matrix had rank `3/3`; and
+- the compound-basis condition estimates ranged from `9.20` to `16.45`.
+
+Thus the live elemental GEM system is genuinely rank-deficient, but the MQMQA
+correction does **not create** that deficiency: the paired baseline and
+corrected matrices have the same numerical rank.  Rank deficiency alone also
+does not prove that the returned element potentials are physically corrupt,
+because historical Thermochimica converges reproducibly while using the same
+deficient component representation.  It instead establishes a concrete
+mechanism by which two otherwise acceptable linear solves can choose different
+representatives of a non-unique potential space and therefore alter downstream
+phase-driving-force coordinates.
+
+The LiF-BeF2 result is diagnostic evidence, not an acceptable production fix.
+Several internal MQMQA pair/quadruplet states in the assessed `MSFL` model
+cannot individually be represented as nonnegative combinations of LiF and
+BeF2.  Thermochimica's compound conversion consequently assigns those entries
+zero compound stoichiometry and removes them.  After setup filtering was made
+consistent for solution species, MQM pairs, interpolation overrides, and
+temporary array capacity, the historical compound-component calculation
+converged and its reduced matrix was full rank.  Attempting to continue into
+the corrected MQMQA path then encountered missing pair topology in the SUBQ
+energy evaluation.  The apparent improvement in rank therefore comes with a
+changed and incomplete thermodynamic model, rather than a coordinate-only
+reparameterization of the original assessment.
+
+The temporary setup-filtering edits used to complete this bounded experiment
+were removed afterward.  They are not retained as production changes because
+the compound representation is not a valid remedy and initially disturbed an
+existing elemental SUBQ regression.
+
+Accordingly, compound components are rejected as the MQ-4E-B remedy.  The next
+bounded experiment should retain the elemental formulation and compare the
+current linear solve with a rank-revealing minimum-norm solve on the *same*
+paired baseline and corrected matrices.  It must report null-space residuals,
+element-potential and update differences, and the resulting inactive-phase
+driving-force rankings before any pseudoinverse or regularization is considered
+for production.  The experiment must also establish whether the relevant
+rank deficiency is structural and shared by historical Thermochimica, rather
+than describing it as an MQMQA-Hessian defect.
+
+### Same-matrix minimum-norm replay
+
+That comparison was then implemented as an opt-in, read-only diagnostic.  At
+the first live corrected trial, the exact elemental-component baseline system
+and its fixed-`alpha=1` correction were each solved twice:
+
+1. with production `DGESV`; and
+2. with an SVD pseudoinverse using the same numerical-rank tolerance as the
+   preceding rank experiment.
+
+Neither replay replaces the Newton update returned by `GEMNewton`.  The study
+records direct right-hand-side residuals, normwise backward errors, solution
+norms, matrix-relative difference residuals, element-potential differences,
+and inactive-phase rankings.  It was repeated for the V4.1 and V3.1 fluoride
+assessments at 45/55, 50/50, and 55/45 LiF/BeF2.
+
+All twelve paired matrices again had numerical rank `4/6`.  Their smallest
+retained scaled singular values were `0.112`--`0.245`, while the largest
+discarded values were only `1.33e-17`--`1.83e-16`, below tolerances of
+`1.67e-15`--`2.70e-15`.  Production LU returned very large raw solution norms,
+`8.27e17`--`5.77e18`.  Its normwise backward errors remained near machine
+precision.  Eleven of the twelve direct residuals relative to the right-hand
+side ranged from `0.441` to `2.51`; the remaining corrected V3.1 45/55 replay
+was `6.32e-16`.  This combination is evidence of severe forward sensitivity
+and cancellation: `DGESV` is backward stable, yet the raw solution is not a
+reliable unique representative of the nearly singular system.
+
+The SVD replay separated the three compositions:
+
+| LiF/BeF2 | SVD result on baseline/corrected systems | Baseline-to-corrected element-potential difference |
+|---|---|---:|
+| 45/55 | consistent minimum-norm solution; direct residual `3.13e-16`--`6.35e-16` | `<= 2.12e-15` |
+| 50/50 | least-squares only; direct residual `0.340`/`0.478` | `<= 2.66e-15` |
+| 55/45 | least-squares only; direct residual `0.341`/`0.471` | `<= 2.12e-15` |
+
+The V4.1 and V3.1 matrices gave the same SVD classification and essentially
+the same minimum-norm phase rankings.  At 45/55, the minimum-norm baseline and
+corrected systems produced the same `MSFL` solution-phase driving force
+(`-0.07236`); their leading pure-phase forces were numerically tied near zero.
+At 50/50 and 55/45, the baseline and corrected minimum-norm element potentials
+were also identical within approximately `3e-15` and gave the same leading
+inactive-phase rankings.  In contrast, the LU representatives differed
+strongly between baseline and corrected systems and produced driving forces as
+large as approximately `1e18`.
+
+This supports the narrower causal mechanism: the elemental GEM system contains
+near-null directions, and the MQMQA correction can change which enormous LU
+representative is selected even though it does not create the deficiency.
+Those representative changes can move inactive-phase rankings.  It does not,
+however, justify replacing `DGESV` with the tested pseudoinverse.  At 50/50 and
+55/45 the standard rank cutoff discards directions needed to reproduce the
+right-hand side, so the bounded SVD solution changes the linear problem into a
+least-squares approximation.  The full solution vector also changes by about
+`0.285`--`0.305` between the baseline and corrected least-squares systems even
+though their element-potential blocks agree, showing that a raw unscaled
+minimum norm mixes physically different GEM variable groups.
+
+Therefore the minimum-norm replay is positive diagnostic evidence but a
+negative production-fix result.  A production remedy, if pursued, must define
+the structural gauge or component constraints explicitly and use physically
+meaningful variable scaling or a constrained solve.  It must preserve the
+original GEM equations and verify phase-driving-force invariance; simply
+discarding small singular values is not acceptable.  No production solve,
+phase decision, default, or MQMQA Hessian formula was changed by this study.
+
+## Null-mode, gauge, and exact-scaling diagnostic
+
+The two discarded right singular vectors were next tested as possible physical
+gauges. For each paired baseline/corrected matrix, the diagnostic records
+`||A v||/||A||`, the discarded left-vector projection of the right-hand side,
+the corresponding singular coefficient, the element/solution/pure block
+content, and the change in the production leading phase forces produced by a
+unit maximum element-potential perturbation along the mode. It then performs
+two read-only solves:
+
+1. a null-space selection minimizing the physically grouped element-potential,
+   constituent-logarithm, and pure-amount displacements; and
+2. a row/column-equilibrated `DGESV` solve of the algebraically unchanged
+   square equations.
+
+The 45/55 systems exhibit a genuine gauge-like regime. Their discarded-mode
+right-hand-side projections are `3.82e-17`--`1.91e-16`, their phase-force
+changes are at most `2.39e-15`, and the physically selected representative has
+norm approximately `169` while satisfying the original equations to
+`3.13e-16`--`6.39e-16` relative residual. Baseline and corrected rankings are
+unchanged. This confirms that bounded, physically selected representatives can
+exist when the right-hand side is compatible with the numerical range.
+
+The 50/50 and 55/45 systems are qualitatively different. Their discarded-mode
+right-hand-side projections are `1.71e-2`--`4.73e-1`; division by singular
+values near `1e-17` requires coefficients of `2.72e16`--`2.18e18`. Their
+phase-force changes under the normalized mode perturbation are approximately
+`0.1375` and `0.1177`, respectively. The leading phase identities do not
+change in this local unit probe, but the forces themselves are not gauge
+invariant. Physically grouped null-space selection remains bounded
+(`127`--`149`) only by retaining the same least-squares residuals as the
+truncated SVD: approximately `0.340`/`0.478` at 50/50 and
+`0.341`/`0.471` at 55/45 for baseline/corrected systems.
+
+Exact algebraic equilibration does not remove the obstruction. Depending on
+roundoff and database version, `DGESV` either reports a singular pivot or
+returns a solution of order `1e18`; its small normwise backward error coexists
+with direct right-hand-side residuals as large as `3.95` because the solve is
+again cancellation dominated. Scaling therefore improves neither uniqueness
+nor forward reliability.
+
+This rejects a blanket gauge-fixing or scaling-only production change. The
+structural deficiency is real, but only the compatible 45/55 state admits the
+desired bounded exact representative under the captured equations. At the
+other compositions, an exact bounded update would require changing or reducing
+the assembled equations based on a separately justified thermodynamic
+constraint; choosing a different numerical norm cannot create it. No
+production linear algebra, phase search, or adaptive policy was changed by
+this diagnostic.
+
+### Structural origin of the incompatible FLiBe forcing
+
+The discarded left-null projections were then decomposed by exact GEM equation
+identity, and the active phase stoichiometry block
+
+\[
+C=A_{1:n_e,\,n_e+1:n_e+n_p}
+\]
+
+was analyzed independently.  In all six V4.1/V3.1 captures, the three active
+phase columns had numerical rank `2/3`.  The element-inventory forcing lay in
+`range(C)` to `1e-17`--`2e-16`, so element balance is not the source of the
+incompatibility.  The obstruction instead lies in the phase-equation forcing,
+which must belong to `range(C^T)` for all active stationarity equations to be
+satisfied simultaneously.
+
+| LiF/BeF2 | Dependent active-phase combination (sign is arbitrary) | Raw phase-energy closure | Interpretation |
+|---|---|---:|---|
+| 45/55 | `-1.000 MSFL + O(1e-16) Li2BeF4 + O(1e-16) BeF2` | `9.08e-14` | `MSFL` stoichiometry-column norm is `1.38e-15` and its phase RHS is zero; this is an effectively absent phase coordinate |
+| 50/50 | `-0.8341 MSFL + 0.4970 Li2BeF4 + 0.2393 BeF2` | `180.9817` | substantive dependent three-phase combination does not satisfy energy closure |
+| 55/45 | `-0.8351 MSFL + 0.4956 Li2BeF4 + 0.2386 BeF2` | `180.4419` | substantive dependent three-phase combination does not satisfy energy closure |
+
+The V4.1 and V3.1 assessments gave the same ranks, phase combinations, and
+closure magnitudes.  SVD-vector signs differed in some captures, as expected,
+without changing the result.  The normalized phase-energy residual changed
+between the baseline and corrected systems because the norm of the complete
+right-hand side changed; the **raw closure was identical** before and after the
+MQMQA correction.  The baseline-to-corrected left and right null-subspace
+rotations were zero to approximately `3e-8`, and the direct correction forcing
+projected onto the baseline left null space at approximately `1e-16`.
+
+Therefore the MQMQA Hessian correction neither creates the dependent phase
+combination nor injects its incompatible forcing.  The historical GEM assembly
+already contains an inconsistent singular saddle system at the captured
+50/50 and 55/45 transient assemblages.  Production `DGESV` can still return an
+enormous cancellation-dominated representative of that system, and a small
+curvature perturbation in its well-determined range can select a materially
+different representative and phase-search path.  This explains why local
+derivative, mapping, and transactional checks can all pass while the global
+assemblage trajectory changes.
+
+This diagnosis rejects raw pseudoinverse substitution, gauge selection,
+scaling alone, and phase-specific rollback as root-cause remedies.  A future
+production remedy must either (a) detect an overcomplete active phase set and
+reduce it through model-independent thermodynamic phase-selection logic, or
+(b) reformulate the GEM equations on an independently justified component
+basis while preserving the complete SUBQ topology.  No such production change
+is made in this checkpoint.
+
+### Why the rank-deficient three-phase set survives the active-set controls
+
+A diagnostic trace of every `CheckPhaseChange` trial localized when the
+overcomplete V4.1 50/50 assemblage enters the live path.  The three-phase set
+is **not** accepted during initialization.  At global iteration zero,
+`MSFL + Li2BeF4(s) + BeF2(l)` is tried three times and rejected each time:
+the active stoichiometry block has rank `2/3`, and the largest Newton update is
+`6.897383e17`, above the then-active `1e14` trial threshold.  At iteration two,
+the two-pure-phase set `Li2BeF4(s) + BeF2(l)` is accepted with rank `2/2`.
+At iteration seven, `gas_ideal` is added and the resulting three-phase set has
+full active-stoichiometry rank `3/3`.  Thus three phases in a Li-Be-F system
+are not intrinsically invalid; the defect is the later acceptance of a
+linearly dependent active set.
+
+The decisive transition occurs at global iteration 49.  The trial
+`MSFL + Li2BeF4(s) + BeF2(l)` again has rank `2/3`, but `CheckPhaseChange`
+accepts it because `GEMNewton` returns `INFO=0` and the maximum update,
+`9.659123e15`, is below the time-dependent threshold, which has relaxed to
+`1e20`.  The trial check contains no active-stoichiometry rank or dependent
+phase-energy closure criterion.
+
+Three existing controls then fail to remove the structural redundancy for
+distinct reasons:
+
+1. `CheckPureConPhaseAdd` and `CheckSolnPhaseAdd` use the nominal limit
+   `nElements - nChargedConstraints`.  They permit direct addition below that
+   count and require swapping only at equality.  They do not reduce this limit
+   when the active phase stoichiometry spans fewer independent directions.
+2. `CorrectPhaseRule` is called only when the number of active phases is
+   **greater than** that same nominal limit.  Here the count is `3`, the limit
+   is `3`, and the measured rank is only `2`; the count-based correction is
+   therefore never triggered.
+3. The ordinary pure- and solution-phase removal paths are amount based.  At
+   the accepted iteration-49 trial the minimum active phase amount is `1.0`,
+   while the removal tolerance is `1e-11`, so no member of the dependent set
+   is considered small enough to remove.
+
+The causal chain is therefore: a later global phase-change trial creates a
+dependent three-phase candidate; a relaxed update-size gate accepts it; the
+nominal phase-rule count does not recognize it as overcomplete; and the
+amount-based removal logic retains it.  This is a pre-existing, model-
+independent active-set deficiency exposed by the assessed FLiBe trajectory,
+not an error in the MQMQA Hessian formulas.  The curvature correction can
+change which cancellation-dominated solution and later phase path is selected,
+but it does not create the rank-two stoichiometry or the raw closure defect.
+The reported update magnitudes are from the accepted Linux/Docker verification
+environment.  The macOS Accelerate build returned different order-`1e15`--
+`1e18` representatives while preserving every rank, threshold, and pass/fail
+classification, as expected for the diagnosed inconsistent singular system.
+
+The next bounded investigation should test a model-independent structural gate
+at the phase-addition/swap acceptance boundary.  A rank-deficient candidate
+must not be rejected merely because its columns are dependent: a redundant
+coordinate may be harmless when its dependent phase-energy closure is also
+compatible, as in the effectively absent 45/55 `MSFL` coordinate.  The gate
+must distinguish that case from the substantive 50/50 and 55/45 closure
+defects, and any rejection or phase reduction must preserve a feasible lower-
+Gibbs assemblage.  This checkpoint records the cause only; it does not alter
+production phase selection, removal, thresholds, or linear algebra.
+
+### Bounded structural-gate experiment: rejected
+
+The proposed gate was implemented temporarily behind a private, default-off
+diagnostic control.  At every `CheckPhaseChange` trial it formed the active
+element-by-phase stoichiometry block `C`, computed its numerical right null
+space, and rejected an otherwise historically acceptable candidate when
+
+\[
+\frac{\lVert Y^T g_{\rm phase}\rVert_2}
+     {\max(\lVert g_{\rm phase}\rVert_2,1)} > 10^{-10},
+\]
+
+where the columns of `Y` span the dependent active-phase combinations.  The
+complete private matrix covered LiF mole fractions 0.45, 0.50, and 0.55 in
+both MSD-TC V4.1 and MSTDB-TC V3.1.  Historical, fixed-alpha-one, adaptive,
+forced-zero, rejected-candidate, and one-step-ablation modes remained
+separately classified.
+
+The experiment failed its intended discrimination test.  In all six assessed
+states, the first structural rejection occurred at the same decisive early
+phase-set check (global iteration 47--55, depending on database and
+composition), with rank `2/3`, raw closure `0.4157`, and normalized closure
+`1.226e-3`.  The gate then rejected hundreds to thousands of dependent
+candidates per corrected run.  Nevertheless, every fixed or adaptive
+positive-curvature result remained different from the historical reference;
+the V3.1 50/50 fixed-alpha calculation failed rather than recovering the
+reference path.  The 45/55 case was especially decisive: although its later
+captured corrected system admits a compatible bounded minimum-norm
+representative, the trial-time gate still rejected intermediate dependent
+sets and did not preserve the reference trajectory.
+
+The reason is mathematical rather than a tolerance-tuning accident.  The
+condition `Y^T g_phase = 0` is required when the dependent phase stationarity
+equations are simultaneously satisfied at the state being characterized.  A
+candidate passed to `CheckPhaseChange` is generally an off-equilibrium Newton
+trial, so its current phase-energy residual need not already satisfy that
+closure.  Enforcing near-zero closure at every trial confuses an equilibrium
+compatibility condition with a nonlinear-iteration acceptance condition.  A
+looser fixed threshold would merely move this arbitrary boundary and would
+not establish that the retained candidate is feasible, lower in Gibbs energy,
+or on the correct basin.
+
+Accordingly, the gate, its counters, and its private command-line control were
+removed after the experiment.  The existing read-only rank and null-space
+diagnostics were retained.  No public API, production default, phase-search
+decision, or MQMQA Hessian formula was changed.  This negative result rules
+out instantaneous dependent-energy closure as a standalone phase-set gate;
+any future rank-aware phase reduction must evaluate a thermodynamically
+defined reduced candidate or nonlinear progress rather than demand
+equilibrium closure before the candidate has converged.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than

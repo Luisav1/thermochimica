@@ -43,13 +43,17 @@
 
 subroutine CheckPhaseChange(lPhasePass,INFO)
 
+    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_DIVIDE_BY_ZERO, IEEE_GET_HALTING_MODE, &
+        IEEE_INVALID, IEEE_IS_FINITE, IEEE_OVERFLOW, IEEE_SET_HALTING_MODE
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseChangeCheck, &
+        lMQMQADiagnosticMinimumNormStudy
 
     implicit none
 
-    integer  ::  i, j, INFO, nMiscPhases
-    real(8)  ::  dTemp
+    integer  ::  i, iActiveRank, j, INFO, nMiscPhases
+    real(8)  ::  dMinActiveAmount, dTemp
     logical  ::  lPhasePass
 
 
@@ -111,6 +115,66 @@ subroutine CheckPhaseChange(lPhasePass,INFO)
     ! If the maximum value of the direction vector is above an arbitrarily large number, then the phase fails:
     if (MAXVAL(DABS(dUpdateVar)) >= dTemp) lPhasePass = .FALSE.
 
+    dMinActiveAmount = HUGE(1D0)
+    if (nConPhases > 0) dMinActiveAmount = MIN(dMinActiveAmount,MINVAL(dMolesPhase(1:nConPhases)))
+    if (nSolnPhases > 0) dMinActiveAmount = MIN(dMinActiveAmount, &
+        MINVAL(dMolesPhase(nElements-nSolnPhases+1:nElements)))
+    if (nConPhases+nSolnPhases == 0) dMinActiveAmount = 0D0
+    iActiveRank = 0
+    if (lMQMQADiagnosticMinimumNormStudy) call AnalyzeActivePhaseRank(iActiveRank)
+    call CaptureMQMQAPhaseChangeCheck(iterGlobal,nElements,nChargedConstraints,nSolnPhases,nConPhases, &
+        INFO,lPhasePass,iActiveRank,MAXVAL(DABS(dUpdateVar)),dTemp,dMinActiveAmount,dTolerance(7),iAssemblage)
+
     return
+
+contains
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Report the numerical rank of the active element-by-phase stoichiometry block.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine AnalyzeActivePhaseRank(nRank)
+
+        integer, intent(out) :: nRank
+        integer :: iElement, iInfoSVD, iPhase, iSolution, lWork, nActive
+        logical :: lHaltDivide, lHaltInvalid, lHaltOverflow
+        real(8) :: dScale, dToleranceRank
+        real(8), allocatable :: C(:,:), dSingular(:), dU(:,:), dVT(:,:), dWork(:)
+
+        nRank = 0
+        nActive = nConPhases+nSolnPhases
+        if ((nElements <= 0) .OR. (nActive <= 0)) return
+        allocate(C(nElements,nActive),dSingular(MIN(nElements,nActive)),dU(1,1),dVT(1,1))
+        C = 0D0
+        do iPhase = 1,nSolnPhases
+            iSolution = -iAssemblage(nElements-iPhase+1)
+            do iElement = 1,nElements
+                C(iElement,iPhase) = dEffStoichSolnPhase(iSolution,iElement) * &
+                    dMolesPhase(nElements-iPhase+1)
+            end do
+        end do
+        do iPhase = 1,nConPhases
+            C(:,nSolnPhases+iPhase) = dStoichSpecies(iAssemblage(iPhase),1:nElements)
+        end do
+        if (.NOT. ALL(IEEE_IS_FINITE(C))) return
+        dScale = MAXVAL(DABS(C))
+        if ((.NOT. IEEE_IS_FINITE(dScale)) .OR. (dScale <= 0D0)) return
+        C = C/dScale
+        lWork = MAX(1,5*MAX(nElements,nActive))
+        allocate(dWork(lWork))
+        call IEEE_GET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_GET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_GET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,.FALSE.)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,.FALSE.)
+        call DGESVD('N','N',nElements,nActive,C,nElements,dSingular,dU,1,dVT,1,dWork,lWork,iInfoSVD)
+        call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
+        call IEEE_SET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
+        call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
+        if (iInfoSVD /= 0) return
+        dToleranceRank = DBLE(MAX(nElements,nActive))*EPSILON(1D0)*dSingular(1)
+        nRank = COUNT(dSingular > dToleranceRank)
+
+    end subroutine AnalyzeActivePhaseRank
 
 end subroutine CheckPhaseChange

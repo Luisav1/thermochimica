@@ -18,6 +18,100 @@ module ModuleGEMNewtonDiagnosticCapture
     logical, public :: lGEMNewtonSystemCaptured = .FALSE.
     logical, public :: lCaptureGEMNewtonCorrectedSystem = .FALSE.
     logical, public :: lGEMNewtonCorrectedSystemCaptured = .FALSE.
+    ! When enabled, retain the baseline and corrected matrices from the first
+    ! GEM call that actually reaches an MQMQA corrected trial.  This keeps the
+    ! two snapshots paired at one identical pre-step state.
+    logical, public :: lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
+    ! Test-only same-matrix comparison of the production LU solution with an
+    ! SVD rank-revealing minimum-norm solution.  Results never influence the
+    ! live Newton update or phase-assemblage decision.
+    logical, public :: lMQMQADiagnosticMinimumNormStudy = .FALSE.
+    logical, public :: lMQMQADiagnosticMinimumNormCaptured = .FALSE.
+    integer, public :: iMQMQADiagnosticMinimumNormRank(2) = 0
+    integer, public :: iMQMQADiagnosticMinimumNormInfo(2,2) = 0
+    integer, public :: iMQMQADiagnosticMinimumNormDecision(2,2,2) = 0
+    ! Solver residuals are reported both relative to the right-hand side and
+    ! as a normwise backward error.  Rows are LU/minimum-norm; columns are
+    ! baseline/corrected.
+    real(8), public :: dMQMQADiagnosticMinimumNormRHSResidual(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormResidual(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormSolutionNorm(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormRelativeDifference(2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormNullResidual(2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormGammaDifference(2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormDecisionForce(3,2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormCrossSystemDifference(2) = 0D0
+    real(8), public :: dMQMQADiagnosticMinimumNormCrossGammaDifference(2) = 0D0
+    ! Rows are largest singular value, smallest retained value, largest
+    ! discarded value, and the numerical-rank tolerance; columns are the
+    ! baseline and corrected systems.
+    real(8), public :: dMQMQADiagnosticMinimumNormSingularSummary(4,2) = 0D0
+    ! Per discarded singular mode, rows are: singular value, relative A*v
+    ! residual, relative left-hand-side compatibility projection, required
+    ! singular coefficient, and the element/solution/pure variable-block
+    ! norms, followed by the largest leading phase-force change under a
+    ! unit maximum element-potential perturbation.  The final index selects
+    ! the paired baseline/corrected system.
+    real(8), allocatable, public :: dMQMQADiagnosticNullModeSummary(:,:,:)
+    integer, allocatable, public :: iMQMQADiagnosticNullModeDecisionChanges(:,:)
+    ! The left singular vectors identify incompatible equation combinations.
+    ! Rows 1:3 are their element/solution/pure equation-block norms; rows 4:6
+    ! are the signed contributions of those blocks to u^T B, normalized by
+    ! ||B||; row 7 is the signed total projection.  The stored vectors make
+    ! the small diagnostic systems auditable against named GEM equations.
+    real(8), allocatable, public :: dMQMQADiagnosticLeftNullSummary(:,:,:)
+    real(8), allocatable, public :: dMQMQADiagnosticLeftNullVector(:,:,:)
+    real(8), allocatable, public :: dMQMQADiagnosticRightNullVector(:,:,:)
+    ! Row metadata are [equation class, production index], where classes are
+    ! 1=element balance, 2=solution phase, and 3=pure phase.
+    integer, allocatable, public :: iMQMQADiagnosticEquationIdentity(:,:)
+    ! Baseline-to-corrected comparison: maximum sine of the principal angles
+    ! for the left and right numerical null spaces, the direct corrected RHS
+    ! forcing projected onto the baseline left-null space, and the corrected
+    ! RHS projected onto the baseline left-null space.  The latter two values
+    ! are normalized by the baseline RHS norm.
+    real(8), public :: dMQMQADiagnosticNullSpaceComparison(4) = 0D0
+    ! Basis-independent active-phase structure.  The rank belongs to the
+    ! element-by-active-phase stoichiometry block.  Summary rows are largest,
+    ! smallest retained, and largest discarded singular values, followed by
+    ! the normalized element-inventory and phase-energy closure residuals, the
+    ! unnormalized phase-energy closure norm, and the number of dependent
+    ! active-phase combinations.
+    integer, public :: iMQMQADiagnosticPhaseStructureRank(2) = 0
+    ! Per paired baseline/corrected system: number of elements, charged
+    ! constraints, active solution phases, active pure phases, total active
+    ! phases, nominal phase-rule limit, global iteration, and whether the
+    ! count-based CorrectPhaseRule condition would fire.  This distinguishes
+    ! the nominal component count from the measured active-stoichiometry rank.
+    integer, public :: iMQMQADiagnosticPhaseRuleSummary(8,2) = 0
+    real(8), public :: dMQMQADiagnosticPhaseStructureSummary(7,2) = 0D0
+    real(8), allocatable, public :: dMQMQADiagnosticPhaseDependencyVector(:,:,:)
+    real(8), allocatable, public :: dMQMQADiagnosticPhaseDependencyProjection(:,:)
+    ! Rows are the raw stoichiometry-column norm and phase-energy RHS value
+    ! for each active solution/pure phase equation.
+    real(8), allocatable, public :: dMQMQADiagnosticPhaseEquationData(:,:,:)
+    integer, parameter, public :: nMQMQADiagnosticMaxPhaseChangeChecks = 32
+    integer, parameter, public :: nMQMQADiagnosticMaxActivePhases = 16
+    integer, public :: nMQMQADiagnosticPhaseChangeChecks = 0
+    ! Rows are global iteration, elements, charged constraints, active
+    ! solution phases, active pure phases, GEMNewton INFO, pass/fail, and
+    ! numerical rank of the active element-by-phase stoichiometry block.
+    integer, public :: iMQMQADiagnosticPhaseChangeCheck(8,nMQMQADiagnosticMaxPhaseChangeChecks) = 0
+    integer, public :: iMQMQADiagnosticPhaseChangeAssemblage( &
+        nMQMQADiagnosticMaxActivePhases,nMQMQADiagnosticMaxPhaseChangeChecks) = 0
+    ! Rows are maximum absolute update, active acceptance threshold, minimum
+    ! active phase amount, and the ordinary amount-removal tolerance.
+    real(8), public :: dMQMQADiagnosticPhaseChangeCheck(4,nMQMQADiagnosticMaxPhaseChangeChecks) = 0D0
+    ! Candidate 1 is a physically grouped gauge projection of the production
+    ! LU result; candidate 2 is an algebraically equivalent row/column-
+    ! equilibrated exact solve.  Neither candidate is returned to GEMNewton.
+    integer, public :: iMQMQADiagnosticConstrainedInfo(2,2) = 0
+    integer, public :: iMQMQADiagnosticConstrainedDecision(2,2,2) = 0
+    real(8), public :: dMQMQADiagnosticConstrainedRHSResidual(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticConstrainedResidual(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticConstrainedSolutionNorm(2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticConstrainedGroupNorm(3,2,2) = 0D0
+    real(8), public :: dMQMQADiagnosticConstrainedDecisionForce(3,2,2) = 0D0
     ! Test-only causal probe: enter the adaptive MQMQA path but always return
     ! its independently solved historical system without testing candidates.
     logical, public :: lMQMQADiagnosticForceZeroAlpha = .FALSE.
@@ -86,8 +180,45 @@ module ModuleGEMNewtonDiagnosticCapture
     public :: CaptureMQMQAPhaseDecision
     public :: CaptureMQMQACandidateComparison, CaptureMQMQAPhaseRemovalEvent
     public :: RecordMQMQAPhasePathCandidate
+    public :: CaptureMQMQAPhaseChangeCheck
 
 contains
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Record one initialization/global candidate check without changing its outcome.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQAPhaseChangeCheck(iIteration,nElementCount,nChargeCount,nSolutionCount, &
+        nPureCount,iInfo,lPass,iActiveRank,dMaximumUpdate,dThreshold,dMinimumAmount,dRemovalTolerance, &
+        iAssemblageIn)
+
+        integer, intent(in) :: iIteration, nElementCount, nChargeCount, nSolutionCount, nPureCount, iInfo
+        integer, intent(in) :: iActiveRank
+        logical, intent(in) :: lPass
+        real(8), intent(in) :: dMaximumUpdate, dThreshold, dMinimumAmount, dRemovalTolerance
+        integer, intent(in) :: iAssemblageIn(:)
+        integer :: i, iCheck, iWrite
+
+        if (.NOT. lMQMQADiagnosticMinimumNormStudy) return
+        if (nMQMQADiagnosticPhaseChangeChecks >= nMQMQADiagnosticMaxPhaseChangeChecks) return
+        iCheck = nMQMQADiagnosticPhaseChangeChecks+1
+        nMQMQADiagnosticPhaseChangeChecks = iCheck
+        iMQMQADiagnosticPhaseChangeCheck(:,iCheck) = [iIteration,nElementCount,nChargeCount, &
+            nSolutionCount,nPureCount,iInfo,MERGE(1,0,lPass),iActiveRank]
+        dMQMQADiagnosticPhaseChangeCheck(:,iCheck) = &
+            [dMaximumUpdate,dThreshold,dMinimumAmount,dRemovalTolerance]
+        iWrite = 0
+        do i = 1,nPureCount
+            if (iWrite >= nMQMQADiagnosticMaxActivePhases) exit
+            iWrite = iWrite+1
+            iMQMQADiagnosticPhaseChangeAssemblage(iWrite,iCheck) = iAssemblageIn(i)
+        end do
+        do i = nElementCount,nElementCount-nSolutionCount+1,-1
+            if (iWrite >= nMQMQADiagnosticMaxActivePhases) exit
+            iWrite = iWrite+1
+            iMQMQADiagnosticPhaseChangeAssemblage(iWrite,iCheck) = iAssemblageIn(i)
+        end do
+
+    end subroutine CaptureMQMQAPhaseChangeCheck
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Accumulate model-independent same-state phase-path diagnostics for one alpha candidate.
@@ -124,6 +255,7 @@ contains
         real(8), intent(in) :: dA(:,:), dB(:)
 
         if (.NOT. lCaptureGEMNewtonSystem) return
+        if (lCaptureFirstGEMNewtonCorrectionPair .AND. lGEMNewtonCorrectedSystemCaptured) return
         if ((nVar <= 0) .OR. (SIZE(dA,1) < nVar) .OR. (SIZE(dA,2) < nVar) .OR. &
             (SIZE(dB) < nVar)) return
 
@@ -147,6 +279,7 @@ contains
         real(8), intent(in) :: dA(:,:), dB(:)
 
         if (.NOT. lCaptureGEMNewtonCorrectedSystem) return
+        if (lCaptureFirstGEMNewtonCorrectionPair .AND. lGEMNewtonCorrectedSystemCaptured) return
         if ((nVar <= 0) .OR. (SIZE(dA,1) < nVar) .OR. (SIZE(dA,2) < nVar) .OR. &
             (SIZE(dB) < nVar)) return
 
@@ -368,6 +501,18 @@ contains
         if (allocated(dCapturedGEMNewtonB)) deallocate(dCapturedGEMNewtonB)
         if (allocated(dCapturedGEMNewtonCorrectedA)) deallocate(dCapturedGEMNewtonCorrectedA)
         if (allocated(dCapturedGEMNewtonCorrectedB)) deallocate(dCapturedGEMNewtonCorrectedB)
+        if (allocated(dMQMQADiagnosticNullModeSummary)) deallocate(dMQMQADiagnosticNullModeSummary)
+        if (allocated(iMQMQADiagnosticNullModeDecisionChanges)) &
+            deallocate(iMQMQADiagnosticNullModeDecisionChanges)
+        if (allocated(dMQMQADiagnosticLeftNullSummary)) deallocate(dMQMQADiagnosticLeftNullSummary)
+        if (allocated(dMQMQADiagnosticLeftNullVector)) deallocate(dMQMQADiagnosticLeftNullVector)
+        if (allocated(dMQMQADiagnosticRightNullVector)) deallocate(dMQMQADiagnosticRightNullVector)
+        if (allocated(iMQMQADiagnosticEquationIdentity)) deallocate(iMQMQADiagnosticEquationIdentity)
+        if (allocated(dMQMQADiagnosticPhaseDependencyVector)) &
+            deallocate(dMQMQADiagnosticPhaseDependencyVector)
+        if (allocated(dMQMQADiagnosticPhaseDependencyProjection)) &
+            deallocate(dMQMQADiagnosticPhaseDependencyProjection)
+        if (allocated(dMQMQADiagnosticPhaseEquationData)) deallocate(dMQMQADiagnosticPhaseEquationData)
         if (allocated(iCapturedMQMQAAssemblage)) deallocate(iCapturedMQMQAAssemblage)
         if (allocated(iCapturedMQMQAAcceptedCount)) deallocate(iCapturedMQMQAAcceptedCount)
         if (allocated(iCapturedMQMQAEligibleCount)) deallocate(iCapturedMQMQAEligibleCount)
@@ -396,6 +541,37 @@ contains
             deallocate(dCapturedMQMQAMinimumBoundaryFraction)
         lCaptureGEMNewtonSystem = .FALSE.
         lCaptureGEMNewtonCorrectedSystem = .FALSE.
+        lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
+        lMQMQADiagnosticMinimumNormStudy = .FALSE.
+        lMQMQADiagnosticMinimumNormCaptured = .FALSE.
+        iMQMQADiagnosticMinimumNormRank = 0
+        iMQMQADiagnosticMinimumNormInfo = 0
+        iMQMQADiagnosticMinimumNormDecision = 0
+        dMQMQADiagnosticMinimumNormRHSResidual = 0D0
+        dMQMQADiagnosticMinimumNormResidual = 0D0
+        dMQMQADiagnosticMinimumNormSolutionNorm = 0D0
+        dMQMQADiagnosticMinimumNormRelativeDifference = 0D0
+        dMQMQADiagnosticMinimumNormNullResidual = 0D0
+        dMQMQADiagnosticMinimumNormGammaDifference = 0D0
+        dMQMQADiagnosticMinimumNormDecisionForce = 0D0
+        dMQMQADiagnosticMinimumNormCrossSystemDifference = 0D0
+        dMQMQADiagnosticMinimumNormCrossGammaDifference = 0D0
+        dMQMQADiagnosticNullSpaceComparison = 0D0
+        iMQMQADiagnosticPhaseStructureRank = 0
+        iMQMQADiagnosticPhaseRuleSummary = 0
+        dMQMQADiagnosticPhaseStructureSummary = 0D0
+        nMQMQADiagnosticPhaseChangeChecks = 0
+        iMQMQADiagnosticPhaseChangeCheck = 0
+        iMQMQADiagnosticPhaseChangeAssemblage = 0
+        dMQMQADiagnosticPhaseChangeCheck = 0D0
+        dMQMQADiagnosticMinimumNormSingularSummary = 0D0
+        iMQMQADiagnosticConstrainedInfo = 0
+        iMQMQADiagnosticConstrainedDecision = 0
+        dMQMQADiagnosticConstrainedRHSResidual = 0D0
+        dMQMQADiagnosticConstrainedResidual = 0D0
+        dMQMQADiagnosticConstrainedSolutionNorm = 0D0
+        dMQMQADiagnosticConstrainedGroupNorm = 0D0
+        dMQMQADiagnosticConstrainedDecisionForce = 0D0
         lGEMNewtonSystemCaptured = .FALSE.
         lGEMNewtonCorrectedSystemCaptured = .FALSE.
         lMQMQADiagnosticForceZeroAlpha = .FALSE.
