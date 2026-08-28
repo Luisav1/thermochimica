@@ -90,9 +90,18 @@ module ModuleGEMNewtonDiagnosticCapture
     ! Rows are the raw stoichiometry-column norm and phase-energy RHS value
     ! for each active solution/pure phase equation.
     real(8), allocatable, public :: dMQMQADiagnosticPhaseEquationData(:,:,:)
-    integer, parameter, public :: nMQMQADiagnosticMaxPhaseChangeChecks = 32
+    ! The diagnostic is opt-in, but long MQMQA hardening cases can perform far
+    ! more than 32 phase-change trials.  Retain a bounded 512-entry history and
+    ! report any overflow rather than silently treating a prefix as complete.
+    integer, parameter, public :: nMQMQADiagnosticMaxPhaseChangeChecks = 512
     integer, parameter, public :: nMQMQADiagnosticMaxActivePhases = 16
     integer, public :: nMQMQADiagnosticPhaseChangeChecks = 0
+    integer, public :: nMQMQADiagnosticPhaseChangeChecksDropped = 0
+    integer, public :: nMQMQADiagnosticPhaseChangeChecksObserved = 0
+    integer, public :: nMQMQADiagnosticRankDeficientChecksObserved = 0
+    integer, public :: nMQMQADiagnosticPassingRankDeficientChecksObserved = 0
+    integer, public :: nMQMQADiagnosticMaximumNullityObserved = 0
+    integer, public :: nMQMQADiagnosticMaximumBasisCandidatesObserved = 0
     ! Rows are global iteration, elements, charged constraints, active
     ! solution phases, active pure phases, GEMNewton INFO, pass/fail, and
     ! numerical rank of the active element-by-phase stoichiometry block.
@@ -121,6 +130,19 @@ module ModuleGEMNewtonDiagnosticCapture
     ! Opt-in, test-only study of whether a candidate Newton solve immediately
     ! crosses a production phase-addition or phase-removal boundary.
     logical, public :: lMQMQADiagnosticPhasePathStudy = .FALSE.
+    ! Opt-in reduced-phase-set experiment.  The pre-decision assemblage is
+    ! staged before an addition attempt and retained only when that attempt
+    ! produces a rank-dependent active phase set.  An external diagnostic
+    ! independently converges reduced candidates at the same T, P, and bulk
+    ! composition; this capture is inactive in production.
+    logical, public :: lMQMQADiagnosticReducedSetStudy = .FALSE.
+    logical, public :: lMQMQADiagnosticReducedSetStateCaptured = .FALSE.
+    integer, public :: iMQMQADiagnosticReducedSetIteration = 0
+    integer, public :: iMQMQADiagnosticReducedSetRank = 0
+    integer, allocatable, public :: iMQMQADiagnosticReducedSetAssemblage(:)
+    integer, allocatable, public :: iMQMQADiagnosticReducedSetDependentAssemblage(:)
+    integer, allocatable :: iMQMQADiagnosticStagedAssemblage(:)
+    integer :: iMQMQADiagnosticStagedIteration = 0
     integer, public :: nMQMQADiagnosticPhasePathCandidates = 0
     integer, public :: nMQMQADiagnosticLeadingIdentityChanges = 0
     integer, public :: nMQMQADiagnosticEligibilityCrossings = 0
@@ -181,8 +203,45 @@ module ModuleGEMNewtonDiagnosticCapture
     public :: CaptureMQMQACandidateComparison, CaptureMQMQAPhaseRemovalEvent
     public :: RecordMQMQAPhasePathCandidate
     public :: CaptureMQMQAPhaseChangeCheck
+    public :: StageMQMQAReducedSetState, CommitMQMQAReducedSetState
 
 contains
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Stage the active assemblage immediately before a phase-addition decision.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine StageMQMQAReducedSetState(iIteration,iAssemblageIn)
+
+        integer, intent(in) :: iIteration, iAssemblageIn(:)
+
+        if (.NOT. lMQMQADiagnosticReducedSetStudy) return
+        if (allocated(iMQMQADiagnosticStagedAssemblage)) deallocate(iMQMQADiagnosticStagedAssemblage)
+        allocate(iMQMQADiagnosticStagedAssemblage(SIZE(iAssemblageIn)))
+        iMQMQADiagnosticStagedIteration = iIteration
+        iMQMQADiagnosticStagedAssemblage = iAssemblageIn
+
+    end subroutine StageMQMQAReducedSetState
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Retain the staged state after a rank-dependent phase-change trial is observed.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CommitMQMQAReducedSetState(iDependentAssemblage,iActiveRank)
+
+        integer, intent(in) :: iDependentAssemblage(:), iActiveRank
+
+        if (.NOT. lMQMQADiagnosticReducedSetStudy) return
+        if (lMQMQADiagnosticReducedSetStateCaptured) return
+        if (.NOT. allocated(iMQMQADiagnosticStagedAssemblage)) return
+        allocate(iMQMQADiagnosticReducedSetAssemblage(SIZE(iMQMQADiagnosticStagedAssemblage)), &
+            iMQMQADiagnosticReducedSetDependentAssemblage(SIZE(iDependentAssemblage)))
+        iMQMQADiagnosticReducedSetIteration = iMQMQADiagnosticStagedIteration
+        iMQMQADiagnosticReducedSetRank = iActiveRank
+        iMQMQADiagnosticReducedSetAssemblage = iMQMQADiagnosticStagedAssemblage
+        iMQMQADiagnosticReducedSetDependentAssemblage = iDependentAssemblage
+        lMQMQADiagnosticReducedSetStateCaptured = .TRUE.
+
+    end subroutine CommitMQMQAReducedSetState
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Record one initialization/global candidate check without changing its outcome.
@@ -196,10 +255,29 @@ contains
         logical, intent(in) :: lPass
         real(8), intent(in) :: dMaximumUpdate, dThreshold, dMinimumAmount, dRemovalTolerance
         integer, intent(in) :: iAssemblageIn(:)
-        integer :: i, iCheck, iWrite
+        integer :: i, iCheck, iWrite, nActive, nNullity
 
-        if (.NOT. lMQMQADiagnosticMinimumNormStudy) return
-        if (nMQMQADiagnosticPhaseChangeChecks >= nMQMQADiagnosticMaxPhaseChangeChecks) return
+        if (.NOT. (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy)) return
+        nMQMQADiagnosticPhaseChangeChecksObserved = &
+            nMQMQADiagnosticPhaseChangeChecksObserved+1
+        nActive = nSolutionCount+nPureCount
+        nNullity = nActive-iActiveRank
+        if (nNullity > 0) then
+            nMQMQADiagnosticRankDeficientChecksObserved = &
+                nMQMQADiagnosticRankDeficientChecksObserved+1
+            if (lPass) nMQMQADiagnosticPassingRankDeficientChecksObserved = &
+                nMQMQADiagnosticPassingRankDeficientChecksObserved+1
+            nMQMQADiagnosticMaximumNullityObserved = &
+                MAX(nMQMQADiagnosticMaximumNullityObserved,nNullity)
+            nMQMQADiagnosticMaximumBasisCandidatesObserved = &
+                MAX(nMQMQADiagnosticMaximumBasisCandidatesObserved, &
+                    BinomialCount(nActive,iActiveRank))
+        end if
+        if (nMQMQADiagnosticPhaseChangeChecks >= nMQMQADiagnosticMaxPhaseChangeChecks) then
+            nMQMQADiagnosticPhaseChangeChecksDropped = &
+                nMQMQADiagnosticPhaseChangeChecksDropped+1
+            return
+        end if
         iCheck = nMQMQADiagnosticPhaseChangeChecks+1
         nMQMQADiagnosticPhaseChangeChecks = iCheck
         iMQMQADiagnosticPhaseChangeCheck(:,iCheck) = [iIteration,nElementCount,nChargeCount, &
@@ -219,6 +297,24 @@ contains
         end do
 
     end subroutine CaptureMQMQAPhaseChangeCheck
+
+
+    integer function BinomialCount(n,k)
+
+        integer, intent(in) :: n, k
+        integer :: i, kSmall
+
+        if ((k < 0) .OR. (k > n)) then
+            BinomialCount = 0
+            return
+        end if
+        kSmall = MIN(k,n-k)
+        BinomialCount = 1
+        do i = 1,kSmall
+            BinomialCount = BinomialCount*(n-kSmall+i)/i
+        end do
+
+    end function BinomialCount
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Accumulate model-independent same-state phase-path diagnostics for one alpha candidate.
@@ -539,6 +635,11 @@ contains
         if (allocated(dCapturedMQMQAMinGibbs)) deallocate(dCapturedMQMQAMinGibbs)
         if (allocated(dCapturedMQMQAMinimumBoundaryFraction)) &
             deallocate(dCapturedMQMQAMinimumBoundaryFraction)
+        if (allocated(iMQMQADiagnosticReducedSetAssemblage)) &
+            deallocate(iMQMQADiagnosticReducedSetAssemblage)
+        if (allocated(iMQMQADiagnosticReducedSetDependentAssemblage)) &
+            deallocate(iMQMQADiagnosticReducedSetDependentAssemblage)
+        if (allocated(iMQMQADiagnosticStagedAssemblage)) deallocate(iMQMQADiagnosticStagedAssemblage)
         lCaptureGEMNewtonSystem = .FALSE.
         lCaptureGEMNewtonCorrectedSystem = .FALSE.
         lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
@@ -561,6 +662,12 @@ contains
         iMQMQADiagnosticPhaseRuleSummary = 0
         dMQMQADiagnosticPhaseStructureSummary = 0D0
         nMQMQADiagnosticPhaseChangeChecks = 0
+        nMQMQADiagnosticPhaseChangeChecksDropped = 0
+        nMQMQADiagnosticPhaseChangeChecksObserved = 0
+        nMQMQADiagnosticRankDeficientChecksObserved = 0
+        nMQMQADiagnosticPassingRankDeficientChecksObserved = 0
+        nMQMQADiagnosticMaximumNullityObserved = 0
+        nMQMQADiagnosticMaximumBasisCandidatesObserved = 0
         iMQMQADiagnosticPhaseChangeCheck = 0
         iMQMQADiagnosticPhaseChangeAssemblage = 0
         dMQMQADiagnosticPhaseChangeCheck = 0D0
@@ -577,6 +684,11 @@ contains
         lMQMQADiagnosticForceZeroAlpha = .FALSE.
         lMQMQADiagnosticRejectAcceptedCandidate = .FALSE.
         lMQMQADiagnosticPhasePathStudy = .FALSE.
+        lMQMQADiagnosticReducedSetStudy = .FALSE.
+        lMQMQADiagnosticReducedSetStateCaptured = .FALSE.
+        iMQMQADiagnosticReducedSetIteration = 0
+        iMQMQADiagnosticReducedSetRank = 0
+        iMQMQADiagnosticStagedIteration = 0
         nMQMQADiagnosticPhasePathCandidates = 0
         nMQMQADiagnosticLeadingIdentityChanges = 0
         nMQMQADiagnosticEligibilityCrossings = 0

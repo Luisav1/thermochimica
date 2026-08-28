@@ -2376,6 +2376,141 @@ any future rank-aware phase reduction must evaluate a thermodynamically
 defined reduced candidate or nonlinear progress rather than demand
 equilibrium closure before the candidate has converged.
 
+### Bounded reduced-phase-set convergence experiment
+
+The next diagnostic replaced the invalid off-equilibrium closure question with
+a thermodynamic comparison of independently converged reduced phase sets.  At
+the first adaptive FLiBe phase-addition trial whose active stoichiometry block
+had rank `2/3`, the diagnostic recorded:
+
+- the incumbent assemblage immediately before the trial;
+- the rank-dependent three-phase trial assemblage; and
+- the global iteration and measured rank.
+
+It then restored the same database, temperature, pressure, and elemental
+inventory for each independent calculation and ran ordinary Thermochimica
+restricted equilibrium for (a) the incumbent set and (b) each set formed by
+omitting one member of the dependent trial.  The historical final assemblage
+was not used to select a result, no phase name was hard-coded into the
+selection rule, and the MQMQA curvature correction was disabled during these
+comparison solves.  Feasibility required ordinary convergence, finite Gibbs
+energy, mass balance within the production tolerance, nonnegative phase
+amounts within tolerance, and a final active assemblage contained in the
+candidate set.
+
+Thermochimica's setup requires a pure-element reference species for every
+system element.  The diagnostic therefore constructs the smallest greedy set
+of reference-carrier phases from parsed species stoichiometry.  Both FLiBe
+databases selected `gas_ideal`.  A carrier may participate in setup, but a
+candidate is rejected if a carrier that was not requested becomes active in
+the converged result.  In the reported matrix the carrier remained inactive
+for every reduced candidate.
+
+| Database | LiF/BeF2 | Captured iteration | Rank | Lower-Gibbs distinct assemblage | Pure-set minus liquid Gibbs (J) |
+|---|---:|---:|---:|---|---:|
+| MSD-TC V4.1 | 45/55 | 54 | 2/3 | `MSFL` | 4747.8 |
+| MSD-TC V4.1 | 50/50 | 46 | 2/3 | `MSFL` | 4587.8 |
+| MSD-TC V4.1 | 55/45 | 46 | 2/3 | `MSFL` | 4127.0 |
+| MSTDB-TC V3.1 | 45/55 | 54 | 2/3 | `MSFL` | 4747.8 |
+| MSTDB-TC V3.1 | 50/50 | 46 | 2/3 | `MSFL` | 4587.8 |
+| MSTDB-TC V3.1 | 55/45 | 46 | 2/3 | `MSFL` | 4127.0 |
+
+All `24/24` restricted candidate calculations converged and satisfied the
+feasibility checks.  In every state, omitting either one of the redundant pure
+phases allowed the calculation to converge to the same distinct `MSFL`
+assemblage.  Omitting `MSFL`, or retaining the incumbent set, converged to
+`Li2BeF4(s) + BeF2(l)` at higher Gibbs energy.  The two routes that converged
+to `MSFL` differed by at most approximately `0.051 J`, or about `6e-8`
+relative to the system Gibbs magnitude.  That small route-dependent spread is
+reported as numerical solver evidence, not as a thermodynamically distinct
+winner between the two omission labels.
+
+This result supplies the missing positive evidence from the rejected
+instantaneous gate experiment: for all six captured decisions, a feasible
+independent reduced set exists, preserves the liquid `MSFL` phase, and has
+lower Gibbs energy than the pure-phase alternative.  It supports a future
+model-independent strategy that detects an overcomplete active trial,
+converges feasible reduced candidates, and selects among **distinct converged
+assemblages** by Gibbs energy.  It does not yet establish production behavior:
+candidate enumeration cost, state restoration, duplicate-assemblage handling,
+failure recovery, and the exact trigger boundary still require design and live
+solver verification.  Accordingly, no phase-selection logic or production
+default was changed by this checkpoint.
+
+### Rank frequency, candidate cost, and restoration hardening
+
+The one-phase-omitted construction above is complete only for the observed
+`rank 2/3` trials.  In general, if an active trial contains `k` phase columns
+with numerical rank `r`, its nullity is `d=k-r`, at least `d` columns must be
+removed to form an `r`-column basis, and a brute-force search can expose up to
+
+\[
+\binom{k}{r}=\binom{k}{d}
+\]
+
+candidate subsets.  Not every such subset is guaranteed to be independent.
+Therefore, the diagnostic now records the complete number of phase-change
+checks, rank-deficient checks, rank-deficient checks that passed the existing
+local `CheckPhaseChange` test, maximum nullity, and maximum combinatorial basis
+count.  A bounded detailed history retains at most 512 individual records,
+while separate aggregate counters continue to the end of the calculation and
+report any discarded detailed records.  Here, *locally passing* means only
+that `CheckPhaseChange` returned `lPhasePass=.TRUE.`; it does not by itself
+mean that the outer active-set algorithm permanently accepted the phase set.
+
+The 13-state portable MQ-4E-A matrix was rerun in fixed-alpha-one and adaptive
+modes with rank capture enabled.  Across all 26 corrected calculations, every
+recorded phase-change trial was full column rank: there were zero
+rank-deficient checks, zero locally passing rank-deficient checks, zero
+dropped detailed records, and maximum nullity zero.  The public CuFeC and
+FeTiVO cases therefore do not show that dependent candidate phase sets are a
+generic consequence of enabling MQMQA curvature.
+
+The two private FLiBe database versions show a sharply different pattern:
+
+| Database | LiF/BeF2 | All checks | Rank deficient | Locally passing deficient | Maximum nullity | Maximum `C(k,r)` | Forward/reverse CPU time (s) | Restoration mismatches |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| MSD-TC V4.1 | 45/55 | 1179 | 1098 | 8 | 1 | 3 | 0.341/0.337 | 0 |
+| MSD-TC V4.1 | 50/50 | 919 | 795 | 17 | 1 | 3 | 0.245/0.238 | 0 |
+| MSD-TC V4.1 | 55/45 | 380 | 354 | 6 | 1 | 3 | 0.238/0.229 | 0 |
+| MSTDB-TC V3.1 | 45/55 | 889 | 817 | 11 | 1 | 3 | 0.224/0.221 | 0 |
+| MSTDB-TC V3.1 | 50/50 | 297 | 242 | 6 | 1 | 3 | 0.215/0.208 | 0 |
+| MSTDB-TC V3.1 | 55/45 | 138 | 78 | 4 | 1 | 3 | 0.147/0.151 | 0 |
+
+Thus `3384/3802` observed FLiBe phase-change trials were rank deficient, but
+only `52` of those deficient trials passed the existing local phase-change
+test.  Every observed deficiency was `rank 2/3`, so the three one-phase-
+omitted subsets are the complete `C(3,2)=3` reduced-basis search for this
+matrix.  No current evidence establishes that future MQMQA systems must also
+have nullity one; higher-nullity systems could create combinatorial growth.
+
+For each of the six captured decisions, the diagnostic solved four candidates
+in forward order--the incumbent plus all three one-phase-omitted subsets--and
+then repeated the same four candidates in reverse order.  This produced
+`24+24` restricted equilibrium calculations.  All forward and reverse solves
+remained feasible, the same candidate labels returned the same final
+assemblages and Gibbs energies within the stated numerical comparison, and
+all six cases reported zero restoration mismatches.  The summed CPU times
+were approximately `1.41 s` forward and `1.38 s` in reverse order on the test container.  These
+times characterize the small external diagnostic only; they are not a
+production performance estimate.
+
+This establishes order-independent restoration for the conservative oracle
+used here: each candidate calls `ResetThermoAll`, reparses the same database,
+and reapplies the same temperature, pressure, elemental inventory, and phase
+restriction.  It does **not** establish that an in-place nested solve can save
+and restore every mutable GEM, phase-history, line-search, and adaptive-trust
+field.  A production implementation must either retain this expensive fresh-
+solve isolation or separately prove an explicit solver-state transaction.
+
+The measured trigger frequency also rules out blindly launching a reduced-set
+search at every rank-deficient FLiBe check.  The next production design must
+combine rank exposure with a later, thermodynamically meaningful trigger,
+screen dependent subsets before nonlinear solution, group duplicate converged
+assemblages, bound candidate count and failure handling, and demonstrate that
+candidate evaluation cannot recursively invoke itself.  None of those
+production mechanisms is implemented by this bounded checkpoint.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than

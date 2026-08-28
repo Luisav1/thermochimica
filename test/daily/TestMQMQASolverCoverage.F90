@@ -21,6 +21,13 @@ program TestMQMQASolverCoverage
         nMQMQADiagnosticEligibilityCrossings, nMQMQADiagnosticOrderingReversals, &
         nMQMQADiagnosticRemovalCrossings, &
         dMQMQADiagnosticMaxScaledForceShift, dMQMQADiagnosticMaxActiveAmountDisplacement
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: lMQMQADiagnosticReducedSetStudy, &
+        nMQMQADiagnosticPhaseChangeChecksDropped, &
+        nMQMQADiagnosticPhaseChangeChecksObserved, &
+        nMQMQADiagnosticRankDeficientChecksObserved, &
+        nMQMQADiagnosticPassingRankDeficientChecksObserved, &
+        nMQMQADiagnosticMaximumNullityObserved, &
+        nMQMQADiagnosticMaximumBasisCandidatesObserved
 
     implicit none
 
@@ -85,6 +92,12 @@ program TestMQMQASolverCoverage
         integer :: nReadinessResets = 0
         integer :: nReject(7) = 0
         integer :: nPath(5) = 0
+        integer :: nPhaseChangeChecks = 0
+        integer :: nPhaseChangeChecksDropped = 0
+        integer :: nRankDeficientChecks = 0
+        integer :: nPassingRankDeficientChecks = 0
+        integer :: nMaximumNullity = 0
+        integer :: nMaximumBasisCandidates = 0
         real(8) :: dMinimumBoundaryFraction = 1D0
         real(8) :: dIterationRatio = HUGE(1D0)
         real(8) :: dMaximumAlpha = 0D0
@@ -191,6 +204,9 @@ contains
             call SetMQMQAHessianAdaptiveControls(.TRUE.,1D0,iInfo)
             lMQMQADiagnosticPhasePathStudy = .TRUE.
         end if
+        ! Rank capture is diagnostic-only.  It records the active phase-column
+        ! rank at production phase-change checks without changing acceptance.
+        lMQMQADiagnosticReducedSetStudy = .TRUE.
 
         if (iInfo == 0) then
             call PrepareCase(iCase)
@@ -227,6 +243,7 @@ contains
             nMQMQADiagnosticRemovalCrossings]
         tCoverage%dPathMaximum = [dMQMQADiagnosticMaxScaledForceShift, &
             dMQMQADiagnosticMaxActiveAmountDisplacement]
+        call SummarizeRankDeficiency(tCoverage)
         tCoverage%dMinimumBoundaryFraction = dMQMQAHessianMinimumRejectedFraction
         tCoverage%dMaximumAlpha = dMQMQAHessianMaxSelectedAlpha
         tCoverage%dMaximumRatioA = dMQMQAHessianMaxRatioA
@@ -271,6 +288,21 @@ contains
         call ResetMQMQAHessianAdaptiveControls
 
     end subroutine RunCorrectedCase
+
+
+    subroutine SummarizeRankDeficiency(tCoverage)
+
+        type(CoverageResult), intent(inout) :: tCoverage
+        tCoverage%nPhaseChangeChecks = nMQMQADiagnosticPhaseChangeChecksObserved
+        tCoverage%nPhaseChangeChecksDropped = nMQMQADiagnosticPhaseChangeChecksDropped
+        tCoverage%nRankDeficientChecks = nMQMQADiagnosticRankDeficientChecksObserved
+        tCoverage%nPassingRankDeficientChecks = &
+            nMQMQADiagnosticPassingRankDeficientChecksObserved
+        tCoverage%nMaximumNullity = nMQMQADiagnosticMaximumNullityObserved
+        tCoverage%nMaximumBasisCandidates = &
+            nMQMQADiagnosticMaximumBasisCandidatesObserved
+
+    end subroutine SummarizeRankDeficiency
 
 
     subroutine ClassifyCoverage(iMode,tCoverage)
@@ -434,6 +466,19 @@ contains
             j = MODE_ADAPTIVE
             write(*,'(A20,1X,5I9,2ES17.5)') TRIM(tCoverage(i,j)%cCase), &
                 tCoverage(i,j)%nPath,tCoverage(i,j)%dPathMaximum
+        end do
+        write(*,'(/,A)') 'diagnostic active-phase rank exposure (no phase-selection changes)'
+        write(*,'(A)') 'case                 mode         checks dropped deficient passed-local max-nullity max-C(k,r)'
+        do i = 1,SIZE(tCoverage,1)
+            do j = 1,SIZE(tCoverage,2)
+                write(*,'(A20,1X,A12,6I11)') TRIM(tCoverage(i,j)%cCase), &
+                    TRIM(tCoverage(i,j)%cMode),tCoverage(i,j)%nPhaseChangeChecks, &
+                    tCoverage(i,j)%nPhaseChangeChecksDropped, &
+                    tCoverage(i,j)%nRankDeficientChecks, &
+                    tCoverage(i,j)%nPassingRankDeficientChecks, &
+                    tCoverage(i,j)%nMaximumNullity, &
+                    tCoverage(i,j)%nMaximumBasisCandidates
+            end do
         end do
         write(*,'(/,A)') 'Classification boundary: FULL_CURVATURE_EVIDENCE requires at least one full-alpha solve.'
         write(*,'(A)') 'REDUCED_CURVATURE_EVIDENCE means only damped positive corrections were used.'

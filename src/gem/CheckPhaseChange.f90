@@ -48,7 +48,8 @@ subroutine CheckPhaseChange(lPhasePass,INFO)
     USE ModuleThermo
     USE ModuleGEMSolver
     USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseChangeCheck, &
-        lMQMQADiagnosticMinimumNormStudy
+        lMQMQADiagnosticMinimumNormStudy, lMQMQADiagnosticReducedSetStudy, &
+        CommitMQMQAReducedSetState
 
     implicit none
 
@@ -121,7 +122,11 @@ subroutine CheckPhaseChange(lPhasePass,INFO)
         MINVAL(dMolesPhase(nElements-nSolnPhases+1:nElements)))
     if (nConPhases+nSolnPhases == 0) dMinActiveAmount = 0D0
     iActiveRank = 0
-    if (lMQMQADiagnosticMinimumNormStudy) call AnalyzeActivePhaseRank(iActiveRank)
+    if (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy) &
+        call AnalyzeActivePhaseRank(iActiveRank)
+    if (lMQMQADiagnosticReducedSetStudy .AND. &
+        (iActiveRank < nConPhases+nSolnPhases)) &
+        call CommitMQMQAReducedSetState(iAssemblage(1:nElements),iActiveRank)
     call CaptureMQMQAPhaseChangeCheck(iterGlobal,nElements,nChargedConstraints,nSolnPhases,nConPhases, &
         INFO,lPhasePass,iActiveRank,MAXVAL(DABS(dUpdateVar)),dTemp,dMinActiveAmount,dTolerance(7),iAssemblage)
 

@@ -159,7 +159,8 @@ subroutine CheckPhaseAssemblage
 
     USE ModuleThermo
     USE ModuleGEMSolver
-    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseDecision
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseDecision, &
+        StageMQMQAReducedSetState
 
     implicit none
 
@@ -288,6 +289,7 @@ subroutine CheckPhaseAssemblage
                 dMinSolutionDrivingForce = dDrivingForceSoln(iMinSolutionDrivingForce)
                 call CaptureMQMQAPhaseDecision(iterGlobal,iMaxDrivingForce,dMaxDrivingForce, &
                     iMinSolutionDrivingForce,dMinSolutionDrivingForce)
+                call StageMQMQAReducedSetState(iterGlobal,iAssemblage(1:nElements))
 
 
                 ! Determine whether a pure condensed phase should be considered first or a solution phase.
