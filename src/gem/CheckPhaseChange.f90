@@ -49,11 +49,14 @@ subroutine CheckPhaseChange(lPhasePass,INFO)
     USE ModuleGEMSolver
     USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQAPhaseChangeCheck, &
         lMQMQADiagnosticMinimumNormStudy, lMQMQADiagnosticReducedSetStudy, &
-        CommitMQMQAReducedSetState
+        lMQMQADiagnosticRecoveryTrace, CommitMQMQAReducedSetState
 
     implicit none
 
     integer  ::  i, iActiveRank, j, INFO, nMiscPhases
+    integer, allocatable :: iActivePhases(:), iActivePivotPhases(:)
+    real(8), allocatable :: dActiveAmountStoichiometry(:,:), dActivePhaseAmounts(:), &
+        dActivePhaseGibbs(:), dActivePivotStoichiometry(:,:)
     real(8)  ::  dMinActiveAmount, dTemp
     logical  ::  lPhasePass
 
@@ -122,11 +125,16 @@ subroutine CheckPhaseChange(lPhasePass,INFO)
         MINVAL(dMolesPhase(nElements-nSolnPhases+1:nElements)))
     if (nConPhases+nSolnPhases == 0) dMinActiveAmount = 0D0
     iActiveRank = 0
-    if (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy) &
-        call AnalyzeActivePhaseRank(iActiveRank)
+    if (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy .OR. &
+        lMQMQADiagnosticRecoveryTrace) &
+        call AnalyzeActivePhaseRank(iActiveRank,iActivePivotPhases,dActivePivotStoichiometry, &
+            iActivePhases,dActiveAmountStoichiometry,dActivePhaseAmounts,dActivePhaseGibbs)
     if (lMQMQADiagnosticReducedSetStudy .AND. &
-        (iActiveRank < nConPhases+nSolnPhases)) &
-        call CommitMQMQAReducedSetState(iAssemblage(1:nElements),iActiveRank)
+        lPhasePass .AND. (iActiveRank < nConPhases+nSolnPhases) .AND. &
+        allocated(iActivePivotPhases) .AND. allocated(dActivePivotStoichiometry)) &
+        call CommitMQMQAReducedSetState(iAssemblage(1:nElements),iActiveRank,iActivePivotPhases, &
+            dActivePivotStoichiometry,iActivePhases,dActiveAmountStoichiometry,dActivePhaseAmounts, &
+            dActivePhaseGibbs)
     call CaptureMQMQAPhaseChangeCheck(iterGlobal,nElements,nChargedConstraints,nSolnPhases,nConPhases, &
         INFO,lPhasePass,iActiveRank,MAXVAL(DABS(dUpdateVar)),dTemp,dMinActiveAmount,dTolerance(7),iAssemblage)
 
@@ -137,33 +145,63 @@ contains
     !---------------------------------------------------------------------------------------------------------
     !> \brief Report the numerical rank of the active element-by-phase stoichiometry block.
     !---------------------------------------------------------------------------------------------------------
-    subroutine AnalyzeActivePhaseRank(nRank)
+    subroutine AnalyzeActivePhaseRank(nRank,iPivotPhases,dPivotStoichiometry,iActivePhases, &
+        dAmountStoichiometry,dPhaseAmounts,dPhaseGibbs)
 
         integer, intent(out) :: nRank
-        integer :: iElement, iInfoSVD, iPhase, iSolution, lWork, nActive
+        integer, allocatable, intent(out) :: iActivePhases(:), iPivotPhases(:)
+        real(8), allocatable, intent(out) :: dAmountStoichiometry(:,:), dPhaseAmounts(:), &
+            dPhaseGibbs(:), dPivotStoichiometry(:,:)
+        integer :: iElement, iInfoQR, iInfoSVD, iPhase, iSolution, lWork, nActive
+        integer, allocatable :: iPivot(:)
         logical :: lHaltDivide, lHaltInvalid, lHaltOverflow
-        real(8) :: dScale, dToleranceRank
-        real(8), allocatable :: C(:,:), dSingular(:), dU(:,:), dVT(:,:), dWork(:)
+        real(8) :: dColumnNorm, dScale, dToleranceRank
+        real(8), allocatable :: C(:,:), CNormalized(:,:), CQR(:,:), dSingular(:), dTau(:), &
+            dU(:,:), dVT(:,:), dWork(:)
 
         nRank = 0
         nActive = nConPhases+nSolnPhases
         if ((nElements <= 0) .OR. (nActive <= 0)) return
-        allocate(C(nElements,nActive),dSingular(MIN(nElements,nActive)),dU(1,1),dVT(1,1))
+        allocate(C(nElements,nActive),CNormalized(nElements,nActive),CQR(nElements,nActive), &
+            iActivePhases(nActive),iPivot(nActive),dAmountStoichiometry(nElements,nActive), &
+            dPhaseAmounts(nActive),dPhaseGibbs(nActive), &
+            dSingular(MIN(nElements,nActive)),dTau(MIN(nElements,nActive)),dU(1,1),dVT(1,1))
         C = 0D0
+        dAmountStoichiometry = 0D0
+        dPhaseAmounts = 0D0
+        dPhaseGibbs = 0D0
+        iActivePhases = 0
         do iPhase = 1,nSolnPhases
             iSolution = -iAssemblage(nElements-iPhase+1)
+            iActivePhases(iPhase) = -iSolution
+            dPhaseAmounts(iPhase) = dMolesPhase(nElements-iPhase+1)
             do iElement = 1,nElements
-                C(iElement,iPhase) = dEffStoichSolnPhase(iSolution,iElement) * &
-                    dMolesPhase(nElements-iPhase+1)
+                dAmountStoichiometry(iElement,iPhase) = dEffStoichSolnPhase(iSolution,iElement)
+                C(iElement,iPhase) = dAmountStoichiometry(iElement,iPhase) * dPhaseAmounts(iPhase)
             end do
+            if (dPhaseAmounts(iPhase) > 0D0) &
+                dPhaseGibbs(iPhase) = dGibbsSolnPhase(iSolution)/dPhaseAmounts(iPhase)
         end do
         do iPhase = 1,nConPhases
-            C(:,nSolnPhases+iPhase) = dStoichSpecies(iAssemblage(iPhase),1:nElements)
+            iActivePhases(nSolnPhases+iPhase) = iAssemblage(iPhase)
+            dPhaseAmounts(nSolnPhases+iPhase) = dMolesPhase(iPhase)
+            dAmountStoichiometry(:,nSolnPhases+iPhase) = &
+                dStoichSpecies(iAssemblage(iPhase),1:nElements)
+            C(:,nSolnPhases+iPhase) = dAmountStoichiometry(:,nSolnPhases+iPhase)
+            dPhaseGibbs(nSolnPhases+iPhase) = dStdGibbsEnergy(iAssemblage(iPhase))
         end do
         if (.NOT. ALL(IEEE_IS_FINITE(C))) return
         dScale = MAXVAL(DABS(C))
         if ((.NOT. IEEE_IS_FINITE(dScale)) .OR. (dScale <= 0D0)) return
         C = C/dScale
+        CQR = C
+        do iPhase = 1,nActive
+            dColumnNorm = SQRT(SUM(CQR(:,iPhase)**2))
+            if (dColumnNorm > 0D0) CQR(:,iPhase) = CQR(:,iPhase)/dColumnNorm
+        end do
+        CNormalized = CQR
+        iPivot = 0
+        iInfoQR = -1
         lWork = MAX(1,5*MAX(nElements,nActive))
         allocate(dWork(lWork))
         call IEEE_GET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
@@ -173,12 +211,21 @@ contains
         call IEEE_SET_HALTING_MODE(IEEE_INVALID,.FALSE.)
         call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,.FALSE.)
         call DGESVD('N','N',nElements,nActive,C,nElements,dSingular,dU,1,dVT,1,dWork,lWork,iInfoSVD)
+        if (iInfoSVD == 0) &
+            call DGEQP3(nElements,nActive,CQR,nElements,iPivot,dTau,dWork,lWork,iInfoQR)
         call IEEE_SET_HALTING_MODE(IEEE_DIVIDE_BY_ZERO,lHaltDivide)
         call IEEE_SET_HALTING_MODE(IEEE_INVALID,lHaltInvalid)
         call IEEE_SET_HALTING_MODE(IEEE_OVERFLOW,lHaltOverflow)
         if (iInfoSVD /= 0) return
         dToleranceRank = DBLE(MAX(nElements,nActive))*EPSILON(1D0)*dSingular(1)
         nRank = COUNT(dSingular > dToleranceRank)
+        if (iInfoQR /= 0) return
+        allocate(iPivotPhases(nActive))
+        allocate(dPivotStoichiometry(nElements,nActive))
+        do iPhase = 1,nActive
+            iPivotPhases(iPhase) = iActivePhases(iPivot(iPhase))
+            dPivotStoichiometry(:,iPhase) = CNormalized(:,iPivot(iPhase))
+        end do
 
     end subroutine AnalyzeActivePhaseRank
 

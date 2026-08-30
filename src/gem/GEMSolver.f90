@@ -88,11 +88,24 @@ subroutine GEMSolver
     USE ModuleThermo
     USE ModuleGEMSolver
     USE ModuleGEMNewtonDiagnosticCapture, ONLY: BeginMQMQATrajectoryAttempt, &
-        CaptureMQMQATrajectoryPoint
+        CaptureMQMQATrajectoryPoint, CaptureMQMQAFixedPointState, &
+        CaptureMQMQARecoveryPreStep, CaptureMQMQARecoveryNewton, &
+        CaptureMQMQARecoveryAssemblage, &
+        lCaptureMQMQAFixedPointAtConvergence, lMQMQAFixedPointCaptureAttempted, &
+        iMQMQAFixedPointCaptureInfo, dMQMQAFixedPointRecomputeDifference, &
+        dMQMQAFixedPointRestorationError, &
+        dCapturedMQMQAFixedPointSolvedUpdate, &
+        lCaptureGEMNewtonSystem, lCaptureGEMNewtonCorrectedSystem, &
+        lCaptureFirstGEMNewtonCorrectionPair
 
     implicit none
 
-    integer::   INFO
+    integer::   INFO, iCaptureInfo
+    logical :: lAdaptiveSave, lRevertSave, lUseMQMQASave
+    real(8) :: dAlphaSave, dGibbsSave
+    integer, allocatable :: iAssemblageSave(:)
+    real(8), allocatable :: dChemicalSave(:), dEffStoichSave(:,:), dElementSave(:), &
+        dFractionSave(:), dMolesSave(:), dPhaseSave(:), dUpdateSave(:)
 
 
     ! Initialize the GEM solver:
@@ -119,6 +132,9 @@ subroutine GEMSolver
     ! Begin the global iteration cycle:
     LOOP_GEMSolver: do iterGlobal = 1, iterGlobalMax
 
+        call CaptureMQMQARecoveryPreStep(iterGlobal,iterLast,iterRevert,lRevertSystem, &
+            iAssemblage(1:nElements),dGEMFunctionNorm)
+
         ! Ensures Newton and line-search paths know whether the current assemblage contains plain RKMP
         call UpdateRKMPHessianActivity
 
@@ -127,12 +143,15 @@ subroutine GEMSolver
 
         ! Construct the Hessian matrix and compute the direction vector:
         call GEMNewton(INFO)
+        call CaptureMQMQARecoveryNewton(iterGlobal,INFO,MAXVAL(DABS(dUpdateVar)), &
+            dMQMQAHessianSelectedAlpha)
 
         ! Perform a line search using the direction vector:
         call GEMLineSearch
 
         ! Check if the estimated phase assemblage needs to be adjusted:
         call CheckPhaseAssemblage
+        call CaptureMQMQARecoveryAssemblage(iterGlobal,iterLast,iterRevert,lRevertSystem)
 
         call CaptureMQMQATrajectoryPoint(iterGlobal,iterLast,iAssemblage(1:nElements), &
             dMolesPhase(1:nElements),dElementPotential(1:nElements), &
@@ -146,6 +165,78 @@ subroutine GEMSolver
         ! Check convergence:
         ! if (iterGlobal /= iterLast) call CheckConvergence
         call CheckConvergence
+
+        ! Opt-in fixed-point experiment: reconstruct the baseline and full
+        ! MQMQA-corrected Newton systems at the exact live state that has just
+        ! satisfied the production convergence test.  Every mutable solver
+        ! array and runtime control is restored before normal exit.
+        if (lConverged .AND. lCaptureMQMQAFixedPointAtConvergence .AND. &
+            (.NOT. lMQMQAFixedPointCaptureAttempted)) then
+            allocate(dChemicalSave(SIZE(dChemicalPotential)),dFractionSave(SIZE(dMolFraction)), &
+                dMolesSave(SIZE(dMolesSpecies)),dPhaseSave(SIZE(dMolesPhase)), &
+                dEffStoichSave(SIZE(dEffStoichSolnPhase,1),SIZE(dEffStoichSolnPhase,2)), &
+                dElementSave(SIZE(dElementPotential)),dUpdateSave(SIZE(dUpdateVar)), &
+                iAssemblageSave(SIZE(iAssemblage)))
+            dChemicalSave = dChemicalPotential
+            dFractionSave = dMolFraction
+            dMolesSave = dMolesSpecies
+            dPhaseSave = dMolesPhase
+            dEffStoichSave = dEffStoichSolnPhase
+            dElementSave = dElementPotential
+            dUpdateSave = dUpdateVar
+            iAssemblageSave = iAssemblage
+            dGibbsSave = dGibbsEnergySys
+            lRevertSave = lRevertSystem
+            lUseMQMQASave = lUseMQMQAExactHessian
+            lAdaptiveSave = lMQMQAHessianAdaptiveMode
+            dAlphaSave = dMQMQAHessianAlpha
+
+            call CaptureMQMQAFixedPointState(iAssemblage,dElementPotential,dChemicalPotential, &
+                dMolesPhase,nElements,nSolnPhases,nConPhases)
+            lUseMQMQAExactHessian = .TRUE.
+            lMQMQAHessianAdaptiveMode = .FALSE.
+            dMQMQAHessianAlpha = 1D0
+            lCaptureGEMNewtonSystem = .TRUE.
+            lCaptureGEMNewtonCorrectedSystem = .TRUE.
+            lCaptureFirstGEMNewtonCorrectionPair = .TRUE.
+            call GEMNewton(iCaptureInfo)
+            iMQMQAFixedPointCaptureInfo = iCaptureInfo
+            if (allocated(dCapturedMQMQAFixedPointSolvedUpdate)) &
+                deallocate(dCapturedMQMQAFixedPointSolvedUpdate)
+            allocate(dCapturedMQMQAFixedPointSolvedUpdate(SIZE(dUpdateVar)))
+            dCapturedMQMQAFixedPointSolvedUpdate = dUpdateVar
+            lMQMQAFixedPointCaptureAttempted = .TRUE.
+            lCaptureGEMNewtonSystem = .FALSE.
+            lCaptureGEMNewtonCorrectedSystem = .FALSE.
+            lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
+
+            dMQMQAFixedPointRecomputeDifference = DMAX1(MAXVAL(ABS(dChemicalPotential-dChemicalSave)), &
+                MAXVAL(ABS(dMolFraction-dFractionSave)),MAXVAL(ABS(dMolesSpecies-dMolesSave)), &
+                MAXVAL(ABS(dMolesPhase-dPhaseSave)),MAXVAL(ABS(dEffStoichSolnPhase-dEffStoichSave)), &
+                MAXVAL(ABS(dElementPotential-dElementSave)),ABS(dGibbsEnergySys-dGibbsSave))
+            if (ANY(iAssemblage /= iAssemblageSave)) dMQMQAFixedPointRecomputeDifference = HUGE(1D0)
+
+            dChemicalPotential = dChemicalSave
+            dMolFraction = dFractionSave
+            dMolesSpecies = dMolesSave
+            dMolesPhase = dPhaseSave
+            dEffStoichSolnPhase = dEffStoichSave
+            dElementPotential = dElementSave
+            dUpdateVar = dUpdateSave
+            iAssemblage = iAssemblageSave
+            dGibbsEnergySys = dGibbsSave
+            lRevertSystem = lRevertSave
+            lUseMQMQAExactHessian = lUseMQMQASave
+            lMQMQAHessianAdaptiveMode = lAdaptiveSave
+            dMQMQAHessianAlpha = dAlphaSave
+            dMQMQAFixedPointRestorationError = DMAX1(MAXVAL(ABS(dChemicalPotential-dChemicalSave)), &
+                MAXVAL(ABS(dMolFraction-dFractionSave)),MAXVAL(ABS(dMolesSpecies-dMolesSave)), &
+                MAXVAL(ABS(dMolesPhase-dPhaseSave)),MAXVAL(ABS(dEffStoichSolnPhase-dEffStoichSave)), &
+                MAXVAL(ABS(dElementPotential-dElementSave)),ABS(dGibbsEnergySys-dGibbsSave))
+            if (ANY(iAssemblage /= iAssemblageSave)) dMQMQAFixedPointRestorationError = HUGE(1D0)
+            deallocate(dChemicalSave,dFractionSave,dMolesSave,dPhaseSave,dEffStoichSave, &
+                dElementSave,dUpdateSave,iAssemblageSave)
+        end if
 
         ! If in debug mode, call the debugger:
         if (lDebugMode) call GEMDebug(9)

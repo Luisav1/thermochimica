@@ -68,6 +68,7 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
     USE ModuleThermo
     USE ModuleThermoIO
     USE ModuleGEMSolver
+    USE ModuleMQMQAUnconstrained, ONLY: lMQMQADiagnosticLegacyS3
 
     implicit none
 
@@ -335,7 +336,8 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
             ! SUBG uses ordinary pair frequencies. Updated-MQMQA SUBQ uses the
             ! normalized zeta-weighted pair amounts defined by Eqs. (5)--(6),
             ! which are the X_i/k quantities appearing in its S3 term.
-            if (cSolnPhaseType(iSolnIndex) == 'SUBG') then
+            if ((cSolnPhaseType(iSolnIndex) == 'SUBG') .OR. &
+                ((cSolnPhaseType(iSolnIndex) == 'SUBQ') .AND. lMQMQADiagnosticLegacyS3)) then
                 dSum = iWeight * (dXij(ii,ka) * dXij(ii,la) * dXij(jj,ka) * dXij(jj,la))**dPowXij &
                                 / (dYi(ii) * dYi(jj) * dYi(kk) * dYi(ll))**dPowYi
             else
@@ -346,7 +348,8 @@ subroutine CompExcessGibbsEnergySUBG(iSolnIndex)
                 dConfEntropy = 100D0
             else
                 dConfEntropy = dConfEntropy + DLOG(dMolFraction(l) / dSum)
-                if (cSolnPhaseType(iSolnIndex) == 'SUBQ') then
+                if ((cSolnPhaseType(iSolnIndex) == 'SUBQ') .AND. &
+                    (.NOT. lMQMQADiagnosticLegacyS3)) then
                     ! The direct logarithm above is only part of the derivative
                     ! when pair-specific zeta values make the normalization of
                     ! dXsij composition dependent. Differentiating

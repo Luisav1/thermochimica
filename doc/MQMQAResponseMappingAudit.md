@@ -2511,6 +2511,577 @@ assemblages, bound candidate count and failure handling, and demonstrate that
 candidate evaluation cannot recursively invoke itself.  None of those
 production mechanisms is implemented by this bounded checkpoint.
 
+### Default-off rank-rejection prototype: negative result
+
+MQ-4E-B.1 tested the cheapest possible use of the rank information before
+implementing reduced-candidate solves.  An opt-in prototype was inserted after
+the ordinary `CheckPhaseChange` Newton trial and its existing pass/fail tests.
+It normalized each active phase's structural stoichiometry column, measured
+the column rank by SVD, and changed an otherwise passing result to
+`lPhasePass=.FALSE.` whenever the rank was smaller than the number of active
+phases.  Rank-analysis failure preserved the ordinary result.  The prototype
+also counted total rejections, repeated rejection of the same assemblage, and
+the longest consecutive rejection sequence.  It did not use phase names,
+database identities, a historical result, phase amounts as column scales, or
+the MQMQA correction mode in its decision.
+
+The public 13-state MQ-4E-A matrix remained a clean control.  Its 26 fixed and
+adaptive calculations passed, and the guard observed zero dependent trials
+and made zero interventions.  The six FLiBe states, however, showed that
+structural dependence is not by itself a valid reason to reject a temporary
+phase-search trial:
+
+| Database | LiF/BeF2 | Guarded historical rejects | Repeated | Maximum consecutive | Guarded/reference iterations | Fixed result | Adaptive result |
+|---|---:|---:|---:|---:|---:|---|---|
+| MSD-TC V4.1 | 45/55 | 447 | 444 | 381 | 2002/1267 | iteration-limit failure | reference-state difference |
+| MSD-TC V4.1 | 50/50 | 946 | 939 | 377 | 4841/1586 | reference-state difference | reference-state difference |
+| MSD-TC V4.1 | 55/45 | 41 | 40 | 41 | 318/3511 | reference-state difference | reference-state difference |
+| MSTDB-TC V3.1 | 45/55 | 175 | 160 | 45 | 1333/1526 | reference-state difference | reference-state difference |
+| MSTDB-TC V3.1 | 50/50 | 731 | 588 | 398 | 5113/902 | reference-state difference | reference-state difference |
+| MSTDB-TC V3.1 | 55/45 | 171 | 157 | 50 | 1188/2700 | reference-state difference | reference-state difference |
+
+The guarded historical calculation itself no longer reproduced the ordinary
+historical result.  Of the twelve corrected fixed/adaptive calculations,
+eleven ended in a different state and the remaining fixed calculation reached
+its iteration limit.  A smaller iteration count in an individual guarded row is
+not an improvement because that calculation failed the reference-state gate.
+The hundreds of repeated rejections show that the outer search can legitimately
+revisit temporary dependent assemblages while attempting to find a feasible
+independent equilibrium set.  Rank deficiency describes the geometry of the
+trial; it does not determine which dependent phase should be removed or which
+reduced set has the lowest converged Gibbs energy.
+
+Accordingly, the rank-rejection implementation and its command-line control
+were removed after the experiment.  No production behavior, public API, or
+default was retained.  The result strengthens the next design boundary:
+rank deficiency may trigger a bounded reduced-candidate comparison, but it
+cannot be used as an unconditional phase-rejection rule.  The positive reduced-
+set evidence above remains the thermodynamic basis for MQ-4E-B's next
+prototype.
+
+### MQ-4E-B.2: default-off RRQR-screened reduced-candidate comparison
+
+The next prototype retained rank information as a **screen and ordering tool**
+rather than turning it into an accept/reject rule.  It activates only in the
+private diagnostic when the ordinary `CheckPhaseChange` result already passes
+and the active phase columns are dependent.  The production default and phase-
+selection result remain unchanged.
+
+For the captured active structural stoichiometry matrix, the prototype:
+
+1. normalizes each phase column so pivot order is not determined merely by its
+   current phase amount;
+2. applies rank-revealing QR with column pivoting (`DGEQP3`);
+3. retains the pivot order as a numerical independence ordering, not as a
+   thermodynamic phase choice;
+4. constructs the complete three one-phase-omitted subsets for the observed
+   `rank 2/3` case;
+5. rejects a subset before nonlinear solution unless its SVD rank is two;
+6. converges each retained subset independently from the same database,
+   temperature, pressure, and elemental inventory; and
+7. groups duplicate converged assemblages and compares the distinct results by
+   Gibbs energy.
+
+The search is explicitly capped at eight candidates.  All currently observed
+FLiBe trials require only three, but the cap is a diagnostic safety boundary,
+not evidence that future databases cannot exhibit larger nullity or candidate
+counts.
+
+| Database | LiF/BeF2 | Captured iteration | Rank | RRQR primary basis contains `MSFL` | Lowest-Gibbs distinct result | Forward/reverse CPU time (s) |
+|---|---:|---:|---:|:---:|---|---:|
+| MSD-TC V4.1 | 45/55 | 54 | 2/3 | no | `MSFL` | 0.232/0.224 |
+| MSD-TC V4.1 | 50/50 | 46 | 2/3 | yes | `MSFL` | 0.162/0.163 |
+| MSD-TC V4.1 | 55/45 | 46 | 2/3 | no | `MSFL` | 0.166/0.171 |
+| MSTDB-TC V3.1 | 45/55 | 54 | 2/3 | yes | `MSFL` | 0.175/0.178 |
+| MSTDB-TC V3.1 | 50/50 | 46 | 2/3 | yes | `MSFL` | 0.173/0.174 |
+| MSTDB-TC V3.1 | 55/45 | 46 | 2/3 | yes | `MSFL` | 0.120/0.113 |
+
+All six runs passed the candidate-cap, nullity, forward-feasibility,
+reverse-feasibility, distinct-result, and restoration gates.  Every candidate
+was full rank after its indicated omission, every forward and reverse solve
+was feasible, and all six reverse-order comparisons reported zero restoration
+mismatches.  Each state produced two distinct equilibria: liquid `MSFL` and
+the two-pure-phase alternative.  `MSFL` was lower in Gibbs energy in every
+case, consistent with the earlier unscreened reduced-set experiment.
+
+The pivot evidence is deliberately non-vacuous.  In the V4.1 45/55 and 55/45
+states, RRQR selected the two pure phases as its primary numerical basis; that
+basis converged approximately 4.75 kJ and 4.13 kJ above `MSFL`, respectively.
+Thus RRQR is useful for exposing independent bases cheaply, but **cannot** be
+used alone to decide which phases are thermodynamically stable.  The converged
+Gibbs comparison is the step that correctly overrules the numerical pivot
+choice.
+
+A bounded attempt was also made to hand the selected restricted equilibrium
+to an unrestricted curvature-enabled solve through Thermochimica's existing
+reinitialization API.  That route is not structurally valid: the restricted
+parse contained 27 solution variables whereas restoring full phase
+availability produced 38, and the bounds-checked replay detected the `38/27`
+dimension mismatch in `SwapSolnPhase`.  The replay code was removed.  This is
+not a failure of the RRQR/Gibbs candidate oracle; it confirms that a production
+handoff needs either an explicit full-space state mapping or a proven
+transaction that preserves one common parsed phase space.  Ordinary reinit
+data cannot be copied between differently restricted phase spaces.
+
+MQ-4E-B.2 therefore establishes a successful, default-off **selection
+diagnostic**, not production solver integration.  Before this mechanism can
+become live logic, the implementation must still define a later trigger that
+avoids launching it at every dependent FLiBe trial, evaluate candidates
+without recursive invocation, restore one full-space solver state safely,
+and demonstrate corrected fixed/adaptive convergence after the selected basis
+is installed.  No production phase behavior, public control, or default has
+been added at this checkpoint.
+
+### Null-direction thermodynamic basis pivot: positive bounded diagnostic
+
+The reduced-candidate results suggested a narrower alternative to enumerating
+and converging every one-phase-omitted set.  For the first locally passing,
+rank-dependent active set in each FLiBe run, a private default-off diagnostic
+asks whether the dependent phase can be selected directly from the
+thermodynamics of that same state.  It does not alter live phase selection.
+
+The mixed GEM columns used by the existing rank capture are not appropriate
+for this question because each solution-phase column includes its current
+phase amount.  The diagnostic therefore also captures the physical
+amount-basis stoichiometry
+
+\[
+  C_{\mathrm{amt}} = [c_1\;c_2\;\ldots\;c_k]
+\]
+
+in the natural active-phase order.  When the active set has nullity one,
+`DGESVD` supplies a right-null vector \(y\) satisfying
+
+\[
+  C_{\mathrm{amt}}y \simeq 0.
+\]
+
+Consequently, \(n(t)=n+t y\) preserves the elemental inventory to first
+order.  The nonnegativity constraints on the phase amounts define a feasible
+interval in \(t\); each finite endpoint makes at least one phase amount zero.
+With the current solution-phase compositions frozen, the diagnostic forms the
+phase-Gibbs vector from `dGibbsSolnPhase/dMolesPhase` for solution phases and
+`dStdGibbsEnergy` for pure phases.  It selects the endpoint for which
+
+\[
+  \Delta G_{\mathrm{frozen}} = t\,y^T g < 0.
+\]
+
+This decision uses only the current active state.  The independently
+converged reduced candidates are evaluated afterward as an oracle; their
+answers are not supplied to the pivot rule.
+
+| Database | LiF fraction | Active rank | Relative null residual | Predicted \(\Delta G_{\mathrm{frozen}}\) | Predicted leaving phase | Reached lowest-Gibbs branch |
+|---|---:|---:|---:|---:|---|---|
+| MSD-TC V4.1 | 0.45 | 2/3 | `8.15e-17` | `-2.22e2` | BeF2 liquid | yes |
+| MSD-TC V4.1 | 0.50 | 2/3 | `2.02e-17` | `-1.74e2` | BeF2 liquid | yes |
+| MSD-TC V4.1 | 0.55 | 2/3 | `2.52e-17` | `-1.24e2` | BeF2 liquid | yes |
+| MSTDB-TC V3.1 | 0.45 | 2/3 | `2.86e-17` | `-2.22e2` | BeF2 liquid | yes |
+| MSTDB-TC V3.1 | 0.50 | 2/3 | `3.23e-17` | `-1.74e2` | BeF2 liquid | yes |
+| MSTDB-TC V3.1 | 0.55 | 2/3 | `3.53e-17` | `-1.24e2` | BeF2 liquid | yes |
+
+The sign and scale of \(y\), and therefore the separate signs and magnitudes
+of \(t\) and \(y^Tg\), depend on the arbitrary SVD orientation and
+normalization.  Their product is the meaningful quantity.  In all six runs,
+the feasible downhill endpoint removed the BeF2 liquid phase and predicted
+the same MSFL branch later identified as the lowest-Gibbs independently
+converged reduced candidate.
+
+This is stronger evidence than choosing the RRQR-dependent column alone:
+RRQR identifies numerical independence, whereas the null-direction pivot
+uses the local thermodynamic slope to choose between feasible independent
+bases.  It also addresses the cause of the singular trial more directly than
+rejecting every dependent set without selecting an alternative.
+
+The claim remains bounded.  The evidence covers only the first captured
+locally passing nullity-one decision in six binary FLiBe calculations, uses a
+frozen-composition phase-Gibbs slope, and relies on reduced solves only as a
+post-decision oracle.  A live prototype must install the selected endpoint
+inside one unchanged parsed phase space, update solution-species and phase
+amounts consistently, preserve existing behavior for full-rank and
+higher-nullity sets, and demonstrate both fixed and adaptive convergence plus
+clean regressions.  No production default, public control, or solver behavior
+was changed by this diagnostic.
+
+### Live null-direction pure-phase replacement: negative bounded prototype
+
+The positive frozen-state result above was next exercised inside the existing
+`AddSolnPhase`/`CheckPhaseChange` transaction.  The default-off prototype acted
+only when one newly added solution phase created a nullity-one active set and
+the downhill feasible endpoint selected an incumbent pure phase to leave.  It
+shifted physical phase amounts along the right-null vector, updated the
+solution-species amounts at fixed composition, and used the existing `INFO`
+convention to remove the selected pure phase and retest the reduced set.  The
+historical equilibrium was used only as a final-state oracle; it was not used
+by the live selection rule.
+
+The local calculations were numerically sound.  Every applied pivot preserved
+the elemental inventory to approximately `4e-16` or better, and no nonfinite
+amount or failed linear solve was observed.  The complete six-state result was
+nevertheless negative:
+
+| Database | LiF | Fixed pivot applied/attempted | Fixed final assemblage | Adaptive pivot applied/attempted | Adaptive final assemblage |
+|---|---:|---:|---|---:|---|
+| MSD-TC V4.1 | 0.45 | 22/31 | `MSFL` | 7/14 | `MSFL` |
+| MSD-TC V4.1 | 0.50 | 11/22 | two pure phases | 18/24 | `MSFL` |
+| MSD-TC V4.1 | 0.55 | 13/23 | gas | 0/6 | two pure phases |
+| MSTDB-TC V3.1 | 0.45 | 17/24 | two pure phases | 2/10 | `MSFL` |
+| MSTDB-TC V3.1 | 0.50 | 15/21 | two pure phases plus gas | 4/9 | two pure phases |
+| MSTDB-TC V3.1 | 0.55 | 12/24 | two pure phases plus gas | 0/4 | two pure phases |
+
+Fixed alpha one recovered the historical `MSFL` assemblage in only one of six
+states; adaptive curvature recovered that named assemblage in three of six.
+None of the twelve corrected runs passed the established strict final Gibbs,
+composition, species-mole, phase-amount, and assemblage gates.  The failures
+were therefore not hidden by accepting name-only agreement.
+
+The decisive limitation was structural rather than a bad null vector.  Several
+later dependent trials selected a solution phase, rather than an incumbent
+pure phase, as the downhill endpoint.  Other trials had a numerically flat
+frozen Gibbs slope, and two adaptive 55/45 runs never encountered a supported
+pure-leaving transaction.  Thus the first captured `new solution / old pure`
+event was representative enough to motivate the experiment but not sufficient
+to describe the live phase-search topology across a complete calculation.
+
+The live code was removed after this negative result.  The experiment rules out
+promoting a specialized one-pure-phase replacement as the MQ-4E-B solution.  A
+subsequent design must either support solution-phase endpoints and the other
+observed transaction classes through a model-independent mechanism, or explain
+why those events can safely remain on the historical path.  It must not infer
+success merely from a conservative local pivot or from final phase names.
+
+### Historical phase search followed by curvature refinement: negative tradeoff experiment
+
+A bounded private experiment tested whether MQMQA curvature could be removed
+from the global phase search and enabled only after the historical solver had
+converged.  This is intentionally different from reduced-candidate
+enumeration: no phase subsets were generated and no phase choice was imposed.
+Each run used one unchanged full parsed phase space, saved the converged
+historical state through Thermochimica's existing reinitialization API, and
+then repeated the same state with either no curvature, fixed alpha one, or
+adaptive curvature.  Direct-from-scratch fixed and adaptive runs were retained
+as comparisons.
+
+The alpha-zero restart is an essential control.  It measures the cost and
+state change caused by reinitialization itself rather than attributing every
+difference to the Hessian.  The table reports total search-plus-refinement
+iterations relative to one historical solve.  CPU ratios were also measured,
+but the individual calculations are short and single-run timing is
+cache-sensitive; iteration ratios are the more reproducible comparison.
+
+| Database | LiF | alpha-zero restart total/base | fixed total/base | fixed result | adaptive total/base | adaptive positive corrections | adaptive strict agreement |
+|---|---:|---:|---:|---|---:|---:|:---:|
+| MSD-TC V4.1 | 0.45 | 1.213 | 5.736 | iteration limit | 2.684 | 265 | no |
+| MSD-TC V4.1 | 0.50 | 1.359 | 4.784 | iteration limit | 1.566 | 131 | no |
+| MSD-TC V4.1 | 0.55 | 1.001 | 1.805 | different assemblage | 1.001 | 0 | yes |
+| MSTDB-TC V3.1 | 0.45 | 1.230 | 4.933 | iteration limit | 2.170 | 171 | no |
+| MSTDB-TC V3.1 | 0.50 | 1.001 | 6.296 | different assemblage | 1.001 | 0 | yes |
+| MSTDB-TC V3.1 | 0.55 | 1.095 | 3.223 | iteration limit | 2.207 | 53 | no |
+
+All alpha-zero restarts and all adaptive refinements converged to an `MSFL`
+assemblage.  However, the alpha-zero restart reproduced the strict historical
+Gibbs/composition/species/phase state in only two of six cases.  In the other
+four, the existing reinitialization path itself returned a different internal
+MSFL representation despite retaining the same named assemblage.  It added
+9.5% to 35.9% more iterations in three of those cases.  The current reinit API
+is therefore not a transparent boundary for this proposed two-stage algorithm.
+
+Fixed alpha one preserved the strict historical result in zero of six cases:
+four refinements reached the 6001-iteration limit and two converged to
+different assemblages.  Adaptive refinement converged in all six, but the only
+two strict-agreement cases selected alpha zero throughout.  In every state
+where adaptive refinement accepted positive curvature, strict state agreement
+failed and total iterations increased by 56.6% to 168.4%.
+
+This experiment rejects the tested **reinitialize-after-convergence** design.
+It does not prove that all separation of phase search and curvature is
+impossible.  An in-loop transition within one continuous solver state could
+avoid the reinitialization drift, but activation after complete convergence
+may be vacuous, whereas activation before convergence reintroduces the phase-
+path safety question.  That tradeoff must be addressed explicitly before any
+such mechanism is promoted to production logic.  No production switch,
+rollback, phase freezing, or altered default was added by this experiment.
+
+### Same-state fixed-point preservation and GEM gauge diagnostic
+
+The preceding global-path experiments could not distinguish an incorrect
+local curvature integration from a correct local response interacting badly
+with Thermochimica's phase search.  A default-off diagnostic therefore captures
+one historical FLiBe state at the instant `CheckConvergence` accepts it, before
+`PostProcessThermo` changes the internal representation.  Without reparsing,
+reinitializing, running a line search, or invoking phase-change logic, it builds
+the baseline and fixed-alpha-one GEM systems at that exact live state.  All
+mutable solver arrays and controls are restored afterward; the measured
+restoration error was exactly zero in all six cases.
+
+Four linear targets are replayed from the captured pair:
+
+1. the historical system, (A_0x_0=B_0);
+2. the complete correction,
+   ((A_0+\Delta A)x_{AB}=B_0+\Delta B);
+3. the matrix-only hybrid,
+   ((A_0+\Delta A)x_A=B_0); and
+4. the right-hand-side-only hybrid,
+   (A_0x_B=B_0+\Delta B).
+
+This is a diagnostic decomposition, not four proposed production algorithms.
+The solved targets are converted to the same element-potential,
+solution-logarithm, and pure-phase-amount displacement groups used by the trust
+layer.  SVD rank estimates and normwise backward errors are reported alongside
+the ordinary `DGESV` replays.
+
+| Database | LiF | Historical/corrected rank | Corrected-system backward error at (x_0) | Historical element-potential displacement | Full-correction element-potential displacement | Full-correction solution-log displacement |
+|---|---:|---:|---:|---:|---:|---:|
+| MSD-TC V4.1 | 0.45 | 3/4, 3/4 | `5.20e-17` | `1.72e18` | `2.71e2` | `2.96e-2` |
+| MSD-TC V4.1 | 0.50 | 3/4, 3/4 | `2.03e-17` | `1.55e18` | `3.72e3` | `6.85e-3` |
+| MSD-TC V4.1 | 0.55 | 3/4, 3/4 | `9.41e-10` | `2.45e2` | `1.01e19` | `1.38e3` |
+| MSTDB-TC V3.1 | 0.45 | 3/4, 3/4 | `3.71e-6` | `1.74e2` | `1.31e2` | `1.13e-1` |
+| MSTDB-TC V3.1 | 0.50 | 3/4, 3/4 | `2.50e-10` | `4.94e2` | `1.85e2` | `1.05e-5` |
+| MSTDB-TC V3.1 | 0.55 | 3/4, 3/4 | `1.91e-7` | `7.14e2` | `2.03e2` | `6.76e-3` |
+
+Both the baseline and corrected systems are numerically rank three in four
+unknowns at every captured state.  Their scaled smallest singular values lie
+between approximately `1e-17` and `1e-16`, below the case-local rank tolerances
+of approximately `1.5e-15`.  Thus the analytical MQMQA correction neither
+creates the rank deficiency nor restores a unique four-variable solve.
+
+The ordinary LU solution is consequently a gauge-dependent representative of
+an underdetermined system.  A tiny normwise backward error proves that a
+returned vector solves the captured equations; it does **not** prove that the
+representative is unique, bounded, or safe for the later inactive-phase
+driving-force calculation.  This explains the apparently contradictory
+behavior across neighboring V4.1 states: at LiF fractions 0.45 and 0.50 the
+complete correction replaces cancellation-dominated element-potential targets
+of order `1e18` with bounded targets, while at 0.55 the corrected LU target
+instead grows to order `1e19` and contaminates the physical solution-log
+group.  All of these linear solves have small backward errors.
+
+The hybrid replays also rule out a simple claim that `deltaB` alone moves a
+well-defined fixed point.  In the two V4.1 states where the full correction is
+bounded, the `deltaA`-only system is also bounded while the `deltaB`-only
+system retains the large baseline scale.  At 0.55, however, no ungauged hybrid
+provides a generally safe interpretation.  The matrix correction changes which
+representative LU selects, but the response condensation is still embedded in
+a singular global coordinate system.
+
+This evidence narrows the missing production mechanism.  The next candidate
+must define an explicit, physically scaled gauge or solve in an independent
+reduced coordinate space, then prove that phase-driving forces are invariant
+to the eliminated null coordinate.  Replacing `DGESV` with an unconstrained
+minimum-norm routine is not sufficient by itself: a minimum depends on variable
+scaling, and the global phase search must use potentials consistent with the
+chosen gauge.  Likewise, phase-specific rollback would treat the downstream
+symptom without defining the missing global coordinate convention.  No
+production solver behavior or default is changed by this diagnostic.
+
+### Rank-deficient recovery timeline: historical behavior identified
+
+The fixed-point rank evidence established that both the historical and
+corrected GEM systems can be rank deficient, but it did not show how the live
+historical calculation nevertheless leaves temporary dependent phase sets.
+A default-off recovery trace therefore correlated every passing dependent
+`CheckPhaseChange` trial with four stages of the same live calculation:
+
+1. the assemblage and functional norm before the main Newton solve;
+2. the returned Newton update and selected MQMQA alpha;
+3. the final line-search step and functional norm; and
+4. the post-`CheckPhaseAssemblage` phase set, phase-history index, and reversion
+   state.
+
+A trial was classified as *installed* only when its recorded phase identities
+matched the post-assemblage state at that same global iteration.  The trace
+then followed that exact phase set until the first later iteration with a
+different assemblage.  A changed reversion counter distinguished
+`RevertSystem` from ordinary phase addition, removal, or swapping.  Capture is
+inactive by default and does not alter any solver decision.
+
+The three MSD-TC V4.1 FLiBe states gave:
+
+| LiF fraction | Historical installed / exited / retained / reverted | Adaptive installed / exited / retained / reverted | Historical iterations | Adaptive iterations | Adaptive final result |
+|---:|---:|---:|---:|---:|---|
+| 0.45 | 3 / 3 / 0 / 0 | 8 / 8 / 0 / 0 | 1267 | 2884 | same named `MSFL` phase, different internal state |
+| 0.50 | 8 / 8 / 0 / 0 | 17 / 17 / 0 / 0 | 1586 | 4720 | `gas_ideal`, higher Gibbs energy |
+| 0.55 | 12 / 12 / 0 / 0 | 6 / 6 / 0 / 0 | 3511 | 1002 | two condensed phases, higher Gibbs energy |
+
+Historical Thermochimica did **not** invoke a special rank-aware solve or
+`RevertSystem` for any of the 23 installed dependent sets.  It allowed the
+ordinary LU update, applied the existing line search, and subsequently left
+every dependent set through normal active-set operations.  Some historical
+dependent iterations were numerically severe: examples included maximum
+updates of approximately `8.2e38` and `1.6e18`, paired with line-search steps
+of approximately `1.2e-39` and `2.0`.  Thus historical success does not mean
+that rank deficiency was removed or that LU returned a unique physical
+representative.  The existing damping and phase-management sequence happened
+to continue to a lower-Gibbs final state.
+
+The adaptive calculation used the same recovery machinery.  Almost every
+dependent set was installed on an iteration that selected alpha zero; one
+0.55-LiF installation retained alpha `0.1`.  Nevertheless, positive curvature
+accepted on earlier iterations changed the continuous state delivered to later
+phase decisions.  This changed both the identities and frequency of dependent
+sets even where the installation iteration itself used the historical GEM
+matrix.  For example, at 0.45 LiF the historical path installed three
+dependent sets while the adaptive path installed eight; at 0.50 the counts
+were eight and seventeen.
+
+This result rules out the hypothesis that a hidden historical rank-recovery
+algorithm merely needs to be copied into the corrected path.  There is no such
+special mechanism in the observed calculations.  It also shows why rejecting
+only the dependent trial is downstream of the first cause: the curvature has
+already changed the state and phase-driving-force history before that trial is
+proposed.  The next bounded design question is therefore whether adaptive
+readiness can recognize *phase-search instability before accepting positive
+curvature* while still allowing the exact Hessian to remain active within a
+settled assemblage.  Any proposed gate must be based on live, model-independent
+phase-search observables and must be tested against both successful FeTiVO
+activation and these FLiBe paths.  No such gate was added in this diagnostic.
+
+The existing same-state candidate diagnostic was then used to test the most
+local version of that proposal.  At the first observed assemblage divergence,
+the alpha-zero and accepted corrected targets were evaluated from the same
+pre-step GEM system using the production pure- and solution-phase driving-force
+calculations.  The result was:
+
+| LiF fraction | Candidate iteration | Accepted alpha | Alpha-zero versus corrected leading phases | Immediate result |
+|---:|---:|---:|---|---|
+| 0.45 | 366 | 1 | same pure and solution identities | pure-force change `6.7e-15`; solution composition unchanged |
+| 0.50 | 145 | 0.01 | same pure and solution identities | both leading forces exactly zero at report precision; solution composition unchanged |
+| 0.55 | 240 | 1 | same pure and solution identities | pure-force change `4.4e-16`; solution composition unchanged |
+
+Thus the first divergent phase decision was **not** preceded by an immediate
+identity, eligibility, ordering, or active-amount boundary crossing that could
+uniquely reject the accepted candidate.  The candidate can be locally benign
+according to the quantities used by the next phase-addition check while its
+repeated accepted updates gradually move the continuous state toward a later
+phase removal or alternative addition.  This explains why the earlier
+instantaneous phase-path gates changed the trajectory but did not recover the
+historical lower-Gibbs result.
+
+Accordingly, no immediate phase-ranking acceptance rule is promoted.  A useful
+next experiment must use a short, model-independent history of live phase-search
+stability--for example, recent assemblage changes, repeated near-degenerate
+driving-force margins, active phase amounts approaching removal tolerances, and
+recent dependent proposals--rather than comparing only the two instantaneous
+candidate rankings.  This is still an adaptive-readiness question, not a change
+to the analytical Hessian or its GEM mapping.
+
+### Matched SUBQ S3 ablation: weighted correction is not the FLiBe cause
+
+The FLiBe investigation was performed after correcting the SUBQ S3 term to use
+the normalized zeta-weighted pair distribution.  Consequently, both the
+alpha-zero reference and adaptive-curvature calculations in the preceding
+sections used the corrected production Gibbs-energy formulation.  Alpha zero
+disabled the MQMQA GEM curvature correction; it did **not** restore the former
+ordinary-pair S3 expression.
+
+A matched four-mode ablation was therefore added to distinguish these two
+questions.  A default-false diagnostic switch selected either the corrected
+zeta-weighted S3 expression or the former ordinary-pair expression.  The same
+selection was applied simultaneously to production partial molars and to the
+independent analytical scalar, gradient, and Hessian path.  For each
+formulation, an adaptive calculation was compared only with its own alpha-zero
+reference:
+
+1. corrected weighted S3 with alpha zero;
+2. corrected weighted S3 with adaptive MQMQA curvature;
+3. former ordinary-pair S3 with alpha zero; and
+4. former ordinary-pair S3 with adaptive MQMQA curvature.
+
+This matched design is necessary because changing S3 changes the thermodynamic
+model itself.  The corrected and former alpha-zero results may therefore differ
+without identifying a curvature-integration error.  The causal question is
+whether restoring the former S3 expression also restores agreement between the
+adaptive and alpha-zero paths for that same formulation.
+
+The MSD-TC V4.1 results were:
+
+| LiF fraction | Corrected alpha-zero | Corrected adaptive | Former alpha-zero | Former adaptive | Interpretation |
+|---:|---|---|---|---|---|
+| 0.45 | `MSFL`, 1267 iterations | `MSFL`, 2884 iterations; scaled dG `2.27e-7` | `MSFL`, 1467 iterations | two condensed phases, 1194 iterations; scaled dG `8.29e-3` | both matched pairs disagree |
+| 0.50 | `MSFL`, 1586 iterations | `gas_ideal`, 4720 iterations; scaled dG `4.62e-2` | `MSFL`, 1003 iterations | two condensed phases, 1774 iterations; scaled dG `8.56e-3` | both matched pairs disagree |
+| 0.55 | `MSFL`, 3511 iterations | two condensed phases, 1002 iterations; scaled dG `4.67e-3` | `MSFL`, 797 iterations | two condensed phases, 1936 iterations; scaled dG `8.51e-3` | both matched pairs disagree |
+
+Here, scaled dG is the absolute Gibbs-energy difference between each adaptive
+result and its formulation-matched alpha-zero reference, divided by
+`max(1,abs(G_reference))`.  All twelve calculations were finite and converged,
+and both adaptive formulations applied positive curvature.  However, neither
+formulation recovered matched adaptive/reference agreement in any of the three
+states.  At 0.45 the corrected adaptive calculation retained the same named
+phase but still differed in its internal composition and phase amount; this is
+not counted as agreement.
+
+The ablation therefore rules out the weighted-S3 correction as the specific
+cause of the assessed FLiBe globalization failure.  Restoring the former S3
+expression changes the model, iteration histories, and final adaptive basins,
+but it does not restore the formulation-matched alpha-zero result.  This result
+supports retaining the corrected weighted expression and returning the solver
+investigation to phase-search readiness and accumulated trajectory effects.
+The legacy switch is diagnostic-only, defaults to false, and changes no normal
+Thermochimica behavior.
+
+### Cross-database chloride audit: the FLiBe failure is not generic SUBQ behavior
+
+A second private assessed-database audit tested whether the FLiBe result was a
+generic consequence of activating analytical curvature in a nonuniform-zeta
+SUBQ phase.  The MSD-TC V4.1 chloride database was exercised at 1000 K and
+1 atm for LiCl/MgCl2 mole ratios 45/55, 50/50, and 55/45.  All three untouched
+alpha-zero calculations reproducibly converged to the single liquid `MSCL`
+phase.  The decoded active model had zeta values from 2.4 to 4.0 and three
+G-family interaction records; it had no Q-, B-, or reciprocal-R-family records.
+This is therefore cross-database nonuniform-zeta G-family evidence, not B- or
+R-family coverage.
+
+| LiCl fraction | Historical iterations | Fixed-alpha iterations and result | Adaptive iterations | Adaptive full/reduced/zero | Active-state agreement | Rank-deficient checks |
+|---:|---:|---|---:|---:|---|---:|
+| 0.45 | 75 | 1095; `MSCL`, slightly outside the active-state tolerance | 75 | 6 / 0 / 73 | yes | 0 |
+| 0.50 | 78 | 2242; `FM3M`, scaled Gibbs difference `2.705e-3` | 74 | 10 / 1 / 67 | yes | 0 |
+| 0.55 | 56 | 1119; `FM3M + gas_ideal`, scaled Gibbs difference `2.674e-3` | 56 | 1 / 1 / 61 | yes | 0 |
+
+Here, *active-state agreement* requires the same named assemblage, the
+established Gibbs- and phase-amount tolerances, and componentwise mole-fraction
+and species-mole agreement over the active phase only.  The distinction matters
+for this large database: the largest whole-array differences at 0.45 and 0.55
+were stored values belonging to inactive phases, while the active `MSCL` state
+agreed.  The untouched repeat calculations remained exactly reproducible.
+
+The result separates three effects.  First, fixed alpha one is not a robust
+production policy: it was 14.6 to 28.7 times more expensive than the historical
+solve and selected higher-Gibbs nonliquid assemblages in two states.  Second,
+the current adaptive policy safely retained the historical `MSCL` solution in
+all three states and did not increase the iteration count.  Third, none of the
+chloride paths encountered the rank-deficient phase-change trials observed in
+FLiBe.  The assessed FLiBe failure is consequently not explained by
+nonuniform zeta or SUBQ curvature alone; its active-set topology and transient
+phase-search history remain material parts of the mechanism.
+
+This is useful but not a complete MQ-4E exit.  Positive curvature was genuinely
+accepted in every chloride state, including full-alpha candidates, but the
+final stable full-alpha window was zero in all three runs.  The chloride result
+therefore strengthens the safety and cross-database evidence while also showing
+that the FeTiVO sustained-full-alpha criterion has not yet generalized to this
+assessed salt system.  The private database and driver remain outside the
+registered public suite, and no default solver behavior is changed by this
+audit.
+
+The zero final-window count should not be read as an absence of sustained
+full-curvature behavior.  The complete eligible-solve histories showed:
+
+| LiCl fraction | Longest consecutive full-alpha window | What ended it before convergence |
+|---:|---|---|
+| 0.45 | 5 solves, global iterations 70-74 | a second eligible solve at iteration 74 failed the residual-magnitude/progress readiness tests; the final solve at 75 also followed a recent assemblage change |
+| 0.50 | 9 solves, global iterations 64-72 | iteration 73 accepted alpha 0.1, then readiness was revoked for poor residual progress; the final solve at 74 also followed a recent assemblage change |
+| 0.55 | 1 solve at global iteration 55 | the final solve at 56 followed a recent assemblage change and failed the residual-progress test |
+
+Thus 0.45 and 0.50 nearly met the intent of the settled-full-alpha gate, but not
+its required endpoint condition: every solve from the final full-alpha window
+through the last eligible solve must retain alpha one.  The 0.55 case was not
+close by that measure.  Across these runs there were no correction-construction,
+correction-ratio, linear-solve, or nonfinite rejections.  The terminal resets
+were driven by the current nonlinear-readiness policy and, at some earlier
+candidate tests, grouped update/direction safeguards.  This localizes the open
+question to readiness retention near convergence rather than to a failed
+chloride Hessian or mapper.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than

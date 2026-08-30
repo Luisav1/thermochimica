@@ -120,6 +120,7 @@ subroutine GEMLineSearch
 
     USE ModuleThermo
     USE ModuleGEMSolver
+    USE ModuleGEMNewtonDiagnosticCapture, ONLY: CaptureMQMQARecoveryLineSearch
 
     implicit none
 
@@ -231,6 +232,8 @@ subroutine GEMLineSearch
         end if
 
     end do LOOP_WOLFE
+
+    call CaptureMQMQARecoveryLineSearch(iterGlobal,iterWolfe,dStepLength,dGEMFunctionNorm)
 
     return
 

@@ -22,6 +22,18 @@ module ModuleGEMNewtonDiagnosticCapture
     ! GEM call that actually reaches an MQMQA corrected trial.  This keeps the
     ! two snapshots paired at one identical pre-step state.
     logical, public :: lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
+    ! Test-only request to replay one fixed-alpha MQMQA Newton construction at
+    ! the exact live state where GEMSolver first declares convergence.  The
+    ! caller saves and restores all mutable solver arrays, so this capture does
+    ! not change the equilibrium returned by Thermochimica.
+    logical, public :: lCaptureMQMQAFixedPointAtConvergence = .FALSE.
+    logical, public :: lMQMQAFixedPointCaptureAttempted = .FALSE.
+    integer, public :: iMQMQAFixedPointCaptureInfo = 0
+    integer, public :: nMQMQAFixedPointElements = 0
+    integer, public :: nMQMQAFixedPointSolnPhases = 0
+    integer, public :: nMQMQAFixedPointConPhases = 0
+    real(8), public :: dMQMQAFixedPointRecomputeDifference = 0D0
+    real(8), public :: dMQMQAFixedPointRestorationError = 0D0
     ! Test-only same-matrix comparison of the production LU solution with an
     ! SVD rank-revealing minimum-norm solution.  Results never influence the
     ! live Newton update or phase-assemblage decision.
@@ -91,9 +103,9 @@ module ModuleGEMNewtonDiagnosticCapture
     ! for each active solution/pure phase equation.
     real(8), allocatable, public :: dMQMQADiagnosticPhaseEquationData(:,:,:)
     ! The diagnostic is opt-in, but long MQMQA hardening cases can perform far
-    ! more than 32 phase-change trials.  Retain a bounded 512-entry history and
+    ! more than 32 phase-change trials.  Retain a bounded 4096-entry history and
     ! report any overflow rather than silently treating a prefix as complete.
-    integer, parameter, public :: nMQMQADiagnosticMaxPhaseChangeChecks = 512
+    integer, parameter, public :: nMQMQADiagnosticMaxPhaseChangeChecks = 4096
     integer, parameter, public :: nMQMQADiagnosticMaxActivePhases = 16
     integer, public :: nMQMQADiagnosticPhaseChangeChecks = 0
     integer, public :: nMQMQADiagnosticPhaseChangeChecksDropped = 0
@@ -106,6 +118,7 @@ module ModuleGEMNewtonDiagnosticCapture
     ! solution phases, active pure phases, GEMNewton INFO, pass/fail, and
     ! numerical rank of the active element-by-phase stoichiometry block.
     integer, public :: iMQMQADiagnosticPhaseChangeCheck(8,nMQMQADiagnosticMaxPhaseChangeChecks) = 0
+    integer, public :: iMQMQADiagnosticPhaseChangeAttempt(nMQMQADiagnosticMaxPhaseChangeChecks) = 0
     integer, public :: iMQMQADiagnosticPhaseChangeAssemblage( &
         nMQMQADiagnosticMaxActivePhases,nMQMQADiagnosticMaxPhaseChangeChecks) = 0
     ! Rows are maximum absolute update, active acceptance threshold, minimum
@@ -141,6 +154,19 @@ module ModuleGEMNewtonDiagnosticCapture
     integer, public :: iMQMQADiagnosticReducedSetRank = 0
     integer, allocatable, public :: iMQMQADiagnosticReducedSetAssemblage(:)
     integer, allocatable, public :: iMQMQADiagnosticReducedSetDependentAssemblage(:)
+    ! Active phase identities in rank-revealing QR pivot order.  The first
+    ! `iMQMQADiagnosticReducedSetRank` entries form the diagnostic primary
+    ! independent basis; thermodynamic candidate selection remains external.
+    integer, allocatable, public :: iMQMQADiagnosticReducedSetPivotPhases(:)
+    real(8), allocatable, public :: dMQMQADiagnosticReducedSetPivotStoichiometry(:,:)
+    ! Frozen-composition physical phase data at the dependent trial.  Columns
+    ! use the natural active-phase order (solutions followed by pure phases),
+    ! not GEM's mixed logarithmic/amount variable scaling.  These values are
+    ! retained only for the opt-in null-direction basis-pivot experiment.
+    integer, allocatable, public :: iMQMQADiagnosticReducedSetActivePhases(:)
+    real(8), allocatable, public :: dMQMQADiagnosticReducedSetAmountStoichiometry(:,:)
+    real(8), allocatable, public :: dMQMQADiagnosticReducedSetPhaseAmounts(:)
+    real(8), allocatable, public :: dMQMQADiagnosticReducedSetPhaseGibbs(:)
     integer, allocatable :: iMQMQADiagnosticStagedAssemblage(:)
     integer :: iMQMQADiagnosticStagedIteration = 0
     integer, public :: nMQMQADiagnosticPhasePathCandidates = 0
@@ -155,6 +181,10 @@ module ModuleGEMNewtonDiagnosticCapture
     integer, parameter, public :: nMQMQADiagnosticMaxRemovalEvents = 8
     integer, parameter, public :: nMQMQADiagnosticMaxCandidateSpecies = 64
     logical, public :: lCaptureMQMQATrajectory = .FALSE.
+    ! Test-only request to correlate dependent phase-change trials with the
+    ! surrounding Newton, line-search, and assemblage-management stages.
+    ! Capture is observational and never changes a production decision.
+    logical, public :: lMQMQADiagnosticRecoveryTrace = .FALSE.
     integer, public :: iMQMQADiagnosticCurrentAttempt = 0
     integer, public :: iMQMQADiagnosticSkipAttempt = -1
     integer, public :: iMQMQADiagnosticSkipIteration = -1
@@ -192,20 +222,155 @@ module ModuleGEMNewtonDiagnosticCapture
     real(8), allocatable, public :: dCapturedMQMQAFunctionNorm(:,:)
     real(8), allocatable, public :: dCapturedMQMQAMinGibbs(:,:)
     real(8), allocatable, public :: dCapturedMQMQAMinimumBoundaryFraction(:,:)
+    ! Integer recovery fields are [Newton INFO, Wolfe iterations, iterLast
+    ! before/after assemblage checking, iterRevert before/after, and revert
+    ! requested before/after]. Real fields are [functional norm before Newton,
+    ! after line search, maximum solved update, final line-search step, alpha].
+    integer, allocatable, public :: iCapturedMQMQARecoveryStage(:,:,:)
+    real(8), allocatable, public :: dCapturedMQMQARecoveryStage(:,:,:)
+    integer, allocatable, public :: iCapturedMQMQARecoveryPreAssemblage(:,:,:)
     real(8), allocatable, public :: dCapturedMQMQAPhaseMoles(:,:,:)
     real(8), allocatable, public :: dCapturedMQMQAElementPotential(:,:,:)
     real(8), allocatable, public :: dCapturedGEMNewtonA(:,:), dCapturedGEMNewtonB(:)
     real(8), allocatable, public :: dCapturedGEMNewtonCorrectedA(:,:), dCapturedGEMNewtonCorrectedB(:)
+    integer, allocatable, public :: iCapturedMQMQAFixedPointAssemblage(:)
+    real(8), allocatable, public :: dCapturedMQMQAFixedPointElementPotential(:)
+    real(8), allocatable, public :: dCapturedMQMQAFixedPointChemicalPotential(:)
+    real(8), allocatable, public :: dCapturedMQMQAFixedPointPhaseMoles(:)
+    real(8), allocatable, public :: dCapturedMQMQAFixedPointSolvedUpdate(:)
 
     public :: CaptureGEMNewtonSystem, CaptureGEMNewtonCorrectedSystem, ResetGEMNewtonDiagnosticCapture
+    public :: CaptureMQMQAFixedPointState
     public :: BeginMQMQATrajectoryAttempt, CaptureMQMQATrajectoryPoint
     public :: CaptureMQMQAPhaseDecision
     public :: CaptureMQMQACandidateComparison, CaptureMQMQAPhaseRemovalEvent
+    public :: CaptureMQMQARecoveryPreStep, CaptureMQMQARecoveryNewton
+    public :: CaptureMQMQARecoveryLineSearch, CaptureMQMQARecoveryAssemblage
     public :: RecordMQMQAPhasePathCandidate
     public :: CaptureMQMQAPhaseChangeCheck
     public :: StageMQMQAReducedSetState, CommitMQMQAReducedSetState
 
 contains
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Record the state immediately before the main Newton construction.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQARecoveryPreStep(iIteration,iLast,iRevert,lRevert,iAssemblageIn,dFunctionNorm)
+
+        integer, intent(in) :: iIteration, iLast, iRevert, iAssemblageIn(:)
+        logical, intent(in) :: lRevert
+        real(8), intent(in) :: dFunctionNorm
+        integer :: iAttempt
+
+        if (.NOT. lMQMQADiagnosticRecoveryTrace) return
+        if (.NOT. allocated(iCapturedMQMQARecoveryStage)) return
+        iAttempt = iMQMQADiagnosticCurrentAttempt
+        if ((iAttempt <= 0) .OR. (iAttempt > SIZE(iCapturedMQMQARecoveryStage,3))) return
+        if ((iIteration <= 0) .OR. (iIteration > SIZE(iCapturedMQMQARecoveryStage,2))) return
+        if (SIZE(iAssemblageIn) /= SIZE(iCapturedMQMQARecoveryPreAssemblage,1)) return
+        iCapturedMQMQARecoveryPreAssemblage(:,iIteration,iAttempt) = iAssemblageIn
+        iCapturedMQMQARecoveryStage(3,iIteration,iAttempt) = iLast
+        iCapturedMQMQARecoveryStage(5,iIteration,iAttempt) = iRevert
+        iCapturedMQMQARecoveryStage(7,iIteration,iAttempt) = MERGE(1,0,lRevert)
+        dCapturedMQMQARecoveryStage(1,iIteration,iAttempt) = dFunctionNorm
+
+    end subroutine CaptureMQMQARecoveryPreStep
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Record the main Newton result before line-search globalization.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQARecoveryNewton(iIteration,iInfo,dMaximumUpdate,dAlpha)
+
+        integer, intent(in) :: iIteration, iInfo
+        real(8), intent(in) :: dMaximumUpdate, dAlpha
+        integer :: iAttempt
+
+        if (.NOT. lMQMQADiagnosticRecoveryTrace) return
+        if (.NOT. allocated(iCapturedMQMQARecoveryStage)) return
+        iAttempt = iMQMQADiagnosticCurrentAttempt
+        if ((iAttempt <= 0) .OR. (iAttempt > SIZE(iCapturedMQMQARecoveryStage,3))) return
+        if ((iIteration <= 0) .OR. (iIteration > SIZE(iCapturedMQMQARecoveryStage,2))) return
+        iCapturedMQMQARecoveryStage(1,iIteration,iAttempt) = iInfo
+        dCapturedMQMQARecoveryStage(3,iIteration,iAttempt) = dMaximumUpdate
+        dCapturedMQMQARecoveryStage(5,iIteration,iAttempt) = dAlpha
+
+    end subroutine CaptureMQMQARecoveryNewton
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Record the completed line-search result.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQARecoveryLineSearch(iIteration,iWolfe,dStepLength,dFunctionNorm)
+
+        integer, intent(in) :: iIteration, iWolfe
+        real(8), intent(in) :: dStepLength, dFunctionNorm
+        integer :: iAttempt
+
+        if (.NOT. lMQMQADiagnosticRecoveryTrace) return
+        if (.NOT. allocated(iCapturedMQMQARecoveryStage)) return
+        iAttempt = iMQMQADiagnosticCurrentAttempt
+        if ((iAttempt <= 0) .OR. (iAttempt > SIZE(iCapturedMQMQARecoveryStage,3))) return
+        if ((iIteration <= 0) .OR. (iIteration > SIZE(iCapturedMQMQARecoveryStage,2))) return
+        iCapturedMQMQARecoveryStage(2,iIteration,iAttempt) = iWolfe
+        dCapturedMQMQARecoveryStage(2,iIteration,iAttempt) = dFunctionNorm
+        dCapturedMQMQARecoveryStage(4,iIteration,iAttempt) = dStepLength
+
+    end subroutine CaptureMQMQARecoveryLineSearch
+
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Record phase-history and reversion state after assemblage management.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQARecoveryAssemblage(iIteration,iLast,iRevert,lRevert)
+
+        integer, intent(in) :: iIteration, iLast, iRevert
+        logical, intent(in) :: lRevert
+        integer :: iAttempt
+
+        if (.NOT. lMQMQADiagnosticRecoveryTrace) return
+        if (.NOT. allocated(iCapturedMQMQARecoveryStage)) return
+        iAttempt = iMQMQADiagnosticCurrentAttempt
+        if ((iAttempt <= 0) .OR. (iAttempt > SIZE(iCapturedMQMQARecoveryStage,3))) return
+        if ((iIteration <= 0) .OR. (iIteration > SIZE(iCapturedMQMQARecoveryStage,2))) return
+        iCapturedMQMQARecoveryStage(4,iIteration,iAttempt) = iLast
+        iCapturedMQMQARecoveryStage(6,iIteration,iAttempt) = iRevert
+        iCapturedMQMQARecoveryStage(8,iIteration,iAttempt) = MERGE(1,0,lRevert)
+
+    end subroutine CaptureMQMQARecoveryAssemblage
+
+    !---------------------------------------------------------------------------------------------------------
+    !> \brief Retain the live coordinates needed to interpret a converged-state Newton replay.
+    !---------------------------------------------------------------------------------------------------------
+    subroutine CaptureMQMQAFixedPointState(iAssemblageIn,dElementPotentialIn,dChemicalPotentialIn, &
+        dMolesPhaseIn,nElementsIn,nSolnPhasesIn,nConPhasesIn)
+
+        integer, intent(in) :: iAssemblageIn(:), nElementsIn, nSolnPhasesIn, nConPhasesIn
+        real(8), intent(in) :: dElementPotentialIn(:), dChemicalPotentialIn(:), dMolesPhaseIn(:)
+
+        if (allocated(iCapturedMQMQAFixedPointAssemblage)) &
+            deallocate(iCapturedMQMQAFixedPointAssemblage)
+        if (allocated(dCapturedMQMQAFixedPointElementPotential)) &
+            deallocate(dCapturedMQMQAFixedPointElementPotential)
+        if (allocated(dCapturedMQMQAFixedPointChemicalPotential)) &
+            deallocate(dCapturedMQMQAFixedPointChemicalPotential)
+        if (allocated(dCapturedMQMQAFixedPointPhaseMoles)) &
+            deallocate(dCapturedMQMQAFixedPointPhaseMoles)
+        if (allocated(dCapturedMQMQAFixedPointSolvedUpdate)) &
+            deallocate(dCapturedMQMQAFixedPointSolvedUpdate)
+        allocate(iCapturedMQMQAFixedPointAssemblage(SIZE(iAssemblageIn)), &
+            dCapturedMQMQAFixedPointElementPotential(SIZE(dElementPotentialIn)), &
+            dCapturedMQMQAFixedPointChemicalPotential(SIZE(dChemicalPotentialIn)), &
+            dCapturedMQMQAFixedPointPhaseMoles(SIZE(dMolesPhaseIn)))
+        iCapturedMQMQAFixedPointAssemblage = iAssemblageIn
+        dCapturedMQMQAFixedPointElementPotential = dElementPotentialIn
+        dCapturedMQMQAFixedPointChemicalPotential = dChemicalPotentialIn
+        dCapturedMQMQAFixedPointPhaseMoles = dMolesPhaseIn
+        nMQMQAFixedPointElements = nElementsIn
+        nMQMQAFixedPointSolnPhases = nSolnPhasesIn
+        nMQMQAFixedPointConPhases = nConPhasesIn
+
+    end subroutine CaptureMQMQAFixedPointState
 
     !---------------------------------------------------------------------------------------------------------
     !> \brief Stage the active assemblage immediately before a phase-addition decision.
@@ -226,19 +391,36 @@ contains
     !---------------------------------------------------------------------------------------------------------
     !> \brief Retain the staged state after a rank-dependent phase-change trial is observed.
     !---------------------------------------------------------------------------------------------------------
-    subroutine CommitMQMQAReducedSetState(iDependentAssemblage,iActiveRank)
+    subroutine CommitMQMQAReducedSetState(iDependentAssemblage,iActiveRank,iPivotPhases,dPivotStoichiometry, &
+        iActivePhases,dAmountStoichiometry,dPhaseAmounts,dPhaseGibbs)
 
-        integer, intent(in) :: iDependentAssemblage(:), iActiveRank
+        integer, intent(in) :: iDependentAssemblage(:), iActiveRank, iPivotPhases(:), iActivePhases(:)
+        real(8), intent(in) :: dPivotStoichiometry(:,:), dAmountStoichiometry(:,:), &
+            dPhaseAmounts(:), dPhaseGibbs(:)
 
         if (.NOT. lMQMQADiagnosticReducedSetStudy) return
         if (lMQMQADiagnosticReducedSetStateCaptured) return
         if (.NOT. allocated(iMQMQADiagnosticStagedAssemblage)) return
         allocate(iMQMQADiagnosticReducedSetAssemblage(SIZE(iMQMQADiagnosticStagedAssemblage)), &
-            iMQMQADiagnosticReducedSetDependentAssemblage(SIZE(iDependentAssemblage)))
+            iMQMQADiagnosticReducedSetDependentAssemblage(SIZE(iDependentAssemblage)), &
+            iMQMQADiagnosticReducedSetPivotPhases(SIZE(iPivotPhases)), &
+            dMQMQADiagnosticReducedSetPivotStoichiometry(SIZE(dPivotStoichiometry,1), &
+                SIZE(dPivotStoichiometry,2)), &
+            iMQMQADiagnosticReducedSetActivePhases(SIZE(iActivePhases)), &
+            dMQMQADiagnosticReducedSetAmountStoichiometry(SIZE(dAmountStoichiometry,1), &
+                SIZE(dAmountStoichiometry,2)), &
+            dMQMQADiagnosticReducedSetPhaseAmounts(SIZE(dPhaseAmounts)), &
+            dMQMQADiagnosticReducedSetPhaseGibbs(SIZE(dPhaseGibbs)))
         iMQMQADiagnosticReducedSetIteration = iMQMQADiagnosticStagedIteration
         iMQMQADiagnosticReducedSetRank = iActiveRank
         iMQMQADiagnosticReducedSetAssemblage = iMQMQADiagnosticStagedAssemblage
         iMQMQADiagnosticReducedSetDependentAssemblage = iDependentAssemblage
+        iMQMQADiagnosticReducedSetPivotPhases = iPivotPhases
+        dMQMQADiagnosticReducedSetPivotStoichiometry = dPivotStoichiometry
+        iMQMQADiagnosticReducedSetActivePhases = iActivePhases
+        dMQMQADiagnosticReducedSetAmountStoichiometry = dAmountStoichiometry
+        dMQMQADiagnosticReducedSetPhaseAmounts = dPhaseAmounts
+        dMQMQADiagnosticReducedSetPhaseGibbs = dPhaseGibbs
         lMQMQADiagnosticReducedSetStateCaptured = .TRUE.
 
     end subroutine CommitMQMQAReducedSetState
@@ -257,7 +439,8 @@ contains
         integer, intent(in) :: iAssemblageIn(:)
         integer :: i, iCheck, iWrite, nActive, nNullity
 
-        if (.NOT. (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy)) return
+        if (.NOT. (lMQMQADiagnosticMinimumNormStudy .OR. lMQMQADiagnosticReducedSetStudy .OR. &
+            lMQMQADiagnosticRecoveryTrace)) return
         nMQMQADiagnosticPhaseChangeChecksObserved = &
             nMQMQADiagnosticPhaseChangeChecksObserved+1
         nActive = nSolutionCount+nPureCount
@@ -282,6 +465,7 @@ contains
         nMQMQADiagnosticPhaseChangeChecks = iCheck
         iMQMQADiagnosticPhaseChangeCheck(:,iCheck) = [iIteration,nElementCount,nChargeCount, &
             nSolutionCount,nPureCount,iInfo,MERGE(1,0,lPass),iActiveRank]
+        iMQMQADiagnosticPhaseChangeAttempt(iCheck) = iMQMQADiagnosticCurrentAttempt
         dMQMQADiagnosticPhaseChangeCheck(:,iCheck) = &
             [dMaximumUpdate,dThreshold,dMinimumAmount,dRemovalTolerance]
         iWrite = 0
@@ -425,7 +609,10 @@ contains
                 dCapturedMQMQAAlpha(nIterations,nMQMQADiagnosticMaxAttempts), &
                 dCapturedMQMQAFunctionNorm(nIterations,nMQMQADiagnosticMaxAttempts), &
                 dCapturedMQMQAMinGibbs(nIterations,nMQMQADiagnosticMaxAttempts), &
-                dCapturedMQMQAMinimumBoundaryFraction(nIterations,nMQMQADiagnosticMaxAttempts))
+                dCapturedMQMQAMinimumBoundaryFraction(nIterations,nMQMQADiagnosticMaxAttempts), &
+                iCapturedMQMQARecoveryStage(8,nIterations,nMQMQADiagnosticMaxAttempts), &
+                dCapturedMQMQARecoveryStage(5,nIterations,nMQMQADiagnosticMaxAttempts), &
+                iCapturedMQMQARecoveryPreAssemblage(nElements,nIterations,nMQMQADiagnosticMaxAttempts))
             iCapturedMQMQAAssemblage = 0
             iCapturedMQMQAAcceptedCount = 0
             iCapturedMQMQAEligibleCount = 0
@@ -449,6 +636,9 @@ contains
             dCapturedMQMQAFunctionNorm = 0D0
             dCapturedMQMQAMinGibbs = 0D0
             dCapturedMQMQAMinimumBoundaryFraction = 1D0
+            iCapturedMQMQARecoveryStage = 0
+            dCapturedMQMQARecoveryStage = 0D0
+            iCapturedMQMQARecoveryPreAssemblage = 0
         end if
         if (nCapturedMQMQAAttempts >= nMQMQADiagnosticMaxAttempts) return
         nCapturedMQMQAAttempts = nCapturedMQMQAAttempts+1
@@ -597,6 +787,16 @@ contains
         if (allocated(dCapturedGEMNewtonB)) deallocate(dCapturedGEMNewtonB)
         if (allocated(dCapturedGEMNewtonCorrectedA)) deallocate(dCapturedGEMNewtonCorrectedA)
         if (allocated(dCapturedGEMNewtonCorrectedB)) deallocate(dCapturedGEMNewtonCorrectedB)
+        if (allocated(iCapturedMQMQAFixedPointAssemblage)) &
+            deallocate(iCapturedMQMQAFixedPointAssemblage)
+        if (allocated(dCapturedMQMQAFixedPointElementPotential)) &
+            deallocate(dCapturedMQMQAFixedPointElementPotential)
+        if (allocated(dCapturedMQMQAFixedPointChemicalPotential)) &
+            deallocate(dCapturedMQMQAFixedPointChemicalPotential)
+        if (allocated(dCapturedMQMQAFixedPointPhaseMoles)) &
+            deallocate(dCapturedMQMQAFixedPointPhaseMoles)
+        if (allocated(dCapturedMQMQAFixedPointSolvedUpdate)) &
+            deallocate(dCapturedMQMQAFixedPointSolvedUpdate)
         if (allocated(dMQMQADiagnosticNullModeSummary)) deallocate(dMQMQADiagnosticNullModeSummary)
         if (allocated(iMQMQADiagnosticNullModeDecisionChanges)) &
             deallocate(iMQMQADiagnosticNullModeDecisionChanges)
@@ -635,14 +835,38 @@ contains
         if (allocated(dCapturedMQMQAMinGibbs)) deallocate(dCapturedMQMQAMinGibbs)
         if (allocated(dCapturedMQMQAMinimumBoundaryFraction)) &
             deallocate(dCapturedMQMQAMinimumBoundaryFraction)
+        if (allocated(iCapturedMQMQARecoveryStage)) deallocate(iCapturedMQMQARecoveryStage)
+        if (allocated(dCapturedMQMQARecoveryStage)) deallocate(dCapturedMQMQARecoveryStage)
+        if (allocated(iCapturedMQMQARecoveryPreAssemblage)) &
+            deallocate(iCapturedMQMQARecoveryPreAssemblage)
         if (allocated(iMQMQADiagnosticReducedSetAssemblage)) &
             deallocate(iMQMQADiagnosticReducedSetAssemblage)
         if (allocated(iMQMQADiagnosticReducedSetDependentAssemblage)) &
             deallocate(iMQMQADiagnosticReducedSetDependentAssemblage)
+        if (allocated(iMQMQADiagnosticReducedSetPivotPhases)) &
+            deallocate(iMQMQADiagnosticReducedSetPivotPhases)
+        if (allocated(dMQMQADiagnosticReducedSetPivotStoichiometry)) &
+            deallocate(dMQMQADiagnosticReducedSetPivotStoichiometry)
+        if (allocated(iMQMQADiagnosticReducedSetActivePhases)) &
+            deallocate(iMQMQADiagnosticReducedSetActivePhases)
+        if (allocated(dMQMQADiagnosticReducedSetAmountStoichiometry)) &
+            deallocate(dMQMQADiagnosticReducedSetAmountStoichiometry)
+        if (allocated(dMQMQADiagnosticReducedSetPhaseAmounts)) &
+            deallocate(dMQMQADiagnosticReducedSetPhaseAmounts)
+        if (allocated(dMQMQADiagnosticReducedSetPhaseGibbs)) &
+            deallocate(dMQMQADiagnosticReducedSetPhaseGibbs)
         if (allocated(iMQMQADiagnosticStagedAssemblage)) deallocate(iMQMQADiagnosticStagedAssemblage)
         lCaptureGEMNewtonSystem = .FALSE.
         lCaptureGEMNewtonCorrectedSystem = .FALSE.
         lCaptureFirstGEMNewtonCorrectionPair = .FALSE.
+        lCaptureMQMQAFixedPointAtConvergence = .FALSE.
+        lMQMQAFixedPointCaptureAttempted = .FALSE.
+        iMQMQAFixedPointCaptureInfo = 0
+        nMQMQAFixedPointElements = 0
+        nMQMQAFixedPointSolnPhases = 0
+        nMQMQAFixedPointConPhases = 0
+        dMQMQAFixedPointRecomputeDifference = 0D0
+        dMQMQAFixedPointRestorationError = 0D0
         lMQMQADiagnosticMinimumNormStudy = .FALSE.
         lMQMQADiagnosticMinimumNormCaptured = .FALSE.
         iMQMQADiagnosticMinimumNormRank = 0
@@ -669,6 +893,7 @@ contains
         nMQMQADiagnosticMaximumNullityObserved = 0
         nMQMQADiagnosticMaximumBasisCandidatesObserved = 0
         iMQMQADiagnosticPhaseChangeCheck = 0
+        iMQMQADiagnosticPhaseChangeAttempt = 0
         iMQMQADiagnosticPhaseChangeAssemblage = 0
         dMQMQADiagnosticPhaseChangeCheck = 0D0
         dMQMQADiagnosticMinimumNormSingularSummary = 0D0
@@ -697,6 +922,7 @@ contains
         dMQMQADiagnosticMaxScaledForceShift = 0D0
         dMQMQADiagnosticMaxActiveAmountDisplacement = 0D0
         lCaptureMQMQATrajectory = .FALSE.
+        lMQMQADiagnosticRecoveryTrace = .FALSE.
         iMQMQADiagnosticCurrentAttempt = 0
         iMQMQADiagnosticSkipAttempt = -1
         iMQMQADiagnosticSkipIteration = -1

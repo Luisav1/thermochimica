@@ -85,6 +85,15 @@ module ModuleMQMQAUnconstrained
     integer, parameter, public :: MQMQA_TERM_B = 3
     integer, parameter, public :: MQMQA_TERM_R = 4
 
+    !> Test-only ablation of the corrected SUBQ S3 pair distribution.
+    !>
+    !> The default is the production zeta-weighted definition.  Private solver
+    !! diagnostics may temporarily select the former ordinary-pair definition
+    !! to determine whether the S3 correction changed MQMQA globalization.
+    !! CompExcessGibbsEnergySUBG reads the same flag so production partial
+    !! molars and the analytical scalar/Hessian always use one formulation.
+    logical, public :: lMQMQADiagnosticLegacyS3 = .FALSE.
+
     !> Generic topology and constant data for one disconnected MQMQA phase.
     !>
     !> Each row of iQuadruplet identifies [A,B,X,Y], where A/B belong to the
@@ -688,7 +697,8 @@ contains
             dPairLogBlock = 0D0
             do iPosition = 1, 2
                 do jPosition = 3, 4
-                    if (tModel%iModelType == MQMQA_MODEL_SUBG) then
+                    if ((tModel%iModelType == MQMQA_MODEL_SUBG) .OR. &
+                        ((tModel%iModelType == MQMQA_MODEL_SUBQ) .AND. lMQMQADiagnosticLegacyS3)) then
                         dDen = dPairFraction(tModel%iQuadruplet(q,iPosition), &
                             tModel%iQuadruplet(q,jPosition))
                     else
@@ -1316,7 +1326,8 @@ contains
             tPairLogBlock=ConstantSO(0D0,nQuad)
             do iPosition=1,2
                 do jPosition=3,4
-                    if (tModel%iModelType==MQMQA_MODEL_SUBG) then
+                    if ((tModel%iModelType==MQMQA_MODEL_SUBG).OR. &
+                        ((tModel%iModelType==MQMQA_MODEL_SUBQ).AND.lMQMQADiagnosticLegacyS3)) then
                         tDen=tPairFraction(tModel%iQuadruplet(q,iPosition), &
                             tModel%iQuadruplet(q,jPosition))
                     else
