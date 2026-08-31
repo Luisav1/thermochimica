@@ -1,18 +1,30 @@
 # MQMQA Local Response and GEM Mapping Audit
 
-This document records two related development tracks. The first sections trace
-the completed plain-`SUBG` path from MQ-3A through the reusable MQ-4B correction
-builder. The final section records the separate SUBQ MQ-3A audit that decides
-which response and mapping concepts may be reused and which require new native
-evidence.
+This document records the complete, default-off MQMQA curvature-development
+path from constrained local response through adaptive live GEM integration.
+The plain-`SUBG` work established the reusable response and correction-builder
+architecture; the later `SUBQ` work re-established each mathematical and
+software layer independently before using that architecture in `GEMNewton`.
+
+The bounded implementation is complete through MQ-4E-C for supported,
+uncharged, strict-interior plain-`SUBG` and `SUBQ` phases.  Completion here
+means that the analytical local Hessian, constrained response, reduced
+`(deltaA,deltaB)` mapping, transactional application, adaptive globalization,
+and stated public/private evidence gates are implemented and traceable.  It
+does not mean that the experiment is enabled by default or that universal
+convergence is claimed.  Reciprocal-R, magnetic, charged, boundary-Hessian,
+and unsupported parameter orientations remain explicitly outside scope;
+database-native B-family evidence is also unavailable.  The assessed FLiBe
+active-set divergence remains a documented globalization limitation.
 
 ## Scope
 
-MQ-3A identifies the local variables, equality constraints, derived MQMQA
-quantities, element-potential forcing, and candidate existing GEM baseline that
-a future plain-`SUBG` response mapper must verify. It is a source-and-equation audit only.
-It does not modify `GEMNewton`, inject a Hessian, add solver controls, or claim
-native database coverage for production-family `Q` or `B` parameters.
+MQ-3A identified the local variables, equality constraints, derived MQMQA
+quantities, element-potential forcing, and existing GEM baseline that the later
+plain-`SUBG` response mapper had to verify.  That stage was a source-and-equation
+audit only; the subsequent sections separately record the native response,
+reduced mapping, live connection, and adaptive-globalization evidence.  No
+single early-stage result is used to imply completion of a later layer.
 
 The traced production path is:
 
@@ -1733,9 +1745,9 @@ establish that full alpha is selected near every solution, that adaptive mode
 is faster, or that the FeTiVO trust heuristics are optimal for plain SUBG.
 Private assessed molten-salt solver evidence remains MQ-4E-B.
 
-## MQ-4E-B: private assessed FLiBe solver gate
+## MQ-4E-B: private assessed molten-salt solver evidence
 
-### Purpose and private-evidence boundary
+### FLiBe gate and private-evidence boundary
 
 MQ-4E-B reused the local MSD-TC V4.1 fluoride assessment at 1000 K, 1 atm,
 and LiF/BeF2 feed ratios 45/55, 50/50, and 55/45.  The database, optional
@@ -2028,10 +2040,12 @@ steps.  If no local phase-aware criterion can distinguish the successful and
 diverting candidates, checkpoint recovery becomes justified as a genuinely
 longer-horizon globalization mechanism rather than a substitute for diagnosis.
 Neither outcome implies that the local Hessian or reduced mapper should be
-altered.  MQ-4E-B remains blocked until the assessed live-solver gate passes.
+altered.  At this interim fluoride-only checkpoint, MQ-4E-B remained blocked
+until an assessed live-solver gate passed.
 
-The MQ-4E-B **assessment and localization work is complete, but its live-solver
-exit gate is blocked**.  Before MQ-4E-B can pass, the point at which accepted
+At this point in the investigation, the MQ-4E-B **assessment and localization
+work was complete, but its live-solver exit gate was blocked**.  Before the
+fluoride case could pass, the point at which accepted
 curvature diverts the assemblage search must be addressed.  A phase-identity/
 Gibbs-aware multi-iteration recovery mechanism is one candidate, but it is not
 yet selected; other phase-path safeguards may be evaluated first.  The three
@@ -3130,48 +3144,139 @@ FLiBe remains documented as a separate active-set/globalization limitation;
 it is not silently converted into passing evidence.  The private assessed
 database and driver remain outside the public registered suite.
 
-### Future evidence and defensible claim framework
+## MQ-4E-C: final evidence synthesis and implementation boundary
 
-The remaining work must build an eventual claim in explicit layers rather than
-turn one successful FeTiVO calculation into a universal robustness statement.
-The following items are future evidence requirements and are not claims of the
-current MQ-4D checkpoint:
+### Exit decision
 
-1. **Mathematical scope:** show that the implementation follows the supported
-   SUBQ equations and variable definitions without depending on the layout or
-   parameter values of one database.
-2. **Software scope:** retain transactional fallback evidence for invalid,
-   singular, nonfinite, boundary, and locally unsafe corrected systems so that
-   a rejected curvature correction cannot corrupt the historical GEM solve.
-3. **Verification scope:** identify every controlled fixture, production-native
-   calculation, and physically assessed database case used as evidence.  Here,
-   *assessed* means that the thermodynamic parameters were developed to
-   represent a material system using experimental, published, and/or
-   first-principles evidence; merely parsing a file through Thermochimica makes
-   a case native, not necessarily assessed.
-4. **Empirical robustness scope:** extend the completed bounded FeTiVO MQ-4D
-   threshold-sensitivity study to representative supported assessed systems.
-   Establish that the selected heuristics are not a FeTiVO-specific knife edge
-   without claiming global optimality.
-5. **Application scope:** demonstrate the selected molten-salt problem over its
-   stated database, temperature, composition, phase, and fraction ranges, and
-   keep those bounds attached to the resulting application claim.
+MQ-4E-C introduces no new solver mechanism.  Its purpose is to reconcile the
+completed mathematical, native, mapping, integration, globalization, and
+cross-database evidence into one reviewable completion decision.  Under the
+scope stated at the beginning of this audit, the default-off MQMQA curvature
+implementation is **complete**.  The production candidate is the adaptive
+path with caller-requested `alpha_max`; fixed alpha remains a stress and
+plumbing interface rather than the recommended general solver policy.
 
-Before the MQMQA solver work is presented as complete, the audit must contain a
-traceable evidence table mapping each layer to its equations, tests, databases,
-input ranges, results, and remaining exclusions.  In particular, controlled,
-native, and assessed are not mutually exclusive labels: controlled/assessed
-describe data provenance, whereas native describes execution through
-Thermochimica's production path.
+This decision rests on all of the following:
 
-The intended final claim, subject to completion of the listed evidence, is:
+1. the supported local scalar, gradient, and Hessian paths are independently
+   checked before they enter the solver;
+2. plain-`SUBG` and `SUBQ` use strict, separate production decoders and mapping
+   entry points;
+3. the model-specific constrained response is condensed into both `deltaA`
+   and `deltaB`, never injected as raw stiffness;
+4. each live correction is transactional: a rejected or failed candidate
+   returns the untouched alpha-zero GEM system;
+5. the persistent public controls are default-off, finite-range checked,
+   atomic, and mutually exclusive between fixed and adaptive modes;
+6. public SUBG/SUBQ coverage, the FeTiVO sensitivity study, and private
+   assessed chloride evidence all pass their stated gates; and
+7. negative evidence is retained: adaptive curvature is not generally faster,
+   unconditional alpha one is unsafe for some systems, and the assessed FLiBe
+   active-set path is unresolved.
 
-> The adaptive MQMQA curvature integration was demonstrated across the tested
-> supported systems and remained stable under the reported threshold-sensitivity
-> study. Unsafe corrections reverted transactionally to the historical GEM
-> system. Universal convergence for arbitrary thermodynamic assessments is not
-> claimed.
+### Source-to-evidence traceability
 
-This framework leaves broad database coverage, the assessed molten-salt case,
-and application-range evidence as explicit future tasks rather than implicit
-assumptions.
+The labels below describe different properties and may overlap.  *Controlled*
+means that the fixture or runtime values were deliberately chosen to isolate a
+mathematical branch.  *Native* means that production Thermochimica parsing,
+state, arrays, or thermodynamic routines participate in the check.  *Assessed*
+means that the thermodynamic parameters represent a material system using an
+assessment based on experimental, published, and/or first-principles evidence.
+
+| Layer | Mathematical or software object | Primary executable evidence | Data and range | Result | Remaining exclusion |
+|---|---|---|---|---|---|
+| Local scalar and Hessian | extensive quadruplet-mole `G`, `mu`, and `H`; reference, configurational, G, Q, B, and supported ternary branches | `TestMQMQAHessianVerification` | controlled positive SUBG/SUBQ states and branch-isolating parameters | symmetry, homogeneity, scalar finite differences, gradients, and componentwise `H*v` pass | reciprocal-R, magnetic, unsupported ternary orientations; B is controlled rather than database-native |
+| Production decoding and local thermodynamics | strict `SUBG`/`SUBQ` adapters and production-to-standalone scalar/derivative parity | `TestMQMQANativeHessianVerification`, `TestMQMQASUBQNativeEnergyVerification`, `TestMQMQASUBQNativeHessianVerification` | public assessed CuFeC SUBG G and FeTiVO SUBQ G/Q states; controlled nonuniform-zeta runtime row | native scalar, gradient, and `H*v` checks pass; corrected weighted SUBQ S3 is discriminating | FeTiVO zeta is uniform; nonuniform runtime modification is controlled, not assessed |
+| Constrained local response | normalization-constrained `dx/dGamma` from the symmetric KKT system | `TestMQMQAResponseVerification`, `TestMQMQASUBQResponseVerification` | native CuFeC SUBG and FeTiVO SUBQ phase states, with independent forcing directions | analytic KKT and null-space responses agree with independently reconverged production-stationarity oracles | charged phases are rejected; strict-interior local state required |
+| Reduced GEM mapping | phase-local response difference condensed into the complete `deltaA` and `deltaB` pair | `TestMQMQAGEMMappingVerification`, `TestMQMQASUBQGEMMappingVerification` | off-equilibrium native SUBG and SUBQ states | live baseline reconstruction, KKT residuals, matrix/residual finite differences, symmetry, failure statuses, and nonmutation pass | not a raw-Hessian map; unsupported models fail closed |
+| Fixed live connection | strict model routing, phase aggregation, joint application, complete fallback, and caller-selected fixed alpha | `TestMQMQAGEMIntegration` | public FeTiVO SUBQ integration state and synthetic routing/failure cases | alpha-zero identity, exact application/replay, transactional fallback, conflict ownership, and finite alpha-one solve pass | fixed alpha one is not established as a general robust policy |
+| Adaptive globalization | descending alpha candidates, mixed-variable group checks, readiness/progress retention, and exact alpha-zero fallback | `TestMQMQAAdaptiveTrust` | FeTiVO SUBQ plus nineteen bounded heuristic variations | all sensitivity cases converge; default case reaches a sustained final full-alpha window; invalid and unsafe candidates fall back safely | settings are heuristics, not thermodynamic identities or globally optimal constants |
+| Portable live solver coverage | historical, fixed-alpha-one, and adaptive runs through both public model routes | `TestMQMQASolverCoverage` | CuFeC SUBG at 1400 K and twelve FeTiVO SUBQ states from 1900--2100 K | all 39 runs converge; all 13 adaptive results agree with their historical references; positive curvature is accepted in every adaptive case | every adaptive public run costs at least as many iterations as historical; fixed CuFeC has a raw-state difference |
+| Assessed nonuniform-zeta local evidence | production-native G-family scalar, gradient, Hessian, and `H*v` | ignored local MSD-TC driver | V4.1 FLiBe at 1000 K, 1 atm, LiF fractions 0.45, 0.50, and 0.55 | all local derivative gates pass | private database/driver; no assessed B-family record |
+| Assessed nonuniform-zeta adaptive evidence | live adaptive mapping and globalization in an assessed salt database | ignored local MSD-TC driver | V4.1 chloride at 1000 K, 1 atm, LiCl fractions 0.45, 0.50, and 0.55 | all three adaptive runs preserve the active `MSCL` state, accept full curvature, pass the event-aware late-curvature gate, and do not increase iteration count | private database/driver; G-family only; evidence covers the stated range |
+| Assessed active-set limitation | interaction between positive curvature and rank-deficient transient phase trials | ignored local MSD-TC driver and documented diagnostic replays | V3.1/V4.1 FLiBe states and captured phase-change decisions | local curvature and mapping remain consistent, but corrected trajectories can converge to higher-Gibbs alternative assemblages | unresolved global active-set/globalization problem; FLiBe is not passing live-solver evidence |
+
+### Supported production contract
+
+The implemented live contract is deliberately narrower than the generic local
+algebra:
+
+- eligible solution phases must be explicitly labelled plain `SUBG` or `SUBQ`;
+- the phase must be uncharged and every active local quadruplet fraction must
+  lie strictly above the documented interior threshold;
+- every applicable phase must build a valid correction or the complete
+  aggregate is discarded;
+- `deltaA` and `deltaB` are applied together only after the historical GEM
+  matrix and residual have been completely assembled;
+- alpha scales that completed correction pair, not the local Hessian;
+- fixed and adaptive requests are mutually exclusive and default to off;
+- invalid settings preserve the previous configuration;
+- unsupported, boundary, singular, nonfinite, excessive-update, direction,
+  and failed-linear-solve cases preserve the untouched historical GEM system;
+  and
+- simultaneous RKMP/MQMQA experimental ownership remains fail-closed in favor
+  of the established RKMP path rather than composing unverified corrections.
+
+### Performance and robustness interpretation
+
+The evidence supports correctness of the bounded integration and safety of its
+fallbacks, not a general acceleration claim.  In the public matrix, adaptive to
+historical iteration ratios range from `1.053` to `2.625`; CuFeC requires 657
+adaptive iterations versus 448 historically and repeatedly activates and
+resets readiness.  The nineteen-case FeTiVO sensitivity study shows that the
+defaults are not a local knife edge, while also showing that more permissive
+full-alpha acceptance can make nonlinear convergence worse.  The assessed
+chloride cases are more favorable: adaptive iteration counts are 75 versus 75,
+74 versus 78, and 56 versus 56, while retaining the same active liquid state.
+
+Accordingly, adaptive curvature remains opt-in and default-off.  Full alpha is
+always the first positive candidate when readiness permits it, but reduced or
+zero alpha is a legitimate globalization outcome.  The final chloride phase
+events also show why a zero terminal-window counter does not by itself imply
+that late full curvature was absent.
+
+### Final claim and explicit nonclaims
+
+The defensible completed claim is:
+
+> A complete analytical MQMQA curvature pathway was implemented for the
+> supported nonmagnetic, uncharged, strict-interior plain-SUBG and SUBQ models.
+> The local Hessian was independently checked against scalar and production
+> first-derivative evidence, condensed through the verified constrained phase
+> response into consistent GEM matrix and residual corrections, and connected
+> behind default-off fixed and adaptive controls.  Across the stated public and
+> assessed chloride cases, adaptive corrections were applied transactionally,
+> unsafe candidates reverted to the historical GEM system, and the reported
+> equilibrium state was preserved.  Universal convergence, acceleration, and
+> robustness for arbitrary thermodynamic assessments are not claimed.
+
+The implementation does **not** claim:
+
+- reciprocal-R, magnetic, charged-phase, or boundary-composition Hessian
+  support;
+- assessed database-native B-family coverage;
+- that unconditional fixed alpha one is safe;
+- that adaptive curvature decreases iterations or wall-clock time;
+- that the reported trust thresholds are globally optimal;
+- passing live-solver behavior for the documented FLiBe active-set paths;
+- assessed native execution with multiple simultaneously active MQMQA phases;
+- combined RKMP and MQMQA correction composition; or
+- completion of the later phase-field pseudo-wrapper, physical volume-fraction
+  conversion, application-range study, or corrosion-model validation.
+
+The last group belongs to the separate application/coupling objective rather
+than to the MQMQA Hessian implementation.  Any future molten-salt application
+must retain database version, temperature, composition, phase, strict-interior
+and boundary-fallback statistics, accepted-curvature counts, and physical
+fraction-conversion assumptions with its claim.
+
+### MQ-4E-C verification gate
+
+The completion decision was checked from a clean sequential Docker build.  The
+registered default-off suite passed `80/80` with no non-result diagnostic lines.
+The report modes for the standalone Hessian, native SUBQ scalar and Hessian,
+SUBQ constrained response, SUBQ GEM mapping, fixed live integration,
+fixed-alpha-one integration, adaptive sensitivity, and public solver coverage
+all passed.  The three private assessed chloride invocations also passed from
+the same clean binaries.  `git diff --check` passed.  MQ-4E-C changes only the
+two audit documents; it adds no solver, API, test, database, or default change.

@@ -507,6 +507,11 @@ The subsequent SUBQ MQ-4B extension adds the strict
 entry point or decoder. At the verified off-equilibrium state, the reusable
 builder agrees with the independent MQ-4A construction to `1.10E-16` for
 `deltaA` and exactly for `deltaB`, leaves production state unchanged, and
-passes copied-array application and rejection-path checks. This packages the
-supported SUBQ mapping as diagnostic software; it still does not activate the
-correction in `GEMNewton` or define MQMQA trust/globalization.
+passes copied-array application and rejection-path checks.  That MQ-4B result
+packages the supported SUBQ mapping independently of solver activation.  The
+later MQ-4C through MQ-4E-C stages, recorded in
+`doc/MQMQAResponseMappingAudit.md`, connect the same correction to `GEMNewton`
+behind default-off fixed and adaptive controls, verify transactional fallback
+and globalization, and define the final bounded implementation claim.  Those
+later solver results do not broaden the decoder's thermodynamic-model support
+or the local evidence boundary recorded here.
