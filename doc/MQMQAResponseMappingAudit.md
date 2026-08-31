@@ -3082,6 +3082,54 @@ candidate tests, grouped update/direction safeguards.  This localizes the open
 question to readiness retention near convergence rather than to a failed
 chloride Hessian or mapper.
 
+The complete late-iteration trace resolved why the endpoint condition was not
+met.  In every composition, the last transient phase was removed immediately
+before convergence to the single `MSCL` liquid:
+
+| LiCl fraction | Late full-alpha behavior | Final phase event | Convergence |
+|---:|---|---:|---:|
+| 0.45 | five full-alpha solves at iterations 70--74 | `gas_ideal` removed at 74 | iteration 75 |
+| 0.50 | nine full-alpha solves at iterations 64--72; alpha 0.1 at 73 | `gas_ideal` removed at 73 | iteration 74 |
+| 0.55 | full alpha selected at iteration 55 | `Mg_L1(liq)` removed at 55 | iteration 56 |
+
+The zero terminal-window metric therefore does not mean that full curvature
+was absent late in the solve.  It means that the final phase event correctly
+reset readiness, after which the historical convergence test was satisfied
+before the new one-phase assemblage could accumulate another settled window.
+For assessed cross-database evidence, the event-aware gate consequently
+requires either (a) at least three consecutive late full-alpha solves before
+the final phase event, or (b) a full-alpha solve that produces the final
+assemblage followed by convergence on the next iteration.  All three chloride
+states satisfy this gate and agree with the alpha-zero active `MSCL` state.
+The original stricter terminal-window requirement remains unchanged for the
+FeTiVO MQ-4D checkpoint; this refinement records a distinct late-phase-event
+case rather than weakening any trust threshold.
+
+Two tempting ways to manufacture a terminal window were tested and rejected.
+First, ordinary convergence was held for at most twelve additional convergence
+events while all production readiness, line-search, and phase-search logic
+remained active.  The three calculations expanded from 75, 74, and 56
+iterations to 304, 515, and 456 iterations, respectively; all exhausted the
+hold budget and still ended with zero terminal full-alpha window.  Deferring
+the exit re-entered the nonlinear and phase machinery rather than providing a
+quiet certification tail.  No such hold is retained in the implementation.
+
+Second, a full-alpha Newton system was reconstructed at the converged state
+without applying its update.  The solves were finite and the captured state
+was restored exactly, but the maximum raw mixed-variable updates were about
+`79.9`, `212.2`, and `164.5`.  These unscaled values cannot support the claim
+that an extra full-alpha step would be negligible, and forcing such a step
+would bypass the purpose of adaptive readiness.  This replay is retained only
+as negative diagnostic reasoning, not as an MQ-4E-B acceptance condition.
+
+Accordingly, the chloride audit completes the bounded MQ-4E-B assessed
+globalization evidence: the default-off adaptive path converges efficiently,
+uses genuine full curvature, preserves the active assessed liquid state, and
+does not encounter the rank-deficient transient topology that blocked FLiBe.
+FLiBe remains documented as a separate active-set/globalization limitation;
+it is not silently converted into passing evidence.  The private assessed
+database and driver remain outside the public registered suite.
+
 ### Future evidence and defensible claim framework
 
 The remaining work must build an eventual claim in explicit layers rather than
